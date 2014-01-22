@@ -1,0 +1,8 @@
+v0.1
+====
+
+- initial release
+- passes litmus tests (minus a minor one, to be fixed)
+- provides "chezdav", a tool to announce and share a directory
+- provides a private libphodav library with no API stability yet,
+  suitable for submodule inclusion for other projects to use
