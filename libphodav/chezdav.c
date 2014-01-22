@@ -163,11 +163,15 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
                       const char *username, gpointer data)
 {
   gchar *digest = NULL;;
-  gchar *line;
+  gchar *line = NULL;
+  gchar *eol = NULL;
 
-  for (line = htdigest; line && *line; line = strchr (line, '\n'))
+  for (line = htdigest; line && *line; line = eol ? eol + 1 : NULL)
     {
       gchar **strv = g_strsplit (line, ":", -1);
+      eol = strchr (line, '\n');
+      if (eol)
+        *eol = '\0';
 
       if (!(strv[0] && strv[1] && strv[2])) {
         g_warn_if_reached ();
