@@ -103,6 +103,8 @@ fi
 AC_CONFIG_FILES([
 Makefile
 po/Makefile.in
+spice/Makefile
+libphodav/Makefile
 ])
 AC_OUTPUT
 

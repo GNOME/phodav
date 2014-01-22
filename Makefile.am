@@ -7,7 +7,7 @@ makeflags_0 = --no-print-directory -s
 makeflags_1 =
 AM_MAKEFLAGS = $(makeflags_$(V))
 
-SUBDIRS = po
+SUBDIRS = po spice libphodav
 noinst_LTLIBRARIES = libphodav.la
 bin_PROGRAMS = chezdav
 sbin_PROGRAMS = spice-webdavd
