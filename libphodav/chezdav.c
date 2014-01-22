@@ -216,7 +216,7 @@ main (int argc, char *argv[])
 #endif
   g_set_prgname ("chezdav");
 
-  context = g_option_context_new (_ ("- simple webdav server"));
+  context = g_option_context_new (_ ("- simple WebDAV server"));
   gchar *s = g_strdup_printf (_ ("Report bugs to <%s>"), PACKAGE_BUGREPORT);
   g_option_context_set_description (context, s);
   g_free (s);
@@ -270,7 +270,7 @@ main (int argc, char *argv[])
   mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
   g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
   if (!ga_client_start (mdns_client, &error))
-    my_error (_ ("mdns failed: %s\n"), error->message);
+    my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
   phodav_server_run (dav);
