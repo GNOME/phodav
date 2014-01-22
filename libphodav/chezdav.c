@@ -214,7 +214,7 @@ main (int argc, char *argv[])
 #if !GLIB_CHECK_VERSION (2, 35, 1)
   g_type_init ();
 #endif
-  g_set_prgname (PACKAGE_NAME);
+  g_set_prgname ("chezdav");
 
   context = g_option_context_new (_ ("- simple webdav server"));
   gchar *s = g_strdup_printf (_ ("Report bugs to <%s>"), PACKAGE_BUGREPORT);
