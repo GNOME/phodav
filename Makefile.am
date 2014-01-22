@@ -15,6 +15,7 @@ sbin_PROGRAMS = spice-webdavd
 AM_CPPFLAGS =					\
 	-DLOCALEDIR=\""$(localedir)"\"		\
 	-DG_LOG_DOMAIN=\"phodav\"		\
+	$(WARN_CFLAGS)				\
 	$(NULL)
 
 libphodav_la_SOURCES =				\

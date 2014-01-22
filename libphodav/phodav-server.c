@@ -969,7 +969,7 @@ depth_to_string (DepthType depth)
 }
 
 static gchar *
-node_get_xattr_name (xmlNodePtr node, gchar *prefix)
+node_get_xattr_name (xmlNodePtr node, const gchar *prefix)
 {
   const gchar *ns = node->ns ? (gchar *) node->ns->href : NULL;
   const gchar *name = (gchar *) node->name;
@@ -2682,7 +2682,7 @@ end:
   return status;
 }
 
-static gboolean
+static gboolean G_GNUC_PURE
 check_lock (const gchar *key, Path *path, gpointer data)
 {
   DAVLock *lock = data;
@@ -2929,8 +2929,8 @@ server_callback (SoupServer *server, SoupMessage *msg,
       return;
     }
 
-  params = g_hash_table_new (g_str_hash, g_str_equal);
-  g_hash_table_insert (params, "charset", "utf-8");
+  params = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  g_hash_table_insert (params, g_strdup ("charset"), g_strdup ("utf-8"));
   soup_message_headers_set_content_type (msg->response_headers,
                                          "text/xml", params);
   g_hash_table_destroy (params);
