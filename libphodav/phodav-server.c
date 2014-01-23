@@ -1420,6 +1420,7 @@ static const struct _PropList
   const gchar *name;
   xmlNodePtr (*func) (PathHandler *, PropFind *, const gchar *, GFileInfo *, xmlNsPtr);
   gboolean need_info;
+  gboolean slow;
 
 } prop_list[] = {
   PROP (resourcetype, 1),
@@ -1434,7 +1435,7 @@ static const struct _PropList
   PROP (lockdiscovery, 0),
   { "quota-available-bytes", prop_quota_available, },
 #if GLIB_CHECK_VERSION (2, 38, 0)
-  { "quota-used-bytes", prop_quota_used, }
+  { "quota-used-bytes", prop_quota_used, FALSE, TRUE, }
 #endif
 };
 
@@ -1479,9 +1480,13 @@ propfind_populate (PathHandler *handler, const gchar *path,
     {
       for (i = 0; i < G_N_ELEMENTS (prop_list); i++)
         {
-          if (pf->type != PROPFIND_PROPNAME &&
-              prop_list[i].need_info && !info)
-            continue;
+          if (pf->type != PROPFIND_PROPNAME)
+            {
+              if (prop_list[i].need_info && !info)
+                continue;
+              if (prop_list[i].slow)
+                continue;
+            }
 
           /* perhaps not include the 404? */
           prop_add (&stat, prop_list[i].func (handler, pf, path, info, ns));
