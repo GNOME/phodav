@@ -1,0 +1,17 @@
+MAN1_TXT = chezdav.txt
+
+if HAVE_DOCTOOLS
+# Manual pages are generated from .txt via Docbook
+man1_MANS = ${MAN1_TXT:%.txt=%.1}
+
+SUFFIXES = .txt .xml .1
+
+.xml.1:
+	$(XMLTO) man $< 2>&1
+
+.txt.xml:
+	$(ASCIIDOC) --backend=docbook --doctype=manpage -o $@ $<
+endif
+
+EXTRA_DIST = $(MAN1_TXT)
+CLEANFILES = $(man1_MANS)

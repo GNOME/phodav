@@ -1,0 +1,67 @@
+chezdav(1)
+===========
+:doctype: manpage
+
+
+NAME
+----
+chezdav - simple WebDAV server
+
+
+SYNOPSIS
+--------
+*chezdav* ['OPTIONS...']
+
+
+DESCRIPTION
+-----------
+
+The chezdav(1) command starts a WebDAV server. This allows clients to
+access your files, and modify them. A simple Web browser is sufficient
+to browse for files. The default shared folder is the home directory,
+but you may specifiy a different folder with the *-P* option.
+
+
+OPTIONS
+-------
+*-d, --htdigest*=PATH::
+    Path to a htdigest file, to protect server with DIGEST method.
+
+*-P, --path*=PATH::
+    Path to export.
+
+*-p, --port*=PORT::
+    Port to listen from. By default, a port is allocated randomly.
+
+*-v, --verbose*::
+    Verbosely print running information.
+
+*--version*::
+    Print program version number.
+
+
+[[X1]]
+EXIT STATUS
+-----------
+*0*::
+    Success
+
+*1*::
+    Failure (syntax or usage error; unexpected error).
+
+
+AUTHOR
+------
+chezdav was originally written by Marc-André Lureau.
+
+
+RESOURCES
+---------
+Main web site: <http://wiki.gnome.org/phodav>
+
+
+COPYING
+-------
+Copyright \(C) 2013-2014 Red Hat, Inc. Free use of
+this software is granted under the terms of the GNU Lesser General
+Public License (lGPL).

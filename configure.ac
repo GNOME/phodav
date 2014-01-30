@@ -101,8 +101,19 @@ else
   have_pie=no
 fi
 
+
+AC_ARG_VAR([XMLTO], [Path to xmlto command])
+AC_PATH_PROG([XMLTO], [xmlto])
+AC_ARG_VAR([ASCIIDOC], [Path to asciidoc command])
+AC_PATH_PROG([ASCIIDOC], [asciidoc])
+AM_CONDITIONAL([HAVE_DOCTOOLS], [test "x$XMLTO" != "x" && test "x$ASCIIDOC" != "x"])
+if test "x$XMLTO" = "x" || test "x$ASCIIDOC" = "x"; then
+  AC_MSG_WARN([xmlto or asciidoc not found - cannot create man pages without it])
+fi
+
 AC_CONFIG_FILES([
 Makefile
+doc/Makefile
 po/Makefile.in
 spice/Makefile
 libphodav/Makefile
