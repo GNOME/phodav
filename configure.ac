@@ -101,6 +101,8 @@ else
   have_pie=no
 fi
 
+SYSTEMDSYSTEMUNITDIR=`${PKG_CONFIG} systemd --variable=systemdsystemunitdir`
+AC_SUBST(SYSTEMDSYSTEMUNITDIR)
 
 AC_ARG_VAR([XMLTO], [Path to xmlto command])
 AC_PATH_PROG([XMLTO], [xmlto])

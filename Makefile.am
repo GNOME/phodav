@@ -66,6 +66,14 @@ chezdav_LDADD =			\
 	$(AVAHI_LIBS)		\
 	$(NULL)
 
+systemdunitdir = $(SYSTEMDSYSTEMUNITDIR)
+systemdunit_DATA = \
+	$(top_srcdir)/data/spice-webdavd.service \
+	$(top_srcdir)/data/spice-webdavd.target
+
+udevrulesdir = /lib/udev/rules.d
+udevrules_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
+
 BUILT_SOURCES += $(top_srcdir)/.version
 $(top_srcdir)/.version:
 	@echo $(VERSION) > $@-t && mv $@-t $@
