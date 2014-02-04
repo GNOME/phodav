@@ -20,7 +20,10 @@
 #include <gio/gio.h>
 
 #ifdef G_OS_UNIX
-#include <gio/gunixsocketaddress.h>
+#include <gio/gunixinputstream.h>
+#include <gio/gunixoutputstream.h>
+#include <fcntl.h>
+#include <glib/gstdio.h>
 #endif
 
 #ifdef G_OS_WIN32
@@ -206,12 +209,13 @@ static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
 static OutputQueue *mux_queue;
 static GHashTable *clients;
-
 static void start_mux_read (GInputStream *istream);
 
 static void
 quit (int sig)
 {
+  g_debug ("quit %d", sig);
+
   g_main_loop_quit (loop);
 }
 
@@ -278,6 +282,7 @@ read_thread (GSimpleAsyncResult *simple,
   g_input_stream_read_all (stream,
                            data->buffer, data->count, &bread,
                            cancellable, &error);
+  g_debug ("my read result %" G_GSIZE_FORMAT, bread);
   if (bread != data->count)
     data->size = -1;
   else
@@ -357,7 +362,7 @@ mux_data_read_cb (GObject      *source_object,
     {
       g_warning ("error: %s", error->message);
       g_clear_error (&error);
-      quit (0);
+      quit (1);
       return;
     }
 
@@ -397,7 +402,7 @@ end:
       g_clear_error (&error);
     }
 
-  quit (0);
+  quit (2);
 }
 
 static void
@@ -410,9 +415,9 @@ mux_client_read_cb (GObject      *source_object,
   gssize size;
 
   size = my_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
+  g_debug ("read %" G_GSSIZE_FORMAT, size);
   if (error || size != sizeof (gint64))
     goto end;
-
   my_input_stream_read_async (istream,
                               &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
                               NULL, mux_size_read_cb, NULL);
@@ -425,7 +430,7 @@ end:
       g_clear_error (&error);
     }
 
-  quit (0);
+  quit (3);
 }
 
 static void
@@ -598,6 +603,38 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 #endif
 
+#ifndef G_SOURCE_REMOVE
+#define G_SOURCE_REMOVE FALSE
+#endif
+#ifndef G_SOURCE_CONTINUE
+#define G_SOURCE_CONTINUE TRUE
+#endif
+
+#ifdef G_OS_UNIX
+static void
+wait_for_virtio_host (gint fd)
+{
+    GPollFD pfd = { .fd = fd, .events = G_IO_HUP | G_IO_IN | G_IO_OUT };
+
+    while (1)
+      {
+        gboolean connected;
+
+        g_debug ("polling");
+        g_assert_cmpint (g_poll (&pfd, 1, -1), ==, 1);
+        g_debug ("polling end");
+        connected = !(pfd.revents & G_IO_HUP);
+        g_debug ("connected: %d", connected);
+        if (connected)
+          break;
+
+        // FIXME: I don't see a reasonable way to wait for virtio
+        // host-side to be connected..
+        g_usleep (G_USEC_PER_SEC);
+      }
+}
+#endif
+
 static void
 open_mux_path (const char *path)
 {
@@ -607,19 +644,14 @@ open_mux_path (const char *path)
   g_return_if_fail (!mux_queue);
 
 #ifdef G_OS_UNIX
-  GError *error = NULL;
-  GFile *file = g_file_new_for_path (path);
-  GFileIOStream *fio = g_file_open_readwrite (file, NULL, &error);
-  g_object_unref (file);
-
-  if (error)
-    {
-      g_printerr ("%s\n", error->message);
+  gint fd = g_open (path, O_RDWR);
+  if (fd == -1)
       exit (1);
-    }
 
-  mux_ostream = g_io_stream_get_output_stream (G_IO_STREAM (fio));
-  mux_istream = g_io_stream_get_input_stream (G_IO_STREAM (fio));
+  wait_for_virtio_host (fd);
+
+  mux_ostream = g_unix_output_stream_new (fd, TRUE);
+  mux_istream = g_unix_input_stream_new (fd, FALSE);
 #else
   HANDLE h = CreateFile (path,
                          GENERIC_WRITE | GENERIC_READ,
@@ -695,11 +727,14 @@ main (int argc, char *argv[])
 
   clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
                                    NULL, (GDestroyNotify) client_free);
+
+  loop = g_main_loop_new (NULL, TRUE);
 #ifdef G_OS_UNIX
   open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
 #else
   open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
 #endif
+
 
   /* listen on port for incoming clients, multiplex there input into
      virtio path, demultiplex input from there to the respective
@@ -717,7 +752,6 @@ main (int argc, char *argv[])
     }
 #endif
 
-  loop = g_main_loop_new (NULL, TRUE);
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
 
