@@ -228,11 +228,13 @@ add_client (GSocketConnection *client_connection)
 
   client = g_new0 (Client, 1);
   client->client_connection = g_object_ref (client_connection);
+  // TODO: check if usage of this idiom is portable, or if we need to check collisions
   client->id = GPOINTER_TO_INT (client_connection);
   client->queue = output_queue_new (bostream);
   g_object_unref (bostream);
 
-  g_hash_table_insert (clients, g_object_ref (client_connection), client);
+  g_hash_table_insert (clients, &client->id, client);
+  g_warn_if_fail (g_hash_table_lookup (clients, &client->id));
 
   return client;
 }
@@ -359,7 +361,9 @@ mux_data_read_cb (GObject      *source_object,
       return;
     }
 
-  Client *c = g_hash_table_lookup (clients, GINT_TO_POINTER (demux.client));
+  g_debug ("looking up client %" G_GINT64_FORMAT, demux.client);
+  Client *c = g_hash_table_lookup (clients, &demux.client);
+  g_warn_if_fail(c != NULL);
 
   if (c)
     output_queue_push (c->queue, (guint8 *) demux.buf, demux.size,
@@ -689,8 +693,8 @@ main (int argc, char *argv[])
                     "incoming", G_CALLBACK (incoming_callback),
                     NULL);
 
-  clients = g_hash_table_new_full (g_direct_hash, g_direct_equal,
-                                   g_object_unref, (GDestroyNotify) client_free);
+  clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
+                                   NULL, (GDestroyNotify) client_free);
 #ifdef G_OS_UNIX
   open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
 #else
