@@ -105,7 +105,7 @@ AC_ARG_WITH([systemdsystemunitdir],
             AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files]),
             [], [with_systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)])
 AC_SUBST([SYSTEMDSYSTEMUNITDIR], [$with_systemdsystemunitdir])
-AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$systemdsystemunitdir"])
+AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$with_systemdsystemunitdir"])
 
 AC_ARG_WITH([udevdir],
             AS_HELP_STRING([--with-udevdir=DIR], [Directory for udev files]),

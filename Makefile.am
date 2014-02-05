@@ -68,14 +68,14 @@ chezdav_LDADD =			\
 
 if HAVE_SYSTEMD
 systemdunitdir = $(SYSTEMDSYSTEMUNITDIR)
-systemdunit_DATA = \
+dist_systemdunit_DATA = \
 	$(top_srcdir)/data/spice-webdavd.service \
 	$(top_srcdir)/data/spice-webdavd.target
 endif
 
 if HAVE_UDEV
 udevrulesdir = $(UDEVDIR)/rules.d
-udevrules_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
+dist_udevrules_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
 endif
 
 BUILT_SOURCES += $(top_srcdir)/.version
