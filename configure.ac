@@ -101,8 +101,17 @@ else
   have_pie=no
 fi
 
-SYSTEMDSYSTEMUNITDIR=`${PKG_CONFIG} systemd --variable=systemdsystemunitdir`
-AC_SUBST(SYSTEMDSYSTEMUNITDIR)
+AC_ARG_WITH([systemdsystemunitdir],
+            AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files]),
+            [], [with_systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)])
+AC_SUBST([SYSTEMDSYSTEMUNITDIR], [$with_systemdsystemunitdir])
+AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$systemdsystemunitdir"])
+
+AC_ARG_WITH([udevdir],
+            AS_HELP_STRING([--with-udevdir=DIR], [Directory for udev files]),
+            [], [with_udevdir=$($PKG_CONFIG --variable=udevdir udev)])
+AC_SUBST([UDEVDIR], [$with_udevdir])
+AM_CONDITIONAL(HAVE_UDEV, [test -n "$with_udevdir"])
 
 AC_ARG_VAR([XMLTO], [Path to xmlto command])
 AC_PATH_PROG([XMLTO], [xmlto])

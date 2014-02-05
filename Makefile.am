@@ -66,13 +66,17 @@ chezdav_LDADD =			\
 	$(AVAHI_LIBS)		\
 	$(NULL)
 
+if HAVE_SYSTEMD
 systemdunitdir = $(SYSTEMDSYSTEMUNITDIR)
 systemdunit_DATA = \
 	$(top_srcdir)/data/spice-webdavd.service \
 	$(top_srcdir)/data/spice-webdavd.target
+endif
 
-udevrulesdir = /lib/udev/rules.d
-udevrules_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
+if HAVE_UDEV
+udevdir = $(UDEVDIR)/rules.d
+udev_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
+endif
 
 BUILT_SOURCES += $(top_srcdir)/.version
 $(top_srcdir)/.version:
@@ -92,5 +96,9 @@ MAINTAINERCLEANFILES =					\
 	$(GITIGNORE_MAINTAINERCLEANFILES_TOPLEVEL)	\
 	$(GITIGNORE_MAINTAINERCLEANFILES_MAKEFILE_IN)	\
 	$(GITIGNORE_MAINTAINERCLEANFILES_M4_LIBTOOL)
+
+DISTCHECK_CONFIGURE_FLAGS =							\
+	--with-systemdsystemunitdir='$${libdir}/systemd/system-distcheck'	\
+	--with-udevdir='$${libdir}/udev-distcheck'
 
 -include $(top_srcdir)/git.mk
