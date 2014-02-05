@@ -74,8 +74,8 @@ systemdunit_DATA = \
 endif
 
 if HAVE_UDEV
-udevdir = $(UDEVDIR)/rules.d
-udev_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
+udevrulesdir = $(UDEVDIR)/rules.d
+udevrules_DATA = $(top_srcdir)/data/70-spice-webdavd.rules
 endif
 
 BUILT_SOURCES += $(top_srcdir)/.version
