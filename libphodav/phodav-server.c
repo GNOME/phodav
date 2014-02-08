@@ -2783,7 +2783,7 @@ method_lock (PathHandler *handler, SoupMessage *msg,
       const gchar *hif = soup_message_headers_get_one (msg->request_headers, "If");
       gint len = strlen (hif);
 
-      if (hif[0] != '(' || hif[1] != '<' || hif[len - 2] != '>' || hif[len - 1] != ')')
+      if (len <= 4 || hif[0] != '(' || hif[1] != '<' || hif[len - 2] != '>' || hif[len - 1] != ')')
         goto end;
 
       token = g_strndup (hif + 2, len - 4);
