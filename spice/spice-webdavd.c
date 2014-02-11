@@ -671,6 +671,60 @@ open_mux_path (const char *path)
   start_mux_read (mux_istream);
 }
 
+#ifdef G_OS_WIN32
+static SERVICE_STATUS service_status;
+static SERVICE_STATUS_HANDLE service_status_handle;
+
+DWORD WINAPI
+service_ctrl_handler(DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx);
+VOID WINAPI
+service_main(DWORD argc, TCHAR *argv[]);
+
+DWORD WINAPI
+service_ctrl_handler (DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx)
+{
+  DWORD ret = NO_ERROR;
+
+  switch (ctrl)
+    {
+    case SERVICE_CONTROL_STOP:
+    case SERVICE_CONTROL_SHUTDOWN:
+        quit (SIGTERM);
+        service_status.dwCurrentState = SERVICE_STOP_PENDING;
+        SetServiceStatus (service_status_handle, &service_status);
+        break;
+
+    default:
+        ret = ERROR_CALL_NOT_IMPLEMENTED;
+    }
+
+  return ret;
+}
+
+VOID WINAPI
+service_main (DWORD argc, TCHAR *argv[])
+{
+  service_status_handle =
+    RegisterServiceCtrlHandlerEx ("spice-webdavd", service_ctrl_handler, NULL);
+
+  g_return_if_fail (service_status_handle != 0);
+
+  service_status.dwServiceType = SERVICE_WIN32;
+  service_status.dwCurrentState = SERVICE_RUNNING;
+  service_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+  service_status.dwWin32ExitCode = NO_ERROR;
+  service_status.dwServiceSpecificExitCode = NO_ERROR;
+  service_status.dwCheckPoint = 0;
+  service_status.dwWaitHint = 0;
+  SetServiceStatus (service_status_handle, &service_status);
+
+  g_main_loop_run (loop);
+
+  service_status.dwCurrentState = SERVICE_STOPPED;
+  SetServiceStatus (service_status_handle, &service_status);
+}
+#endif
+
 static GOptionEntry entries[] = {
   { "port", 'p', 0,
     G_OPTION_ARG_INT, &port,
@@ -752,7 +806,20 @@ main (int argc, char *argv[])
     }
 #endif
 
+#ifdef G_OS_WIN32
+  SERVICE_TABLE_ENTRY service_table[] =
+    {
+      { (char *)"spice-webdavd", service_main }, { NULL, NULL }
+    };
+  if (!StartServiceCtrlDispatcher (service_table))
+    {
+      g_error ("%s", g_win32_error_message(GetLastError()));
+      exit (1);
+    }
+#else
   g_main_loop_run (loop);
+#endif
+
   g_main_loop_unref (loop);
 
   output_queue_unref (mux_queue);
