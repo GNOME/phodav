@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <?define Version = "@WINDOWS_PRODUCTVERSION@"?>
+  <?define UpgradeCode = "7eb9b146-db04-42d7-a8ba-71fc8ced7eed"?>
+  <?define Arch = "@WIXL_ARCH@"?>
+  <?if $(var.Arch) = "x64"?>
+      <?define GLIB_ARCH = "win64"?>
+      <?define ArchString = "64-bit"?>
+      <?define ArchProgramFilesFolder = "ProgramFiles64Folder"?>
+      <?define Win64 = "yes"?>
+  <?else?>
+      <?define GLIB_ARCH = "win32"?>
+      <?define ArchString = "32-bit"?>
+      <?define ArchProgramFilesFolder = "ProgramFilesFolder"?>
+      <?define Win64 = "no"?>
+  <?endif?>
+
+  <?require libsoup.wxi?>
+
+  <Product Id="*" Name="chezdav @VERSION@@BUILDID@ ($(var.ArchString))"
+           Manufacturer="$(env.MANUFACTURER)"
+           Version="$(var.Version)" UpgradeCode="$(var.UpgradeCode)"
+           Language="1033">
+
+    <Package InstallerVersion="200" Compressed="yes" Comments="comments"/>
+    <Media Id="1" Cabinet="cabinet.cab" EmbedCab="yes"/>
+
+    <Property Id="ARPHELPLINK" Value="http://www.spice-space.org"/>
+    <Property Id="ARPNOMODIFY" Value="1"/>
+    <Property Id="ARPNOREPAIR" Value="1"/>
+    <Upgrade Id="$(var.UpgradeCode)">
+      <UpgradeVersion Minimum="$(var.Version)" OnlyDetect="yes" Property="NEWERVERSIONDETECTED"/>
+      <UpgradeVersion Minimum="0.0.0" Maximum="$(var.Version)" IncludeMinimum="yes" IncludeMaximum="no" Property="OLDERVERSIONBEINGUPGRADED"/>
+    </Upgrade>
+    <Condition Message="Product already installed.">NOT NEWERVERSIONDETECTED</Condition>
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallFinalize"/>
+    </InstallExecuteSequence>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="$(var.ArchProgramFilesFolder)">
+        <Directory Id="INSTALLDIR" Name="chezdav">
+          <Directory Id="Dbindir" Name="bin">
+            <Component Id="CChezDAV" Guid="*">
+              <File Id='chezdav' Name='chezdav.exe' DiskId='1' Source='$(var.DESTDIR)/bin/chezdav.exe' KeyPath='yes'/>
+            </Component>
+          </Directory>
+          <Component Id="CDepsTxt" Guid="*">
+            <File Id='depstxt' Name='deps.txt' DiskId='1' Source='deps.txt' KeyPath='yes'/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Complete"  Level="1">
+      <ComponentGroupRef Id="CG.libsoup"/>
+      <ComponentRef Id="CChezDAV"/>
+      <ComponentRef Id="CDepsTxt"/>
+    </Feature>
+
+  </Product>
+</Wix>

@@ -58,6 +58,15 @@ deps.txt:
 
 MANUFACTURER = The Spice Project
 
+chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: chezdav.wxs deps.txt all
+	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
+	make -C $(top_builddir) install DESTDIR=$$DESTDIR >/dev/null &&	\
+	MANUFACTURER="$(MANUFACTURER)" wixl -D SourceDir=$(prefix)	\
+	  -D DESTDIR=$$DESTDIR$(prefix)					\
+	  --arch $(WIXL_ARCH)  -o $@ $<
+
+MSI = chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+
 spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: spice-webdavd.wxs deps.txt all
 	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
 	make -C $(top_builddir) install DESTDIR=$$DESTDIR >/dev/null &&	\
@@ -65,7 +74,9 @@ spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: spice-webdavd.wxs deps.txt 
 	  -D DESTDIR=$$DESTDIR$(prefix)					\
 	  --arch $(WIXL_ARCH)  -o $@ $<
 
-msi: spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+MSI += spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+
+msi: $(MSI)
 
 CLEANFILES = spice-webavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
 

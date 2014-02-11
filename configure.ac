@@ -152,11 +152,12 @@ AC_SUBST(WIXL_ARCH)
 
 AC_CONFIG_FILES([
 Makefile
+chezdav.wxs
 doc/Makefile
-po/Makefile.in
-spice/Makefile
 libphodav/Makefile
+po/Makefile.in
 spice-webdavd.wxs
+spice/Makefile
 ])
 AC_OUTPUT
 
