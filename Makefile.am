@@ -50,6 +50,27 @@ spice_webdavd_LDADD =		\
 	$(PIE_LDFLAGS)		\
 	$(NULL)
 
+EXTRA_DIST += spice-webdavd.wxs.in
+CONFIG_STATUS_DEPENDENCIES = spice-webdavd.wxs.in
+
+deps.txt:
+	$(AM_V_GEN)rpm -qa | grep $(host_os) | sort | unix2dos > $@
+
+MANUFACTURER = The Spice Project
+
+spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: spice-webdavd.wxs deps.txt all
+	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
+	make -C $(top_builddir) install DESTDIR=$$DESTDIR >/dev/null &&	\
+	MANUFACTURER="$(MANUFACTURER)" wixl -D SourceDir=$(prefix)	\
+	  -D DESTDIR=$$DESTDIR$(prefix)					\
+	  --arch $(WIXL_ARCH)  -o $@ $<
+
+msi: spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+
+CLEANFILES = spice-webavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+
+.PHONY: msi
+
 chezdav_SOURCES = libphodav/chezdav.c
 
 chezdav_CFLAGS =		\
