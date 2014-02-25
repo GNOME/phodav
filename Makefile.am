@@ -50,13 +50,13 @@ spice_webdavd_LDADD =		\
 	$(PIE_LDFLAGS)		\
 	$(NULL)
 
-EXTRA_DIST += spice-webdavd.wxs.in
-CONFIG_STATUS_DEPENDENCIES = spice-webdavd.wxs.in
-
 deps.txt:
 	$(AM_V_GEN)rpm -qa | grep $(host_os) | sort | unix2dos > $@
 
 MANUFACTURER = The Spice Project
+
+EXTRA_DIST += chezdav.wxs.in
+CONFIG_STATUS_DEPENDENCIES = chezdav.wxs.in
 
 chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: chezdav.wxs deps.txt all
 	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
@@ -66,6 +66,9 @@ chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: chezdav.wxs deps.txt all
 	  --arch $(WIXL_ARCH)  -o $@ $<
 
 MSI = chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+
+EXTRA_DIST += spice-webdavd.wxs.in
+CONFIG_STATUS_DEPENDENCIES = spice-webdavd.wxs.in
 
 spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: spice-webdavd.wxs deps.txt all
 	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
@@ -78,7 +81,7 @@ MSI += spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
 
 msi: $(MSI)
 
-CLEANFILES = spice-webavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
+CLEANFILES = $(MSI)
 
 .PHONY: msi
 

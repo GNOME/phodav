@@ -3,7 +3,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
 
   <?define Version = "@WINDOWS_PRODUCTVERSION@"?>
-  <?define UpgradeCode = "7eb9b146-db04-42d7-a8ba-71fc8ced7eed"?>
+  <?define UpgradeCode = "33f0af8e-ade3-4e25-a020-77a179ff75e3"?>
   <?define Arch = "@WIXL_ARCH@"?>
   <?if $(var.Arch) = "x64"?>
       <?define GLIB_ARCH = "win64"?>
