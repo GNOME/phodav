@@ -66,6 +66,9 @@
           <Component Id="CDepsTxt" Guid="*">
             <File Id='depstxt' Name='deps.txt' DiskId='1' Source='deps.txt' KeyPath='yes'/>
           </Component>
+          <Component Id="CMapDrive" Guid="*">
+            <File Id='mapdrive' Name='map-drive.bat' DiskId='1' Source='@srcdir@/spice/map-drive.bat' KeyPath='yes'/>
+          </Component>
         </Directory>
       </Directory>
     </Directory>
