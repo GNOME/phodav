@@ -77,6 +77,7 @@
       <ComponentGroupRef Id="CG.glib2"/>
       <ComponentRef Id="CWebdavd"/>
       <ComponentRef Id="CDepsTxt"/>
+      <ComponentRef Id="CMapDrive"/>
     </Feature>
 
   </Product>
