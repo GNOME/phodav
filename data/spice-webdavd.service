@@ -1,6 +1,7 @@
 [Unit]
 Description=webdav daemon for Spice guests
-After=dbus.target
+Requires=dbus.service avahi-daemon.service
+After=dbus.service avahi-daemon.service
 
 [Service]
 Type=simple
