@@ -1,0 +1,4 @@
+- very large incoming data/copy (not buffer all in RAM)
+- read/write offsets
+- search
+- subscribe/notify (perhaps not good enough imho) or equivalent
