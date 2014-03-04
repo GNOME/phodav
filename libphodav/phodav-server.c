@@ -71,6 +71,11 @@ static void server_callback (SoupServer        *server,
                              SoupClientContext *context,
                              gpointer           user_data);
 
+static void request_started (SoupServer        *server,
+                             SoupMessage       *message,
+                             SoupClientContext *client,
+                             gpointer           user_data);
+
 static void dav_lock_free (DAVLock *lock);
 
 struct _Path
@@ -289,6 +294,7 @@ static void
 phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
+  PathHandler *handler = path_handler_new (self, g_file_new_for_path (self->path));
 
   self->server = soup_server_new (SOUP_SERVER_PORT, self->port,
                                   SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
@@ -297,8 +303,10 @@ phodav_server_constructed (GObject *gobject)
 
   soup_server_add_handler (self->server, NULL,
                            server_callback,
-                           path_handler_new (self, g_file_new_for_path (self->path)),
+                           handler,
                            (GDestroyNotify) path_handler_free);
+
+  g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), handler);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)
@@ -1897,12 +1905,12 @@ method_get (PathHandler *handler, SoupMessage *msg, const char *path, GError **e
 }
 
 static gint
-do_put_file (SoupMessage *msg, GFile *file,
-             GCancellable *cancellable, GError **err)
+put_start (SoupMessage *msg, GFile *file,
+           GFileOutputStream **output, GCancellable *cancellable,
+           GError **err)
 {
-  GFileOutputStream *s;
+  GFileOutputStream *s = NULL;
   gchar *etag = NULL;
-  gsize bytes_written;
   gboolean created = TRUE;
   SoupMessageHeaders *headers = msg->request_headers;
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
@@ -1921,15 +1929,10 @@ do_put_file (SoupMessage *msg, GFile *file,
   if (!s)
     goto end;
 
-  if (!g_output_stream_write_all (G_OUTPUT_STREAM (s),
-                                  msg->request_body->data, msg->request_body->length,
-                                  &bytes_written, cancellable, err))
-    goto end;
-
   status = created ? SOUP_STATUS_CREATED : SOUP_STATUS_OK;
 
 end:
-  g_object_unref (s);
+  *output = s;
   return status;
 }
 
@@ -2344,27 +2347,6 @@ end:
     g_hash_table_unref (mstatus);
   g_clear_object (&file);
 
-  return status;
-}
-
-static gint
-method_put (PathHandler *handler, SoupMessage *msg,
-            const char *path, GError **err)
-{
-  GFile *file;
-  PhodavServer *self = handler->self;
-  gint status;
-  GList *submitted = NULL;
-
-  status = check_if (handler, msg, path, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  file = g_file_get_child (handler->file, path + 1);
-  status = do_put_file (msg, file, self->cancellable, err);
-
-end:
-  g_clear_object (&file);
   return status;
 }
 
@@ -2913,6 +2895,103 @@ method_unlock (PathHandler *handler, SoupMessage *msg,
 }
 
 static void
+method_put_finished (SoupMessage *msg,
+                     SoupBuffer  *chunk,
+                     gpointer     user_data)
+{
+  GFileOutputStream *output = user_data;
+
+  g_debug ("PUT finished");
+
+  g_object_unref (output);
+}
+
+static void
+method_put_got_chunk (SoupMessage *msg,
+                      SoupBuffer  *chunk,
+                      gpointer     user_data)
+{
+  GFileOutputStream *output = user_data;
+  PathHandler *handler = g_object_get_data (user_data, "handler");
+  PhodavServer *self = handler->self;
+  GError *err = NULL;
+  gsize bytes_written;
+
+  g_debug ("PUT got chunk");
+
+  if (!g_output_stream_write_all (G_OUTPUT_STREAM (output),
+                                  chunk->data, chunk->length,
+                                  &bytes_written, self->cancellable, &err))
+    goto end;
+
+end:
+  if (err)
+    {
+      g_warning ("error: %s", err->message);
+      g_clear_error (&err);
+      soup_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+    }
+}
+
+static void
+method_put (PathHandler *handler, const gchar *path, SoupMessage *msg, GError **err)
+{
+  PhodavServer *self = handler->self;
+  GFile *file = NULL;
+  GList *submitted = NULL;
+  GFileOutputStream *output = NULL;
+  gint status;
+
+  status = check_if (handler, msg, path, &submitted);
+  if (status != SOUP_STATUS_OK)
+    goto end;
+
+  file = g_file_get_child (handler->file, path + 1);
+  status = put_start (msg, file, &output, self->cancellable, err);
+  if (*err)
+    goto end;
+
+  soup_message_body_set_accumulate (msg->request_body, FALSE);
+  g_object_set_data (G_OBJECT (output), "handler", handler);
+  g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), output);
+  g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), output);
+
+end:
+  soup_message_set_status (msg, status);
+  g_clear_object (&file);
+}
+
+static void
+got_headers (SoupMessage *msg,
+             gpointer     user_data)
+{
+  PathHandler *handler = user_data;
+  SoupURI *uri = soup_message_get_uri (msg);
+  const gchar *path = uri->path;
+  GError *err = NULL;
+
+  if (msg->method == SOUP_METHOD_PUT)
+    method_put (handler, path, msg, &err);
+
+  if (err)
+    {
+      g_warning ("error: %s", err->message);
+      g_clear_error (&err);
+    }
+}
+
+static void
+request_started (SoupServer        *server,
+                 SoupMessage       *message,
+                 SoupClientContext *client,
+                 gpointer           user_data)
+{
+  PathHandler *handler = user_data;
+
+  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), handler);
+}
+
+static void
 server_callback (SoupServer *server, SoupMessage *msg,
                  const char *path, GHashTable *query,
                  SoupClientContext *context, gpointer user_data)
@@ -2958,8 +3037,6 @@ server_callback (SoupServer *server, SoupMessage *msg,
   else if (msg->method == SOUP_METHOD_GET ||
            msg->method == SOUP_METHOD_HEAD)
     status = method_get (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_PUT)
-    status = method_put (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_PROPFIND)
     status = method_propfind (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_PROPPATCH)
