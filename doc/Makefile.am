@@ -15,3 +15,5 @@ endif
 
 EXTRA_DIST = $(MAN1_TXT)
 CLEANFILES = $(man1_MANS)
+
+-include $(top_srcdir)/git.mk
