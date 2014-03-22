@@ -21,6 +21,7 @@ msgstr ""
 "X-Poedit-SourceCharset: utf-8\n"
 "X-Generator: Poedit 1.5.4\n"
 #: ../libphodav/chezdav.c:201
+
 msgid "Print program version"
 msgstr "Izpiši različico programa"
 
