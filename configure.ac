@@ -103,13 +103,13 @@ fi
 
 AC_ARG_WITH([systemdsystemunitdir],
             AS_HELP_STRING([--with-systemdsystemunitdir=DIR], [Directory for systemd service files]),
-            [], [with_systemdsystemunitdir=$($PKG_CONFIG --variable=systemdsystemunitdir systemd)])
+            [], [with_systemdsystemunitdir=$prefix/lib/systemd/system])
 AC_SUBST([SYSTEMDSYSTEMUNITDIR], [$with_systemdsystemunitdir])
 AM_CONDITIONAL(HAVE_SYSTEMD, [test -n "$with_systemdsystemunitdir"])
 
 AC_ARG_WITH([udevdir],
             AS_HELP_STRING([--with-udevdir=DIR], [Directory for udev files]),
-            [], [with_udevdir=$($PKG_CONFIG --variable=udevdir udev)])
+            [], [with_udevdir=$prefix/lib/udev])
 AC_SUBST([UDEVDIR], [$with_udevdir])
 AM_CONDITIONAL(HAVE_UDEV, [test -n "$with_udevdir"])
 
