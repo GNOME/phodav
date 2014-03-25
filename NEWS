@@ -1,3 +1,15 @@
+v0.2
+====
+
+- don't return slow properties by default
+- handle PUT by chunks (to avoid large libsoup buffering)
+- chezdav: add a man page
+- compatible with <2.38 glib versions
+- spice-webdavd: add systemd unit files
+- spice-webdavd: wait for host channel to be connected
+- spice-webdavd: add windows MSI installer
+- a lot more translations!
+
 v0.1
 ====
 
