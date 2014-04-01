@@ -41,7 +41,7 @@ struct _PhodavServer
   GThread      *thread;
   SoupServer   *server;
   GCancellable *cancellable;
-  gchar        *path;
+  gchar        *root;
   gint          port;
   GHashTable   *paths;
 };
@@ -60,7 +60,7 @@ G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 enum {
   PROP_0,
   PROP_PORT,
-  PROP_PATH,
+  PROP_ROOT,
   PROP_SERVER,
 };
 
@@ -294,7 +294,9 @@ static void
 phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
-  PathHandler *handler = path_handler_new (self, g_file_new_for_path (self->path));
+  PathHandler *handler;
+
+  handler = path_handler_new (self, g_file_new_for_path (self->root));
 
   self->server = soup_server_new (SOUP_SERVER_PORT, self->port,
                                   SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
@@ -318,7 +320,7 @@ phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  g_clear_pointer (&self->path, g_free);
+  g_clear_pointer (&self->root, g_free);
   g_clear_pointer (&self->context, g_main_context_unref);
   g_clear_pointer (&self->thread, g_thread_unref);
   g_clear_pointer (&self->paths, g_hash_table_unref);
@@ -342,8 +344,8 @@ phodav_server_get_property (GObject    *gobject,
       g_value_set_int (value, phodav_server_get_port (self));
       break;
 
-    case PROP_PATH:
-      g_value_set_string (value, self->path);
+    case PROP_ROOT:
+      g_value_set_string (value, self->root);
       break;
 
     case PROP_SERVER:
@@ -370,9 +372,9 @@ phodav_server_set_property (GObject      *gobject,
       self->port = g_value_get_int (value);
       break;
 
-    case PROP_PATH:
-      g_free (self->path);
-      self->path = g_value_dup_string (value);
+    case PROP_ROOT:
+      g_free (self->root);
+      self->root = g_value_dup_string (value);
       break;
 
     default:
@@ -402,10 +404,10 @@ phodav_server_class_init (PhodavServerClass *klass)
                       G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property
-    (gobject_class, PROP_PATH,
-    g_param_spec_string ("path",
-                         "Path",
-                         "Path",
+    (gobject_class, PROP_ROOT,
+    g_param_spec_string ("root",
+                         "Root path",
+                         "Root path",
                          ".",
                          G_PARAM_CONSTRUCT |
                          G_PARAM_READWRITE |
@@ -3086,7 +3088,7 @@ thread_func (gpointer data)
 {
   PhodavServer *self = data;
 
-  g_debug ("Starting on port %d, serving %s", phodav_server_get_port (self), self->path);
+  g_debug ("Starting on port %d, serving %s", phodav_server_get_port (self), self->root);
 
   soup_server_run_async (self->server);
 
