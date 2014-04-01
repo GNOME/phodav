@@ -1,14 +1,15 @@
 NULL =
 EXTRA_DIST =
 BUILT_SOURCES =
+CONFIG_STATUS_DEPENDENCIES =
 ACLOCAL_AMFLAGS = -I m4
 makeflags_ = $(makeflags_$(AM_DEFAULT_VERBOSITY))
 makeflags_0 = --no-print-directory -s
 makeflags_1 =
 AM_MAKEFLAGS = $(makeflags_$(V))
 
-SUBDIRS = po spice libphodav doc
-noinst_LTLIBRARIES = libphodav.la
+SUBDIRS = . po spice libphodav doc
+lib_LTLIBRARIES = libphodav-1.0.la
 bin_PROGRAMS = chezdav
 sbin_PROGRAMS = spice-webdavd
 
@@ -18,23 +19,39 @@ AM_CPPFLAGS =					\
 	$(WARN_CFLAGS)				\
 	$(NULL)
 
-libphodav_la_SOURCES =				\
-	libphodav/guuid.c			\
-	libphodav/guuid.h			\
-	libphodav/phodav-server.c		\
+libphodav_includedir = $(includedir)/libphodav-1.0/libphodav
+libphodav_include_HEADERS =			\
 	libphodav/phodav-server.h		\
 	libphodav/phodav.h			\
 	$(NULL)
 
-libphodav_la_CFLAGS =				\
+libphodav_1_0_la_SOURCES =			\
+	libphodav/guuid.c			\
+	libphodav/guuid.h			\
+	libphodav/phodav-server.c		\
+	$(NULL)
+
+libphodav_1_0_la_CFLAGS =			\
 	$(GIO_CFLAGS)				\
 	$(SOUP_CFLAGS)				\
 	$(NULL)
 
-libphodav_la_LIBADD =				\
+libphodav_1_0_la_LIBADD =			\
 	$(GIO_LIBS)				\
 	$(SOUP_LIBS)				\
 	$(NULL)
+
+libphodav_1_0_la_LDFLAGS =				\
+	-version-info 0:0:0				\
+	-Wl,--version-script=${srcdir}/libphodav.syms	\
+	-no-undefined					\
+	$(NULL)
+
+libphodav_1_0_la_DEPENDENCIES = libphodav.syms
+EXTRA_DIST += libphodav.syms
+
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = libphodav-1.0.pc
 
 spice_webdavd_SOURCES = spice/spice-webdavd.c
 
@@ -56,7 +73,7 @@ deps.txt:
 MANUFACTURER = The Spice Project
 
 EXTRA_DIST += chezdav.wxs.in
-CONFIG_STATUS_DEPENDENCIES = chezdav.wxs.in
+CONFIG_STATUS_DEPENDENCIES += chezdav.wxs.in
 
 chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: chezdav.wxs deps.txt all
 	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
@@ -68,7 +85,7 @@ chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: chezdav.wxs deps.txt all
 MSI = chezdav-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi
 
 EXTRA_DIST += spice-webdavd.wxs.in
-CONFIG_STATUS_DEPENDENCIES = spice-webdavd.wxs.in
+CONFIG_STATUS_DEPENDENCIES += spice-webdavd.wxs.in
 
 spice-webdavd-$(WIXL_ARCH)-$(VERSION)$(BUILDID).msi: spice-webdavd.wxs deps.txt all
 	$(AM_V_GEN)DESTDIR=`mktemp -d`&&				\
@@ -95,7 +112,7 @@ chezdav_CFLAGS =		\
 	$(NULL)
 
 chezdav_LDADD =			\
-	libphodav.la		\
+	libphodav-1.0.la	\
 	$(GLIB_LIBS)		\
 	$(GIO_LIBS)		\
 	$(AVAHI_LIBS)		\
@@ -127,7 +144,10 @@ EXTRA_DIST +=					\
 	phodav.doap				\
 	$(NULL)
 
+AM_DISTCHECK_CONFIGURE_FLAGS = --enable-gtk-doc
+
 MAINTAINERCLEANFILES =					\
+	$(srcdir)/gtk-doc.make				\
 	$(GITIGNORE_MAINTAINERCLEANFILES_TOPLEVEL)	\
 	$(GITIGNORE_MAINTAINERCLEANFILES_MAKEFILE_IN)	\
 	$(GITIGNORE_MAINTAINERCLEANFILES_M4_LIBTOOL)

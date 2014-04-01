@@ -18,6 +18,6 @@
 #ifndef __PHODAV_H__
 #define __PHODAV_H__
 
-#include "phodav-server.h"
+#include <libphodav/phodav-server.h>
 
 #endif /* __PHODAV_H__ */

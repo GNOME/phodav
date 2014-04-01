@@ -7,6 +7,12 @@ AC_CONFIG_AUX_DIR([build-aux])
 AC_CANONICAL_HOST
 AC_PROG_CC
 
+AC_CHECK_PROG([STOW], [stow], [yes], [no])
+AS_IF([test "x$STOW" = "xyes" && test -d /usr/local/stow], [
+  AC_MSG_NOTICE([*** Found /usr/local/stow: default install prefix set to /usr/local/stow/${PACKAGE_NAME} ***])
+  ac_default_prefix="/usr/local/stow/${PACKAGE_NAME}"
+])
+
 AC_MSG_CHECKING([for native Win32])
 case "$host_os" in
   *mingw*|*cygwin*)
@@ -25,6 +31,7 @@ AM_INIT_AUTOMAKE([foreign -Wall -Wno-portability subdir-objects dist-xz])
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 AM_MAINTAINER_MODE([enable])
 LT_INIT([win32-dll disable-fast-install])
+GTK_DOC_CHECK([1.14],[--flavour no-tmpl])
 
 gl_MANYWARN_ALL_GCC([warnings])
 nw=
@@ -153,7 +160,10 @@ AC_SUBST(WIXL_ARCH)
 AC_CONFIG_FILES([
 Makefile
 chezdav.wxs
+libphodav-1.0.pc
 doc/Makefile
+doc/reference/Makefile
+doc/reference/phodav-docs.sgml
 libphodav/Makefile
 po/Makefile.in
 spice-webdavd.wxs

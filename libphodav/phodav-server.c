@@ -33,6 +33,17 @@
 #include "guuid.h"
 #include "phodav-server.h"
 
+/**
+ * SECTION:phodav-server
+ * @title: PhodavServer
+ * @short_description: A WebDAV server
+ * @see_also: #SoupServer
+ * @stability: Stable
+ * @include: libphodav/phodav.h
+ *
+ * PhodavServer implements a simple WebDAV server.
+ */
+
 typedef struct _PathHandler PathHandler;
 
 struct _PhodavServer
@@ -414,7 +425,7 @@ phodav_server_class_init (PhodavServerClass *klass)
     g_param_spec_uint ("port",
                        "Port",
                        "Port",
-                       0, G_MAXINT16, 0,
+                       0, G_MAXUINT16, 0,
                        G_PARAM_CONSTRUCT_ONLY |
                        G_PARAM_READWRITE |
                        G_PARAM_STATIC_STRINGS));
@@ -432,8 +443,8 @@ phodav_server_class_init (PhodavServerClass *klass)
   g_object_class_install_property
     (gobject_class, PROP_SERVER,
      g_param_spec_object ("server",
-                          "Server",
-                          "Server",
+                          "Soup Server",
+                          "Soup Server",
                           SOUP_TYPE_SERVER,
                           G_PARAM_READABLE |
                           G_PARAM_STATIC_STRINGS));
@@ -3083,6 +3094,15 @@ server_callback (SoupServer *server, SoupMessage *msg,
     }
 }
 
+/**
+ * phodav_server_get_port:
+ * @server: a %PhodavServer
+ *
+ * Gets the TCP port that server is listening on. This is most useful
+ * when you did not request a specific port, with value 0.
+*
+ * Returns: the port @server is listening on.
+ **/
 guint
 phodav_server_get_port (PhodavServer *self)
 {
@@ -3091,6 +3111,14 @@ phodav_server_get_port (PhodavServer *self)
   return soup_server_get_port (self->server);
 }
 
+/**
+ * phodav_server_get_soup_server:
+ * @server: a %PhodavServer
+ *
+ * Returns the underlying %SoupServer, if any.
+ *
+ * Returns: the associated %SoupServer or %NULL
+ **/
 SoupServer *
 phodav_server_get_soup_server (PhodavServer *self)
 {
@@ -3113,6 +3141,12 @@ thread_func (gpointer data)
   return NULL;
 }
 
+/**
+ * phodav_server_run:
+ * @server: a %PhodavServer
+ *
+ * Run the server in a separate thread.
+ **/
 void
 phodav_server_run (PhodavServer *self)
 {
@@ -3125,6 +3159,12 @@ phodav_server_run (PhodavServer *self)
   self->thread = g_thread_new ("phodav-server", thread_func, self);
 }
 
+/**
+ * phodav_server_quit:
+ * @server: a %PhodavServer
+ *
+ * Stops the server from running.
+ **/
 void
 phodav_server_quit (PhodavServer *self)
 {
@@ -3140,6 +3180,15 @@ phodav_server_quit (PhodavServer *self)
   g_object_unref (self);
 }
 
+/**
+ * phodav_server_new:
+ * @port: Port to listen on.
+ * @root: (allow-none): Root path.
+ *
+ * Creates a new #PhodavServer.
+ *
+ * Returns: a new #PhodavServer
+ **/
 PhodavServer *
 phodav_server_new (guint port, const gchar *root)
 {

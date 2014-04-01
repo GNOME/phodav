@@ -1,3 +1,5 @@
+SUBDIRS = reference
+
 MAN1_TXT = chezdav.txt
 
 if HAVE_DOCTOOLS

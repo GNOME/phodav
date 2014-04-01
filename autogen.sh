@@ -7,4 +7,4 @@ test -z "$srcdir" && srcdir=.
 
 mkdir -p $srcdir/m4
 
-. gnome-autogen.sh "$@"
+. gnome-autogen.sh --enable-gtk-doc "$@"
