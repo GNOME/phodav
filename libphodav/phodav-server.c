@@ -33,6 +33,8 @@
 #include "guuid.h"
 #include "phodav-server.h"
 
+typedef struct _PathHandler PathHandler;
+
 struct _PhodavServer
 {
   GObject       parent;
@@ -42,6 +44,7 @@ struct _PhodavServer
   SoupServer   *server;
   GCancellable *cancellable;
   gchar        *root;
+  PathHandler  *root_handler; /* weak ref */
   gint          port;
   GHashTable   *paths;
 };
@@ -229,11 +232,11 @@ dav_lock_free (DAVLock *lock)
   g_slice_free (DAVLock, lock);
 }
 
-typedef struct _PathHandler
+struct _PathHandler
 {
   PhodavServer *self;
   GFile       *file;
-} PathHandler;
+};
 
 static PathHandler*
 path_handler_new (PhodavServer *self, GFile *file)
@@ -291,24 +294,36 @@ phodav_server_init (PhodavServer *self)
 }
 
 static void
-phodav_server_constructed (GObject *gobject)
+update_root_handler (PhodavServer *self)
 {
-  PhodavServer *self = PHODAV_SERVER (gobject);
   PathHandler *handler;
 
-  handler = path_handler_new (self, g_file_new_for_path (self->root));
+  if (!self->root || !self->server)
+    return;
 
-  self->server = soup_server_new (SOUP_SERVER_PORT, self->port,
-                                  SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
-                                  SOUP_SERVER_ASYNC_CONTEXT, self->context,
-                                  NULL);
+  handler = path_handler_new (self, g_file_new_for_path (self->root));
 
   soup_server_add_handler (self->server, NULL,
                            server_callback,
                            handler,
                            (GDestroyNotify) path_handler_free);
 
-  g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), handler);
+  self->root_handler = handler;
+}
+
+static void
+phodav_server_constructed (GObject *gobject)
+{
+  PhodavServer *self = PHODAV_SERVER (gobject);
+
+  self->server = soup_server_new (SOUP_SERVER_PORT, self->port,
+                                  SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
+                                  SOUP_SERVER_ASYNC_CONTEXT, self->context,
+                                  NULL);
+
+  update_root_handler (self);
+
+  g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)
@@ -375,6 +390,7 @@ phodav_server_set_property (GObject      *gobject,
     case PROP_ROOT:
       g_free (self->root);
       self->root = g_value_dup_string (value);
+      update_root_handler (self);
       break;
 
     default:
@@ -408,7 +424,7 @@ phodav_server_class_init (PhodavServerClass *klass)
     g_param_spec_string ("root",
                          "Root path",
                          "Root path",
-                         ".",
+                         NULL,
                          G_PARAM_CONSTRUCT |
                          G_PARAM_READWRITE |
                          G_PARAM_STATIC_STRINGS));
@@ -2967,13 +2983,13 @@ static void
 got_headers (SoupMessage *msg,
              gpointer     user_data)
 {
-  PathHandler *handler = user_data;
+  PhodavServer *self = user_data;
   SoupURI *uri = soup_message_get_uri (msg);
   const gchar *path = uri->path;
   GError *err = NULL;
 
   if (msg->method == SOUP_METHOD_PUT)
-    method_put (handler, path, msg, &err);
+    method_put (self->root_handler, path, msg, &err);
 
   if (err)
     {
@@ -2988,9 +3004,9 @@ request_started (SoupServer        *server,
                  SoupClientContext *client,
                  gpointer           user_data)
 {
-  PathHandler *handler = user_data;
+  PhodavServer *self = user_data;
 
-  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), handler);
+  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
 }
 
 static void
@@ -3125,11 +3141,10 @@ phodav_server_quit (PhodavServer *self)
 }
 
 PhodavServer *
-phodav_server_new (gint port, const gchar *path)
+phodav_server_new (gint port, const gchar *root)
 {
-  if (path == NULL)
-    path = ".";
-
   return g_object_new (PHODAV_TYPE_SERVER,
-                       "port", port, "path", path, NULL);
+                       "port", port,
+                       "root", root,
+                       NULL);
 }
