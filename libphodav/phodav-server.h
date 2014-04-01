@@ -35,10 +35,10 @@ typedef struct _PhodavServerClass PhodavServerClass;
 
 GType           phodav_server_get_type        (void);
 
-PhodavServer *  phodav_server_new             (gint port, const gchar *root);
+PhodavServer *  phodav_server_new             (guint port, const gchar *root);
 void            phodav_server_run             (PhodavServer *dav);
 void            phodav_server_quit            (PhodavServer *dav);
-gint            phodav_server_get_port        (PhodavServer *dav);
+guint           phodav_server_get_port        (PhodavServer *dav);
 SoupServer *    phodav_server_get_soup_server (PhodavServer *dav);
 
 G_END_DECLS

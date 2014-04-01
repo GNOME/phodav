@@ -45,7 +45,7 @@ struct _PhodavServer
   GCancellable *cancellable;
   gchar        *root;
   PathHandler  *root_handler; /* weak ref */
-  gint          port;
+  guint         port;
   GHashTable   *paths;
 };
 
@@ -356,7 +356,7 @@ phodav_server_get_property (GObject    *gobject,
   switch (prop_id)
     {
     case PROP_PORT:
-      g_value_set_int (value, phodav_server_get_port (self));
+      g_value_set_uint (value, phodav_server_get_port (self));
       break;
 
     case PROP_ROOT:
@@ -384,7 +384,7 @@ phodav_server_set_property (GObject      *gobject,
   switch (prop_id)
     {
     case PROP_PORT:
-      self->port = g_value_get_int (value);
+      self->port = g_value_get_uint (value);
       break;
 
     case PROP_ROOT:
@@ -411,13 +411,13 @@ phodav_server_class_init (PhodavServerClass *klass)
 
   g_object_class_install_property
     (gobject_class, PROP_PORT,
-    g_param_spec_int ("port",
-                      "Port",
-                      "Port",
-                      0, G_MAXINT16, 0,
-                      G_PARAM_CONSTRUCT_ONLY |
-                      G_PARAM_READWRITE |
-                      G_PARAM_STATIC_STRINGS));
+    g_param_spec_uint ("port",
+                       "Port",
+                       "Port",
+                       0, G_MAXINT16, 0,
+                       G_PARAM_CONSTRUCT_ONLY |
+                       G_PARAM_READWRITE |
+                       G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property
     (gobject_class, PROP_ROOT,
@@ -3083,10 +3083,10 @@ server_callback (SoupServer *server, SoupMessage *msg,
     }
 }
 
-gint
+guint
 phodav_server_get_port (PhodavServer *self)
 {
-  g_return_val_if_fail (PHODAV_IS_SERVER (self), -1);
+  g_return_val_if_fail (PHODAV_IS_SERVER (self), 0);
 
   return soup_server_get_port (self->server);
 }
@@ -3104,7 +3104,7 @@ thread_func (gpointer data)
 {
   PhodavServer *self = data;
 
-  g_debug ("Starting on port %d, serving %s", phodav_server_get_port (self), self->root);
+  g_debug ("Starting on port %u, serving %s", phodav_server_get_port (self), self->root);
 
   soup_server_run_async (self->server);
 
@@ -3141,7 +3141,7 @@ phodav_server_quit (PhodavServer *self)
 }
 
 PhodavServer *
-phodav_server_new (gint port, const gchar *root)
+phodav_server_new (guint port, const gchar *root)
 {
   return g_object_new (PHODAV_TYPE_SERVER,
                        "port", port,
