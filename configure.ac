@@ -30,7 +30,7 @@ AM_CONDITIONAL([OS_WIN32],[test "$os_win32" = "yes"])
 AM_INIT_AUTOMAKE([foreign -Wall -Wno-portability subdir-objects dist-xz])
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 AM_MAINTAINER_MODE([enable])
-LT_INIT([win32-dll disable-fast-install])
+LT_INIT([win32-dll])
 GTK_DOC_CHECK([1.14],[--flavour no-tmpl])
 
 gl_MANYWARN_ALL_GCC([warnings])
