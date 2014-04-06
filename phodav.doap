@@ -10,6 +10,10 @@
   PhởDAV is a WebDAV server implemented using libsoup and GIO.
   It provides a library and a small standalone tool to share a directory called "chezdav".
   </description>
+  <homepage rdf:resource="https://wiki.gnome.org/phodav" />
+  <mailing-list rdf:resource="http://lists.freedesktop.org/mailman/listinfo/spice-devel" />
+  <download-page rdf:resource="http://download.gnome.org/sources/phodav/" />
+  <bug-database rdf:resource="https://bugzilla.gnome.org/browse.cgi?product=phodav" />
 
   <maintainer>
     <foaf:Person>
