@@ -28,7 +28,13 @@ libphodav_include_HEADERS =			\
 libphodav_1_0_la_SOURCES =			\
 	libphodav/guuid.c			\
 	libphodav/guuid.h			\
+	libphodav/phodav-priv.h			\
+	libphodav/phodav-path.c			\
+	libphodav/phodav-path.h			\
+	libphodav/phodav-lock.c			\
+	libphodav/phodav-lock.h			\
 	libphodav/phodav-server.c		\
+	libphodav/phodav-server.h		\
 	$(NULL)
 
 libphodav_1_0_la_CFLAGS =			\

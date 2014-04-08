@@ -18,13 +18,6 @@
 
 #include "config.h"
 
-#include <glib/gi18n.h>
-
-#include <libxml/parser.h>
-#include <libxml/tree.h>
-#include <libxml/xpath.h>
-#include <libxml/xpathInternals.h>
-
 #include <sys/types.h>
 #ifdef HAVE_ATTR_XATTR_H
 #include <attr/xattr.h>
@@ -32,6 +25,8 @@
 
 #include "guuid.h"
 #include "phodav-server.h"
+#include "phodav-path.h"
+#include "phodav-lock.h"
 
 /**
  * SECTION:phodav-server
@@ -65,9 +60,6 @@ struct _PhodavServerClass
   GObjectClass parent_class;
 };
 
-typedef struct _DAVLock DAVLock;
-typedef struct _Path    Path;
-
 G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
 /* Properties */
@@ -89,54 +81,6 @@ static void request_started (SoupServer        *server,
                              SoupMessage       *message,
                              SoupClientContext *client,
                              gpointer           user_data);
-
-static void dav_lock_free (DAVLock *lock);
-
-struct _Path
-{
-  gchar  *path;
-  GList  *locks;
-  guint32 refs;
-};
-
-static Path *
-path_ref (Path *path)
-{
-  path->refs++;
-
-  return path;
-}
-
-static void
-path_unref (Path *path)
-{
-  path->refs--;
-
-  if (path->refs == 0)
-    {
-      g_list_free_full (path->locks, (GDestroyNotify) dav_lock_free);
-      g_free (path->path);
-      g_slice_free (Path, path);
-    }
-}
-
-static void
-path_remove_lock (Path *path, DAVLock *lock)
-{
-  g_return_if_fail (path);
-  g_return_if_fail (lock);
-
-  path->locks =  g_list_remove (path->locks, lock);
-}
-
-static void
-path_add_lock (Path *path, DAVLock *lock)
-{
-  g_return_if_fail (path);
-  g_return_if_fail (lock);
-
-  path->locks = g_list_append (path->locks, lock);
-}
 
 static void
 remove_trailing (gchar *str, gchar c)
@@ -165,82 +109,6 @@ get_path (PhodavServer *self, const gchar *_path)
     }
 
   return p;
-}
-
-typedef enum _LockScopeType {
-  LOCK_SCOPE_NONE,
-  LOCK_SCOPE_EXCLUSIVE,
-  LOCK_SCOPE_SHARED,
-} LockScopeType;
-
-typedef enum _LockType {
-  LOCK_NONE,
-  LOCK_WRITE,
-} LockType;
-
-typedef enum _DepthType {
-  DEPTH_ZERO,
-  DEPTH_ONE,
-  DEPTH_INFINITY
-} DepthType;
-
-struct _DAVLock
-{
-  Path         *path;
-  gchar         token[45];
-  LockScopeType scope;
-  LockType      type;
-  DepthType     depth;
-  xmlNodePtr    owner;
-  guint64       timeout;
-};
-
-static void
-dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
-{
-  if (timeout)
-    lock->timeout = g_get_monotonic_time () / G_USEC_PER_SEC + timeout;
-  else
-    lock->timeout = 0;
-}
-
-static DAVLock *
-dav_lock_new (Path *path, const gchar *token,
-              LockScopeType scope, LockType type,
-              DepthType depth, const xmlNodePtr owner,
-              guint timeout)
-{
-  DAVLock *lock;
-
-  g_return_val_if_fail (token, NULL);
-  g_return_val_if_fail (strlen (token) == sizeof (lock->token), NULL);
-
-  lock = g_slice_new0 (DAVLock);
-  lock->path = path_ref (path);
-  memcpy (lock->token, token, sizeof (lock->token));
-  lock->scope = scope;
-  lock->type = type;
-  lock->depth = depth;
-  if (owner)
-    lock->owner = xmlCopyNode (owner, 1);
-
-  dav_lock_refresh_timeout (lock, timeout);
-
-  return lock;
-}
-
-static void
-dav_lock_free (DAVLock *lock)
-{
-  g_return_if_fail (lock);
-
-  path_remove_lock (lock->path, lock);
-  path_unref (lock->path);
-
-  if (lock->owner)
-    xmlFreeNode (lock->owner);
-
-  g_slice_free (DAVLock, lock);
 }
 
 struct _PathHandler
