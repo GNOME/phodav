@@ -119,7 +119,8 @@ gint                    phodav_method_movecopy               (PathHandler *handl
                                                               const char *path, GError **err);
 gint                    phodav_method_lock                   (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
-
+gint                    phodav_method_unlock                 (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
 
 G_END_DECLS
 

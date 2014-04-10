@@ -423,44 +423,6 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
 }
 
-static gchar *
-remove_brackets (const gchar *str)
-{
-  if (!str)
-    return NULL;
-
-  gint len = strlen (str);
-
-  if (str[0] != '<' || str[len - 1] != '>')
-    return NULL;
-
-  return g_strndup (str + 1, len - 2);
-}
-
-static gint
-method_unlock (PathHandler *handler, SoupMessage *msg,
-               const char *path, GError **err)
-{
-  PhodavServer *self = handler->self;
-  DAVLock *lock;
-  gint status = SOUP_STATUS_BAD_REQUEST;
-
-  gchar *token = remove_brackets (
-    soup_message_headers_get_one (msg->request_headers, "Lock-Token"));
-
-  g_return_val_if_fail (token != NULL, SOUP_STATUS_BAD_REQUEST);
-
-  lock = server_path_get_lock (self, path, token);
-  if (!lock)
-    return SOUP_STATUS_CONFLICT;
-
-  dav_lock_free (lock);
-  status = SOUP_STATUS_NO_CONTENT;
-
-  g_free (token);
-  return status;
-}
-
 static void
 method_put_finished (SoupMessage *msg,
                      SoupBuffer  *chunk,
@@ -618,7 +580,7 @@ server_callback (SoupServer *server, SoupMessage *msg,
   else if (msg->method == SOUP_METHOD_LOCK)
     status = phodav_method_lock (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_UNLOCK)
-    status = method_unlock (handler, msg, path, &err);
+    status = phodav_method_unlock (handler, msg, path, &err);
   else
     g_warn_if_reached ();
 
