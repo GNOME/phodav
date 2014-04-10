@@ -16,6 +16,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "phodav-priv.h"
 #include "phodav-utils.h"
 #include "phodav-multistatus.h"
 #include "phodav-lock.h"

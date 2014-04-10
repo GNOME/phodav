@@ -119,7 +119,7 @@ handler_get_cancellable (PathHandler *handler)
   return handler->self->cancellable;
 }
 
-static PathHandler*
+static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
   PathHandler *h = g_slice_new0 (PathHandler);
@@ -369,38 +369,6 @@ server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
   return p.lock;
 }
 
-static gint
-put_start (SoupMessage *msg, GFile *file,
-           GFileOutputStream **output, GCancellable *cancellable,
-           GError **err)
-{
-  GFileOutputStream *s = NULL;
-  gchar *etag = NULL;
-  gboolean created = TRUE;
-  SoupMessageHeaders *headers = msg->request_headers;
-  gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
-
-  if (g_file_query_exists (file, cancellable))
-    created = FALSE;
-
-  if (soup_message_headers_get_list (headers, "If-Match"))
-    g_warn_if_reached ();
-  else if (soup_message_headers_get_list (headers, "If-None-Match"))
-    g_warn_if_reached ();
-  else if (soup_message_headers_get_list (headers, "Expect"))
-    g_warn_if_reached ();
-
-  s = g_file_replace (file, etag, FALSE, G_FILE_CREATE_PRIVATE, cancellable, err);
-  if (!s)
-    goto end;
-
-  status = created ? SOUP_STATUS_CREATED : SOUP_STATUS_OK;
-
-end:
-  *output = s;
-  return status;
-}
-
 static gboolean
 other_lock_exists (const gchar *key, Path *path, gpointer data)
 {
@@ -424,73 +392,6 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
 }
 
 static void
-method_put_finished (SoupMessage *msg,
-                     SoupBuffer  *chunk,
-                     gpointer     user_data)
-{
-  GFileOutputStream *output = user_data;
-
-  g_debug ("PUT finished");
-
-  g_object_unref (output);
-}
-
-static void
-method_put_got_chunk (SoupMessage *msg,
-                      SoupBuffer  *chunk,
-                      gpointer     user_data)
-{
-  GFileOutputStream *output = user_data;
-  PathHandler *handler = g_object_get_data (user_data, "handler");
-  PhodavServer *self = handler->self;
-  GError *err = NULL;
-  gsize bytes_written;
-
-  g_debug ("PUT got chunk");
-
-  if (!g_output_stream_write_all (G_OUTPUT_STREAM (output),
-                                  chunk->data, chunk->length,
-                                  &bytes_written, self->cancellable, &err))
-    goto end;
-
-end:
-  if (err)
-    {
-      g_warning ("error: %s", err->message);
-      g_clear_error (&err);
-      soup_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
-    }
-}
-
-static void
-method_put (PathHandler *handler, const gchar *path, SoupMessage *msg, GError **err)
-{
-  PhodavServer *self = handler->self;
-  GFile *file = NULL;
-  GList *submitted = NULL;
-  GFileOutputStream *output = NULL;
-  gint status;
-
-  status = phodav_check_if (handler, msg, path, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  file = g_file_get_child (handler->file, path + 1);
-  status = put_start (msg, file, &output, self->cancellable, err);
-  if (*err)
-    goto end;
-
-  soup_message_body_set_accumulate (msg->request_body, FALSE);
-  g_object_set_data (G_OBJECT (output), "handler", handler);
-  g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), output);
-  g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), output);
-
-end:
-  soup_message_set_status (msg, status);
-  g_clear_object (&file);
-}
-
-static void
 got_headers (SoupMessage *msg,
              gpointer     user_data)
 {
@@ -500,7 +401,7 @@ got_headers (SoupMessage *msg,
   GError *err = NULL;
 
   if (msg->method == SOUP_METHOD_PUT)
-    method_put (self->root_handler, path, msg, &err);
+    phodav_method_put (self->root_handler, msg, path, &err);
 
   if (err)
     {

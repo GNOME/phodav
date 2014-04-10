@@ -121,6 +121,8 @@ gint                    phodav_method_lock                   (PathHandler *handl
                                                               const char *path, GError **err);
 gint                    phodav_method_unlock                 (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
+void                    phodav_method_put                    (PathHandler *handler, SoupMessage *msg,
+                                                              const gchar *path, GError **err);
 
 G_END_DECLS
 
