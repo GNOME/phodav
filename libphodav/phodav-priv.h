@@ -95,6 +95,8 @@ DAVLock *               server_path_get_lock                 (PhodavServer *serv
 gboolean                server_path_has_other_locks          (PhodavServer *self,
                                                               const gchar *path,
                                                               GList *locks);
+Path *                  server_get_path                      (PhodavServer *self,
+                                                              const gchar *_path);
 
 gint                    phodav_check_if                      (PathHandler *handler, SoupMessage *msg,
                                                               const gchar *path, GList **locks);
@@ -114,6 +116,8 @@ gint                    phodav_method_mkcol                  (PathHandler *handl
 gint                    phodav_method_delete                 (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 gint                    phodav_method_movecopy               (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
+gint                    phodav_method_lock                   (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 
 
