@@ -99,6 +99,10 @@ gboolean                server_path_has_other_locks          (PhodavServer *self
 gint                    phodav_check_if                      (PathHandler *handler, SoupMessage *msg,
                                                               const gchar *path, GList **locks);
 
+gint                    phodav_delete_file                   (const gchar *path, GFile *file,
+                                                              GHashTable *mstatus,
+                                                              GCancellable *cancellable);
+
 gint                    phodav_method_get                    (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 gint                    phodav_method_propfind               (PathHandler *handler, SoupMessage *msg,
@@ -106,6 +110,8 @@ gint                    phodav_method_propfind               (PathHandler *handl
 gint                    phodav_method_proppatch              (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 gint                    phodav_method_mkcol                  (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
+gint                    phodav_method_delete                 (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 
 
