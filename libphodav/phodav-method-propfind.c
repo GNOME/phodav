@@ -17,9 +17,11 @@
  */
 
 #include "phodav-priv.h"
+
 #include "phodav-utils.h"
 #include "phodav-multistatus.h"
 #include "phodav-lock.h"
+#include "phodav-path.h"
 
 typedef struct _PropFind
 {

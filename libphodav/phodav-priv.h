@@ -70,17 +70,9 @@ struct _DAVLock
   guint64       timeout;
 };
 
-struct _Path
-{
-  gchar         *path;
-  GList         *locks;
-  guint32        refs;
-};
-
 typedef gboolean (* PathCb) (const gchar *key,
                              Path        *path,
                              gpointer     data);
-
 
 GFile *                 handler_get_file                     (PathHandler *handler);
 GCancellable *          handler_get_cancellable              (PathHandler *handler);
