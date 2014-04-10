@@ -35,6 +35,7 @@ libphodav_1_0_la_SOURCES =			\
 	libphodav/phodav-lock.h			\
 	libphodav/phodav-if.c			\
 	libphodav/phodav-method-get.c		\
+	libphodav/phodav-method-mkcol.c	\
 	libphodav/phodav-method-propfind.c	\
 	libphodav/phodav-method-proppatch.c	\
 	libphodav/phodav-multistatus.c		\

@@ -462,59 +462,6 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
 }
 
 static gint
-do_mkcol_file (SoupMessage *msg, GFile *file,
-               GCancellable *cancellable, GError **err)
-{
-  GError *error = NULL;
-  gint status = SOUP_STATUS_CREATED;
-
-  if (!g_file_make_directory (file, cancellable, &error))
-    {
-      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        status = SOUP_STATUS_CONFLICT;
-      else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-        status = SOUP_STATUS_METHOD_NOT_ALLOWED;
-      else
-        {
-          status = SOUP_STATUS_FORBIDDEN;
-          g_propagate_error (err, error);
-          error = NULL;
-        }
-
-      g_clear_error (&error);
-    }
-
-  return status;
-}
-
-static gint
-method_mkcol (PathHandler *handler, SoupMessage *msg,
-              const char *path, GError **err)
-{
-  GFile *file = NULL;
-  PhodavServer *self = handler->self;
-  gint status;
-  GList *submitted = NULL;
-
-  if (msg->request_body && msg->request_body->length)
-    {
-      status = SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE;
-      goto end;
-    }
-
-  status = phodav_check_if (handler, msg, path, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  file = g_file_get_child (handler->file, path + 1);
-  status = do_mkcol_file (msg, file, self->cancellable, err);
-
-end:
-  g_clear_object (&file);
-  return status;
-}
-
-static gint
 error_to_status (GError *err)
 {
   if (g_error_matches (err, G_FILE_ERROR, G_FILE_ERROR_NOENT))
@@ -1153,7 +1100,7 @@ server_callback (SoupServer *server, SoupMessage *msg,
   else if (msg->method == SOUP_METHOD_PROPPATCH)
     status = phodav_method_proppatch (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_MKCOL)
-    status = method_mkcol (handler, msg, path, &err);
+    status = phodav_method_mkcol (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_DELETE)
     status = method_delete (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_MOVE ||

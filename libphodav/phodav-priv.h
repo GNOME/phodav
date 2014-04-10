@@ -105,6 +105,8 @@ gint                    phodav_method_propfind               (PathHandler *handl
                                                               const char *path, GError **err);
 gint                    phodav_method_proppatch              (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
+gint                    phodav_method_mkcol                  (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
 
 
 G_END_DECLS
