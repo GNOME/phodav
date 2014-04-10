@@ -91,6 +91,10 @@ server_get_path (PhodavServer *self, const gchar *_path)
       p->path = path;
       g_hash_table_insert (self->paths, p->path, path_ref (p));
     }
+  else
+    {
+      g_free (path);
+    }
 
   return p;
 }
