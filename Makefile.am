@@ -28,7 +28,27 @@ libphodav_include_HEADERS =			\
 libphodav_1_0_la_SOURCES =			\
 	libphodav/guuid.c			\
 	libphodav/guuid.h			\
+	libphodav/phodav-priv.h			\
+	libphodav/phodav-path.c			\
+	libphodav/phodav-path.h			\
+	libphodav/phodav-lock.c			\
+	libphodav/phodav-lock.h			\
+	libphodav/phodav-if.c			\
+	libphodav/phodav-method-delete.c	\
+	libphodav/phodav-method-get.c		\
+	libphodav/phodav-method-lock.c		\
+	libphodav/phodav-method-mkcol.c		\
+	libphodav/phodav-method-movecopy.c	\
+	libphodav/phodav-method-propfind.c	\
+	libphodav/phodav-method-proppatch.c	\
+	libphodav/phodav-method-unlock.c	\
+	libphodav/phodav-method-put.c		\
+	libphodav/phodav-multistatus.c		\
+	libphodav/phodav-multistatus.h		\
 	libphodav/phodav-server.c		\
+	libphodav/phodav-server.h		\
+	libphodav/phodav-utils.c		\
+	libphodav/phodav-utils.h		\
 	$(NULL)
 
 libphodav_1_0_la_CFLAGS =			\
