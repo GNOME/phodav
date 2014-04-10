@@ -25,6 +25,7 @@
 
 #include "guuid.h"
 #include "phodav-server.h"
+#include "phodav-multistatus.h"
 #include "phodav-path.h"
 #include "phodav-lock.h"
 
@@ -132,33 +133,6 @@ path_handler_free (PathHandler *h)
 {
   g_object_unref (h->file);
   g_slice_free (PathHandler, h);
-}
-
-typedef struct _Response
-{
-  GList *props;
-  gint   status;
-} Response;
-
-static Response*
-response_new (GList *props, gint status)
-{
-  Response *r;
-
-  g_return_val_if_fail (props != NULL || status > 0, NULL);
-
-  r = g_slice_new0 (Response);
-  r->status = status;
-  r->props = props;
-
-  return r;
-}
-
-static void
-response_free (Response *h)
-{
-  g_list_free_full (h->props, (GDestroyNotify) xmlFreeNode);
-  g_slice_free (Response, h);
 }
 
 static void
@@ -762,20 +736,6 @@ end:
   return pf;
 }
 
-static void
-node_to_string (xmlNodePtr root, xmlChar **mem, int *size)
-{
-  xmlDocPtr doc;
-
-  doc = xmlNewDoc (BAD_CAST "1.0");
-  xmlDocSetRootElement (doc, root);
-  // xmlReconciliateNs
-  xmlDocDumpMemoryEnc (doc, mem, size, "utf-8");
-  /* FIXME: validate document? */
-  /*FIXME, pretty print?*/
-  xmlFreeDoc (doc);
-}
-
 #define PROP_SET_STATUS(Node, Status) G_STMT_START {     \
     (Node)->_private = GINT_TO_POINTER (Status);        \
 } G_STMT_END
@@ -801,13 +761,6 @@ prop_resourcetype (PathHandler *handler, PropFind *pf,
 end:
   PROP_SET_STATUS (node, status);
   return node;
-}
-
-static gchar*
-status_to_string (gint status)
-{
-  return g_strdup_printf ("HTTP/1.1 %d %s",
-                          status, soup_status_get_phrase (status));
 }
 
 static gint
@@ -1538,93 +1491,6 @@ end:
   return status;
 }
 
-static xmlNodePtr
-status_node_new (xmlNsPtr ns, gint status)
-{
-  xmlNodePtr node;
-  gchar *text;
-
-  text = status_to_string (status);
-  node = xmlNewNode (ns, BAD_CAST "status");
-  xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
-
-  return node;
-}
-
-static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupMessage *msg,
-              const gchar *path, GList *props)
-{
-  xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
-  GList *s;
-  gint status = -1;
-
-  /* better if sorted by status */
-  for (s = props; s != NULL; s = s->next)
-    {
-      node = s->data;
-      if (GPOINTER_TO_INT (node->_private) != status)
-        {
-          status = GPOINTER_TO_INT (node->_private);
-          if (stnode)
-            xmlAddChild (propstat, stnode);
-
-          stnode = status_node_new (ns, status);
-          propstat = xmlNewChild (parent, ns, BAD_CAST "propstat", NULL);
-          prop = xmlNewChild (propstat, ns, BAD_CAST "prop", NULL);
-        }
-      g_return_if_fail (prop != NULL);
-      xmlAddChild (prop, node);
-      s->data = NULL;
-    }
-
-  if (stnode)
-    xmlAddChild (propstat, stnode);
-}
-
-static gint
-response_multistatus (SoupMessage *msg,
-                      GHashTable  *mstatus)
-{
-  xmlChar *mem = NULL;
-  int size;
-  xmlNodePtr root;
-  GHashTableIter iter;
-  Response *resp;
-  gchar *path, *text;
-  xmlNsPtr ns;
-
-  root = xmlNewNode (NULL, BAD_CAST "multistatus");
-  ns = xmlNewNs (root, BAD_CAST "DAV:", BAD_CAST "D");
-  xmlSetNs (root, ns);
-
-  g_hash_table_iter_init (&iter, mstatus);
-  while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
-    {
-      xmlNodePtr response;
-      SoupURI *new_uri;
-
-      response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-      new_uri = soup_uri_new_with_base (soup_message_get_uri (msg), path);
-      text = soup_uri_to_string (new_uri, FALSE);
-      xmlNewChild (response, ns, BAD_CAST "href", BAD_CAST text);
-      g_free (text);
-      soup_uri_free (new_uri);
-
-      if (resp->props)
-        add_propstat (response, ns, msg, path, resp->props);
-      else if (resp->status)
-        xmlAddChild (response, status_node_new (ns, resp->status));
-    }
-
-  node_to_string (root, &mem, &size);
-  soup_message_set_response (msg, "application/xml",
-                             SOUP_MEMORY_TAKE, (gchar *) mem, size);
-
-  return SOUP_STATUS_MULTI_STATUS;
-}
-
 static gint
 method_propfind (PathHandler *handler, SoupMessage *msg,
                  const char *path, GError **err)
@@ -1679,7 +1545,7 @@ method_propfind (PathHandler *handler, SoupMessage *msg,
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  status = response_multistatus (msg, mstatus);
+  status = set_response_multistatus (msg, mstatus);
 
 end:
   davdoc_free (&doc);
@@ -2236,7 +2102,7 @@ method_proppatch (PathHandler *handler, SoupMessage *msg,
                        response_new (props, 0));
 
   if (g_hash_table_size (mstatus) > 0)
-    status = response_multistatus (msg, mstatus);
+    status = set_response_multistatus (msg, mstatus);
 
 end:
   davdoc_free (&doc);
@@ -2384,7 +2250,7 @@ method_delete (PathHandler *handler, SoupMessage *msg,
   status = do_delete_file (path, file, mstatus, self->cancellable);
   if (status == SOUP_STATUS_NO_CONTENT)
     if (g_hash_table_size (mstatus) > 0)
-      status = response_multistatus (msg, mstatus);
+      status = set_response_multistatus (msg, mstatus);
 
 end:
   if (mstatus)
@@ -2740,7 +2606,7 @@ body:
   node = xmlNewChild (root, ns, BAD_CAST "lockdiscovery", NULL);
   xmlAddChild (node, get_activelock_node (lock, ns));
 
-  node_to_string (root, &mem, &size);
+  xml_node_to_string (root, &mem, &size);
   soup_message_set_response (msg, "application/xml",
                              SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
