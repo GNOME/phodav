@@ -82,9 +82,9 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
   return listing;
 }
 
-gint
-phodav_method_get (SoupMessage *msg, GFile *file,
-                   GCancellable *cancellable, GError **err)
+static gint
+method_get (SoupMessage *msg, GFile *file,
+            GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
@@ -173,5 +173,19 @@ end:
     }
 
   g_clear_object (&info);
+  return status;
+}
+
+gint
+phodav_method_get (PathHandler *handler, SoupMessage *msg, const char *path, GError **err)
+{
+  GFile *file;
+  GCancellable *cancellable = handler_get_cancellable (handler);
+  gint status;
+
+  file = g_file_get_child (handler_get_file (handler), path + 1);
+  status = method_get (msg, file, cancellable, err);
+  g_object_unref (file);
+
   return status;
 }

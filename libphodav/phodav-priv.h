@@ -22,6 +22,7 @@
 
 #include <glib/gi18n.h>
 #include <glib-object.h>
+#include <gio/gio.h>
 
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -32,6 +33,7 @@ G_BEGIN_DECLS
 
 typedef struct _DAVLock DAVLock;
 typedef struct _Path    Path;
+typedef struct _PathHandler PathHandler;
 
 typedef enum _LockScopeType {
   LOCK_SCOPE_NONE,
@@ -63,10 +65,13 @@ struct _DAVLock
 
 struct _Path
 {
-  gchar  *path;
-  GList  *locks;
-  guint32 refs;
+  gchar         *path;
+  GList         *locks;
+  guint32        refs;
 };
+
+GFile *                 handler_get_file                     (PathHandler *handler);
+GCancellable *          handler_get_cancellable              (PathHandler *handler);
 
 G_END_DECLS
 

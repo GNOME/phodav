@@ -42,8 +42,6 @@
  * PhodavServer implements a simple WebDAV server.
  */
 
-typedef struct _PathHandler PathHandler;
-
 struct _PhodavServer
 {
   GObject       parent;
@@ -119,6 +117,18 @@ struct _PathHandler
   PhodavServer *self;
   GFile       *file;
 };
+
+GFile * G_GNUC_PURE
+handler_get_file (PathHandler *handler)
+{
+  return handler->file;
+}
+
+GCancellable * G_GNUC_PURE
+handler_get_cancellable (PathHandler *handler)
+{
+  return handler->self->cancellable;
+}
 
 static PathHandler*
 path_handler_new (PhodavServer *self, GFile *file)
@@ -1358,20 +1368,6 @@ prop_set (PhodavServer *self, SoupMessage *msg,
 }
 
 static gint
-method_get (PathHandler *handler, SoupMessage *msg, const char *path, GError **err)
-{
-  GFile *file;
-  PhodavServer *self = handler->self;
-  gint status;
-
-  file = g_file_get_child (handler->file, path + 1);
-  status = phodav_method_get (msg, file, self->cancellable, err);
-  g_object_unref (file);
-
-  return status;
-}
-
-static gint
 put_start (SoupMessage *msg, GFile *file,
            GFileOutputStream **output, GCancellable *cancellable,
            GError **err)
@@ -2503,7 +2499,7 @@ server_callback (SoupServer *server, SoupMessage *msg,
     }
   else if (msg->method == SOUP_METHOD_GET ||
            msg->method == SOUP_METHOD_HEAD)
-    status = method_get (handler, msg, path, &err);
+    status = phodav_method_get (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_PROPFIND)
     status = method_propfind (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_PROPPATCH)

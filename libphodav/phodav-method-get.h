@@ -23,8 +23,9 @@
 
 G_BEGIN_DECLS
 
-gint                  phodav_method_get         (SoupMessage *msg, GFile *file,
-                                                 GCancellable *cancellable, GError **err);
+gint                  phodav_method_get         (PathHandler *handler, SoupMessage *msg,
+                                                 const char *path, GError **err);
+
 G_END_DECLS
 
 #endif /* __PHODAV_METHOD_GET_H__ */
