@@ -31,3 +31,81 @@ xml_node_to_string (xmlNodePtr root, xmlChar **mem, int *size)
   /*FIXME, pretty print?*/
   xmlFreeDoc (doc);
 }
+
+static xmlDocPtr
+parse_xml (const gchar  *data,
+           const goffset len,
+           xmlNodePtr   *root,
+           const char   *name)
+{
+  xmlDocPtr doc;
+
+  doc = xmlReadMemory (data, len,
+                       "request.xml",
+                       NULL,
+                       XML_PARSE_NONET |
+                       XML_PARSE_NOWARNING |
+                       XML_PARSE_NOBLANKS |
+                       XML_PARSE_NSCLEAN |
+                       XML_PARSE_NOCDATA |
+                       XML_PARSE_COMPACT);
+  if (doc == NULL)
+    {
+      g_debug ("Could not parse request");
+      return NULL;
+    }
+  if (!(doc->properties & XML_DOC_NSVALID))
+    {
+      g_debug ("Could not parse request, NS errors");
+      xmlFreeDoc (doc);
+      return NULL;
+    }
+
+  *root = xmlDocGetRootElement (doc);
+
+  if (*root == NULL || (*root)->children == NULL)
+    {
+      g_debug ("Empty request");
+      xmlFreeDoc (doc);
+      return NULL;
+    }
+
+  if (g_strcmp0 ((char *) (*root)->name, name))
+    {
+      g_debug ("Unexpected request");
+      xmlFreeDoc (doc);
+      return NULL;
+    }
+
+  return doc;
+}
+
+gboolean
+davdoc_parse (DavDoc *dd, SoupMessage *msg, SoupMessageBody *body,
+              const gchar *name)
+{
+  xmlDocPtr doc;
+  xmlNodePtr root;
+  SoupURI *uri;
+
+  doc = parse_xml (body->data, body->length, &root, name);
+  if (!doc)
+    return FALSE;
+
+  uri = soup_message_get_uri (msg);
+
+  dd->doc = doc;
+  dd->root = root;
+  dd->target = uri;
+  dd->path = g_uri_unescape_string (uri->path, "/");
+
+  return TRUE;
+}
+
+void
+davdoc_free (DavDoc *dd)
+{
+  if (dd->doc)
+    xmlFreeDoc (dd->doc);
+  g_free (dd->path);
+}

@@ -18,11 +18,29 @@
 #ifndef __PHODAV_UTILS_H__
 #define __PHODAV_UTILS_H__
 
+#include <libsoup/soup.h>
 #include "phodav-priv.h"
 
 G_BEGIN_DECLS
 
 void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, int *size);
+
+
+typedef struct _DavDoc     DavDoc;
+
+struct _DavDoc
+{
+  xmlDocPtr  doc;
+  xmlNodePtr root;
+
+  SoupURI   *target;
+  char      *path;
+};
+
+gboolean         davdoc_parse                    (DavDoc *dd, SoupMessage *msg,
+                                                  SoupMessageBody *body,
+                                                  const gchar *name);
+void             davdoc_free                     (DavDoc *dd);
 
 G_END_DECLS
 
