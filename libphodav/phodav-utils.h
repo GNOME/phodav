@@ -23,8 +23,11 @@
 
 G_BEGIN_DECLS
 
-void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, int *size);
+DepthType        depth_from_string               (const gchar *depth);
+const gchar *    depth_to_string                 (DepthType depth);
+guint            timeout_from_string             (const gchar *timeout);
 
+void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, int *size);
 
 typedef struct _DavDoc     DavDoc;
 

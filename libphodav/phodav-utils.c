@@ -109,3 +109,45 @@ davdoc_free (DavDoc *dd)
     xmlFreeDoc (dd->doc);
   g_free (dd->path);
 }
+
+DepthType
+depth_from_string (const gchar *depth)
+{
+  if (!depth)
+    return DEPTH_INFINITY;
+  else if (!g_strcmp0 (depth, "0"))
+    return DEPTH_ZERO;
+  else if (!g_strcmp0 (depth, "1"))
+    return DEPTH_ONE;
+  else if (!g_strcmp0 (depth, "infinity"))
+    return DEPTH_INFINITY;
+
+  g_warning ("Invalid depth: %s", depth);
+  return DEPTH_INFINITY;
+}
+
+guint
+timeout_from_string (const gchar *timeout)
+{
+  if (!timeout ||
+      !g_strcmp0 (timeout, "Infinite"))
+    return 0;
+
+  if (!g_ascii_strncasecmp (timeout, "Second-", 7))
+    return g_ascii_strtoull (timeout + 7, NULL, 10);
+
+  g_return_val_if_reached (0);
+}
+
+const gchar *
+depth_to_string (DepthType depth)
+{
+  if (depth == DEPTH_INFINITY)
+    return "infinity";
+  if (depth == DEPTH_ZERO)
+    return "0";
+  if (depth == DEPTH_ONE)
+    return "1";
+
+  g_return_val_if_reached (NULL);
+}
