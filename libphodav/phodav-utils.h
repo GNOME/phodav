@@ -27,8 +27,6 @@ DepthType        depth_from_string               (const gchar *depth);
 const gchar *    depth_to_string                 (DepthType depth);
 guint            timeout_from_string             (const gchar *timeout);
 
-void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, int *size);
-
 typedef struct _DavDoc     DavDoc;
 
 struct _DavDoc
@@ -44,6 +42,15 @@ gboolean         davdoc_parse                    (DavDoc *dd, SoupMessage *msg,
                                                   SoupMessageBody *body,
                                                   const gchar *name);
 void             davdoc_free                     (DavDoc *dd);
+
+void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, int *size);
+gboolean         xml_node_is_element             (xmlNodePtr node);
+gboolean         xml_node_has_name               (xmlNodePtr node, const char *name);
+gboolean         xml_node_has_name_ns            (xmlNodePtr node, const char *name,
+                                                  const char *ns_href);
+gboolean         xml_node_has_ns                 (xmlNodePtr node, const char *ns_href);
+void             xml_node_debug                  (xmlNodePtr node);
+gchar *          xml_node_get_xattr_name         (xmlNodePtr node, const gchar *prefix);
 
 G_END_DECLS
 

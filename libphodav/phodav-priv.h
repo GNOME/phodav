@@ -28,6 +28,7 @@
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include "phodav-server.h"
 
 G_BEGIN_DECLS
 
@@ -52,6 +53,12 @@ typedef enum _DepthType {
   DEPTH_INFINITY
 } DepthType;
 
+typedef enum _PropFindType {
+  PROPFIND_ALLPROP,
+  PROPFIND_PROPNAME,
+  PROPFIND_PROP
+} PropFindType;
+
 struct _DAVLock
 {
   Path         *path;
@@ -70,8 +77,18 @@ struct _Path
   guint32        refs;
 };
 
+typedef gboolean (* PathCb) (const gchar *key,
+                             Path        *path,
+                             gpointer     data);
+
+
 GFile *                 handler_get_file                     (PathHandler *handler);
 GCancellable *          handler_get_cancellable              (PathHandler *handler);
+PhodavServer *          handler_get_server                   (PathHandler *handler);
+
+gboolean                server_foreach_parent_path           (PhodavServer *server,
+                                                              const gchar *path,
+                                                              PathCb cb, gpointer data);
 
 G_END_DECLS
 

@@ -18,20 +18,6 @@
 
 #include "phodav-utils.h"
 
-void
-xml_node_to_string (xmlNodePtr root, xmlChar **mem, int *size)
-{
-  xmlDocPtr doc;
-
-  doc = xmlNewDoc (BAD_CAST "1.0");
-  xmlDocSetRootElement (doc, root);
-  // xmlReconciliateNs
-  xmlDocDumpMemoryEnc (doc, mem, size, "utf-8");
-  /* FIXME: validate document? */
-  /*FIXME, pretty print?*/
-  xmlFreeDoc (doc);
-}
-
 static xmlDocPtr
 parse_xml (const gchar  *data,
            const goffset len,
@@ -150,4 +136,80 @@ depth_to_string (DepthType depth)
     return "1";
 
   g_return_val_if_reached (NULL);
+}
+
+void
+xml_node_to_string (xmlNodePtr root, xmlChar **mem, int *size)
+{
+  xmlDocPtr doc;
+
+  doc = xmlNewDoc (BAD_CAST "1.0");
+  xmlDocSetRootElement (doc, root);
+  // xmlReconciliateNs
+  xmlDocDumpMemoryEnc (doc, mem, size, "utf-8");
+  /* FIXME: validate document? */
+  /*FIXME, pretty print?*/
+  xmlFreeDoc (doc);
+}
+
+void
+xml_node_debug (xmlNodePtr node)
+{
+  g_debug ("%s ns:%s", node->name, node->ns ? (gchar *) node->ns->href : "");
+}
+
+gboolean
+xml_node_has_ns (xmlNodePtr node, const char *ns_href)
+{
+  return node->ns && node->ns->href &&
+    !g_strcmp0 ((gchar *) node->ns->href, ns_href);
+
+}
+
+gboolean
+xml_node_has_name_ns (xmlNodePtr node, const char *name, const char *ns_href)
+{
+  gboolean has_name;
+  gboolean has_ns;
+
+  g_return_val_if_fail (node != NULL, FALSE);
+
+  has_name = has_ns = TRUE;
+
+  if (name)
+    has_name = !g_strcmp0 ((gchar *) node->name, name);
+
+  if (ns_href)
+    has_ns = xml_node_has_ns (node, ns_href);
+
+  return has_name && has_ns;
+}
+
+gboolean
+xml_node_has_name (xmlNodePtr node, const char *name)
+{
+  g_return_val_if_fail (node != NULL, FALSE);
+
+  return xml_node_has_name_ns (node, name, "DAV:");
+}
+
+gboolean
+xml_node_is_element (xmlNodePtr node)
+{
+  return node->type == XML_ELEMENT_NODE && node->name != NULL;
+}
+
+gchar *
+xml_node_get_xattr_name (xmlNodePtr node, const gchar *prefix)
+{
+  const gchar *ns = node->ns ? (gchar *) node->ns->href : NULL;
+  const gchar *name = (gchar *) node->name;
+
+  if (!name)
+    return NULL;
+
+  if (ns)
+    return g_strdup_printf ("%s%s#%s", prefix, ns, name);
+  else
+    return g_strdup_printf ("%s%s", prefix, name);
 }
