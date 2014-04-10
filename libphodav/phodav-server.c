@@ -18,11 +18,6 @@
 
 #include "config.h"
 
-#include <sys/types.h>
-#ifdef HAVE_ATTR_XATTR_H
-#include <attr/xattr.h>
-#endif
-
 #include "guuid.h"
 #include "phodav-server.h"
 #include "phodav-multistatus.h"
@@ -81,17 +76,6 @@ static void request_started (SoupServer        *server,
                              SoupMessage       *message,
                              SoupClientContext *client,
                              gpointer           user_data);
-
-static void
-remove_trailing (gchar *str, gchar c)
-{
-  gsize len = strlen (str);
-
-  while (len > 0 && str[len - 1] == c)
-    len--;
-
-  str[len] = '\0';
-}
 
 static Path *
 get_path (PhodavServer *self, const gchar *_path)
@@ -410,8 +394,8 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
-static DAVLock *
-path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
+DAVLock *
+server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
 {
   PathGetLock p = { .token = token };
   gboolean success = !server_foreach_parent_path (self, path,
@@ -421,103 +405,6 @@ path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
     g_message ("Invalid lock token %s for %s", token, path);
 
   return p.lock;
-}
-
-
-static gint
-set_attr (PhodavServer *self, GFile *file, xmlNodePtr attrnode,
-          GFileAttributeType type, gchar *mem)
-{
-  gchar *attrname;
-  gint status = SOUP_STATUS_OK;
-  GError *error = NULL;
-
-  if (type == G_FILE_ATTRIBUTE_TYPE_INVALID)
-    {
-      attrname = xml_node_get_xattr_name (attrnode, "user.");
-      g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
-
-      /* https://bugzilla.gnome.org/show_bug.cgi?id=720506 */
-      gchar *path = g_file_get_path (file);
-#ifdef HAVE_ATTR_XATTR_H
-      removexattr (path, attrname);
-#else
-      g_debug ("fixme");
-#endif
-      g_free (path);
-    }
-  else
-    {
-      attrname = xml_node_get_xattr_name (attrnode, "xattr::");
-      g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
-
-      g_file_set_attribute (file, attrname, type, mem,
-                            G_FILE_QUERY_INFO_NONE, self->cancellable, &error);
-    }
-
-  g_free (attrname);
-
-  if (error)
-    {
-      g_warning ("failed to set property: %s", error->message);
-      g_clear_error (&error);
-      status = SOUP_STATUS_NOT_FOUND;
-    }
-
-  return status;
-}
-
-static xmlBufferPtr
-node_children_to_string (xmlNodePtr node)
-{
-  xmlBufferPtr buf = xmlBufferCreate ();
-
-  for (node = node->children; node; node = node->next)
-    xmlNodeDump (buf, node->doc, node, 0, 0);
-
-  return buf;
-}
-
-static gint
-prop_set (PhodavServer *self, SoupMessage *msg,
-          GFile *file, xmlNodePtr parent, xmlNodePtr *attr,
-          gboolean remove)
-{
-  xmlNodePtr node, attrnode;
-  gint type = G_FILE_ATTRIBUTE_TYPE_INVALID;
-  gint status;
-
-  for (node = parent->children; node; node = node->next)
-    {
-      if (!xml_node_is_element (node))
-        continue;
-
-      if (xml_node_has_name (node, "prop"))
-        {
-          xmlBufferPtr buf = NULL;
-
-          attrnode = node->children;
-          if (!xml_node_is_element (attrnode))
-            continue;
-
-          if (!remove)
-            {
-              *attr = xmlCopyNode (attrnode, 2);
-
-              buf = node_children_to_string (attrnode);
-              type = G_FILE_ATTRIBUTE_TYPE_STRING;
-            }
-
-          status = set_attr (self, file, attrnode, type, (gchar *) xmlBufferContent (buf));
-
-          if (buf)
-            xmlBufferFree (buf);
-
-          return status;
-        }
-    }
-
-  g_return_val_if_reached (SOUP_STATUS_BAD_REQUEST);
 }
 
 static gint
@@ -552,56 +439,6 @@ end:
   return status;
 }
 
-typedef struct _LockSubmitted
-{
-  gchar *path;
-  gchar *token;
-} LockSubmitted;
-
-static LockSubmitted *
-lock_submitted_new (const gchar *path, const gchar *token)
-{
-  LockSubmitted *l;
-
-  g_return_val_if_fail (path, NULL);
-  g_return_val_if_fail (token, NULL);
-
-  l = g_slice_new (LockSubmitted);
-
-  l->path = g_strdup (path);
-  l->token = g_strdup (token);
-
-  remove_trailing (l->path, '/');
-
-  return l;
-}
-
-static void
-lock_submitted_free (LockSubmitted *l)
-{
-  g_free (l->path);
-  g_free (l->token);
-  g_slice_free (LockSubmitted, l);
-}
-
-static gboolean
-locks_submitted_has (GList *locks, DAVLock *lock)
-{
-  GList *l;
-
-  for (l = locks; l != NULL; l = l->next)
-    {
-      LockSubmitted *sub = l->data;
-      if (!g_strcmp0 (sub->path, lock->path->path) &&
-          !g_strcmp0 (sub->token, lock->token))
-        return TRUE;
-    }
-
-  g_message ("missing lock: %s %s", lock->path->path, lock->token);
-
-  return FALSE;
-}
-
 static gboolean
 other_lock_exists (const gchar *key, Path *path, gpointer data)
 {
@@ -618,352 +455,10 @@ other_lock_exists (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
-static gboolean
-path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks)
+gboolean
+server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks)
 {
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
-}
-
-typedef struct _IfState
-{
-  gchar   *cur;
-  gchar   *path;
-  GList   *locks;
-  gboolean error;
-} IfState;
-
-static gboolean
-eat_whitespaces (IfState *state)
-{
-  while (*state->cur && strchr (" \f\n\r\t\v", *state->cur))
-    state->cur++;
-
-  return !*state->cur;
-}
-
-static gboolean
-next_token (IfState *state, const gchar *token)
-{
-  eat_whitespaces (state);
-
-  return g_str_has_prefix (state->cur, token);
-}
-
-static gboolean
-accept_token (IfState *state, const gchar *token)
-{
-  gboolean success = next_token (state, token);
-
-  if (success)
-    state->cur += strlen (token);
-
-  return success;
-}
-
-static const gchar*
-accept_ref (IfState *state)
-{
-  gchar *url, *end;
-
-  if (!accept_token (state, "<"))
-    return FALSE;
-
-  url = state->cur;
-  end = strchr (state->cur, '>');
-  if (end)
-    {
-      *end = '\0';
-      state->cur = end + 1;
-      return url;
-    }
-
-  return NULL;
-}
-
-static gchar*
-accept_etag (IfState *state)
-{
-  GString *str = NULL;
-  gboolean success = FALSE;
-
-  str = g_string_sized_new (strlen (state->cur));
-
-  if (!accept_token (state, "["))
-    goto end;
-
-  if (!accept_token (state, "\""))
-    goto end;
-
-  while (*state->cur)
-    {
-      if (*state->cur == '"')
-        break;
-      else if (*state->cur == '\\')
-        state->cur++;
-
-      g_string_append_c (str, *state->cur);
-      state->cur++;
-    }
-
-  if (!accept_token (state, "\""))
-    goto end;
-
-  if (!accept_token (state, "]"))
-    goto end;
-
-  success = TRUE;
-
-end:
-  return g_string_free (str, !success);
-}
-
-static gboolean
-check_token (PathHandler *handler, const gchar *path, const gchar *token)
-{
-  PhodavServer *self = handler->self;
-
-  g_debug ("check %s for %s", token, path);
-
-  if (!g_strcmp0 (token, "DAV:no-lock"))
-    return FALSE;
-
-  return !!path_get_lock (self, path, token);
-}
-
-static gboolean
-check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
-{
-  PhodavServer *self = handler->self;
-  GFile *file = NULL;
-  GFileInfo *info = NULL;
-  GError *error = NULL;
-  const gchar *fetag;
-  gboolean success = FALSE;
-
-  g_debug ("check etag %s for %s", etag, path);
-
-  file = g_file_get_child (handler->file, path + 1);
-  info = g_file_query_info (file, "etag::*",
-                            G_FILE_QUERY_INFO_NONE, self->cancellable, &error);
-  if (!info)
-    goto end;
-
-  fetag = g_file_info_get_etag (info);
-  g_warn_if_fail (fetag != NULL);
-
-  success = !g_strcmp0 (etag, fetag);
-
-end:
-  if (error)
-    {
-      g_warning ("check_etag error: %s", error->message);
-      g_clear_error (&error);
-    }
-
-  g_clear_object (&info);
-  g_clear_object (&file);
-
-  return success;
-}
-
-static gboolean
-eval_if_condition (PathHandler *handler, IfState *state)
-{
-  gboolean success = FALSE;
-
-  if (next_token (state, "<"))
-    {
-      const gchar *token = accept_ref (state);
-      LockSubmitted *l = lock_submitted_new (state->path, token);
-
-      state->locks = g_list_append (state->locks, l);
-
-      success = check_token (handler, state->path, token);
-    }
-  else if (next_token (state, "["))
-    {
-      gchar *etag = accept_etag (state);
-
-      success = check_etag (handler, state->path, etag);
-      g_free (etag);
-    }
-  else
-    g_warn_if_reached ();
-
-  return success;
-}
-
-static gboolean
-eval_if_not_condition (PathHandler *handler, IfState *state)
-{
-  gboolean not = FALSE;
-  gboolean res;
-
-  if (accept_token (state, "Not"))
-    not = TRUE;
-
-  res = eval_if_condition (handler, state);
-
-  return not ? !res : res;
-}
-
-static gboolean
-eval_if_list (PathHandler *handler, IfState *state)
-{
-  gboolean success;
-
-  g_return_val_if_fail (accept_token (state, "("), FALSE);
-
-  success = eval_if_not_condition (handler, state);
-
-  while (!accept_token (state, ")"))
-    success &= eval_if_not_condition (handler, state);
-
-  return success;
-}
-
-static gboolean
-eval_if_lists (PathHandler *handler, IfState *state)
-{
-  gboolean success = FALSE;
-
-  g_return_val_if_fail (next_token (state, "("), FALSE);
-
-  while (next_token (state, "("))
-    success |= eval_if_list (handler, state);
-
-  return success;
-}
-
-static gboolean
-eval_if_tag (PathHandler *handler, IfState *state)
-{
-  SoupURI *uri;
-  const gchar *path;
-  const gchar *ref = accept_ref (state);
-
-  g_return_val_if_fail (ref != NULL, FALSE);
-
-  uri = soup_uri_new (ref);
-  path = soup_uri_get_path (uri);
-  g_free (state->path);
-  state->path = g_strdup (path);
-  soup_uri_free (uri);
-
-  return eval_if_lists (handler, state);
-}
-
-
-static gboolean
-eval_if (PathHandler *handler, IfState *state)
-{
-  gboolean success = FALSE;
-
-  if (next_token (state, "<")) {
-    while (!eat_whitespaces (state))
-      success |= eval_if_tag (handler, state);
-  } else {
-    while (!eat_whitespaces (state))
-      success |= eval_if_lists (handler, state);
-  }
-
-  return success;
-}
-
-static gint
-check_if (PathHandler *handler, SoupMessage *msg, const gchar *path, GList **locks)
-{
-  PhodavServer *self = handler->self;
-  gboolean success = TRUE;
-  gint status;
-  gchar *str = g_strdup (soup_message_headers_get_one (msg->request_headers, "If"));
-  IfState state = { .cur = str, .path = g_strdup (path) };
-  gboolean copy = msg->method == SOUP_METHOD_COPY;
-
-  if (!str)
-    goto end;
-
-  if (eval_if (handler, &state))
-    {
-      *locks = state.locks;
-    }
-  else
-    {
-      g_list_free_full (state.locks, (GDestroyNotify) lock_submitted_free);
-      success = FALSE;
-    }
-
-end:
-  status = success ? SOUP_STATUS_OK
-           : str ? SOUP_STATUS_PRECONDITION_FAILED : SOUP_STATUS_LOCKED;
-
-  if (success && !copy && path_has_other_locks (self, path, *locks))
-    status = SOUP_STATUS_LOCKED;
-
-  g_free (str);
-  g_free (state.path);
-  return status;
-}
-
-static gint
-method_proppatch (PathHandler *handler, SoupMessage *msg,
-                  const char *path, GError **err)
-{
-  PhodavServer *self = handler->self;
-  GFile *file = NULL;
-  GHashTable *mstatus = NULL;   // path -> statlist
-  DavDoc doc = {0, };
-  xmlNodePtr node = NULL, attr = NULL;
-  GList *props = NULL, *submitted = NULL;
-  gint status;
-
-  if (!davdoc_parse (&doc, msg, msg->request_body, "propertyupdate"))
-    {
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto end;
-    }
-
-  status = check_if (handler, msg, path, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  file = g_file_get_child (handler->file, path + 1);
-  mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
-                                   (GDestroyNotify) response_free);
-
-  node = doc.root;
-  for (node = node->children; node; node = node->next)
-    {
-      if (!xml_node_is_element (node))
-        continue;
-
-      if (xml_node_has_name (node, "set"))
-        status = prop_set (self, msg, file, node, &attr, FALSE);
-      else if (xml_node_has_name (node, "remove"))
-        status = prop_set (self, msg, file, node, &attr, TRUE);
-      else
-        g_warn_if_reached ();
-
-      if (attr)
-        {
-          attr->_private = GINT_TO_POINTER (status);
-          props = g_list_append (props, attr);
-        }
-    }
-
-  g_hash_table_insert (mstatus, g_strdup (path),
-                       response_new (props, 0));
-
-  if (g_hash_table_size (mstatus) > 0)
-    status = set_response_multistatus (msg, mstatus);
-
-end:
-  davdoc_free (&doc);
-  if (mstatus)
-    g_hash_table_unref (mstatus);
-  g_clear_object (&file);
-
-  return status;
 }
 
 static gint
@@ -1007,7 +502,7 @@ method_mkcol (PathHandler *handler, SoupMessage *msg,
       goto end;
     }
 
-  status = check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -1092,7 +587,7 @@ method_delete (PathHandler *handler, SoupMessage *msg,
   /* depth = depth_from_string(soup_message_headers_get_one (msg->request_headers, "Depth")); */
   /* must be == infinity with collection */
 
-  status = check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -1262,11 +757,11 @@ method_movecopy (PathHandler *handler, SoupMessage *msg,
   if (!dest || !*dest)
     goto end;
 
-  status = check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  if (path_has_other_locks (self, dest, submitted))
+  if (server_path_has_other_locks (self, dest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
@@ -1387,7 +882,7 @@ method_lock (PathHandler *handler, SoupMessage *msg,
       token = g_strndup (hif + 2, len - 4);
 
       g_debug ("refresh token %s", token);
-      lock = path_get_lock (self, path, token);
+      lock = server_path_get_lock (self, path, token);
 
       if (!lock)
         goto end;
@@ -1499,7 +994,7 @@ method_unlock (PathHandler *handler, SoupMessage *msg,
 
   g_return_val_if_fail (token != NULL, SOUP_STATUS_BAD_REQUEST);
 
-  lock = path_get_lock (self, path, token);
+  lock = server_path_get_lock (self, path, token);
   if (!lock)
     return SOUP_STATUS_CONFLICT;
 
@@ -1558,7 +1053,7 @@ method_put (PathHandler *handler, const gchar *path, SoupMessage *msg, GError **
   GFileOutputStream *output = NULL;
   gint status;
 
-  status = check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -1656,7 +1151,7 @@ server_callback (SoupServer *server, SoupMessage *msg,
   else if (msg->method == SOUP_METHOD_PROPFIND)
     status = phodav_method_propfind (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_PROPPATCH)
-    status = method_proppatch (handler, msg, path, &err);
+    status = phodav_method_proppatch (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_MKCOL)
     status = method_mkcol (handler, msg, path, &err);
   else if (msg->method == SOUP_METHOD_DELETE)

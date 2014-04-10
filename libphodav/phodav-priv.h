@@ -89,11 +89,24 @@ PhodavServer *          handler_get_server                   (PathHandler *handl
 gboolean                server_foreach_parent_path           (PhodavServer *server,
                                                               const gchar *path,
                                                               PathCb cb, gpointer data);
+DAVLock *               server_path_get_lock                 (PhodavServer *server,
+                                                              const gchar *path,
+                                                              const gchar *token);
+gboolean                server_path_has_other_locks          (PhodavServer *self,
+                                                              const gchar *path,
+                                                              GList *locks);
+
+gint                    phodav_check_if                      (PathHandler *handler, SoupMessage *msg,
+                                                              const gchar *path, GList **locks);
 
 gint                    phodav_method_get                    (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
 gint                    phodav_method_propfind               (PathHandler *handler, SoupMessage *msg,
                                                               const char *path, GError **err);
+gint                    phodav_method_proppatch              (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
+
+
 G_END_DECLS
 
 #endif /* __PHODAV_PRIV_H__ */

@@ -124,3 +124,47 @@ dav_lock_get_activelock_node (const DAVLock *lock,
 
   return active;
 }
+
+LockSubmitted *
+lock_submitted_new (const gchar *path, const gchar *token)
+{
+  LockSubmitted *l;
+
+  g_return_val_if_fail (path, NULL);
+  g_return_val_if_fail (token, NULL);
+
+  l = g_slice_new (LockSubmitted);
+
+  l->path = g_strdup (path);
+  l->token = g_strdup (token);
+
+  remove_trailing (l->path, '/');
+
+  return l;
+}
+
+void
+lock_submitted_free (LockSubmitted *l)
+{
+  g_free (l->path);
+  g_free (l->token);
+  g_slice_free (LockSubmitted, l);
+}
+
+gboolean
+locks_submitted_has (GList *locks, DAVLock *lock)
+{
+  GList *l;
+
+  for (l = locks; l != NULL; l = l->next)
+  {
+    LockSubmitted *sub = l->data;
+    if (!g_strcmp0 (sub->path, lock->path->path) &&
+        !g_strcmp0 (sub->token, lock->token))
+      return TRUE;
+  }
+
+  g_message ("missing lock: %s %s", lock->path->path, lock->token);
+
+  return FALSE;
+}

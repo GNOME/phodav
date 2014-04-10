@@ -23,6 +23,8 @@
 
 G_BEGIN_DECLS
 
+void             remove_trailing                 (gchar *str, gchar c);
+
 DepthType        depth_from_string               (const gchar *depth);
 const gchar *    depth_to_string                 (DepthType depth);
 guint            timeout_from_string             (const gchar *timeout);

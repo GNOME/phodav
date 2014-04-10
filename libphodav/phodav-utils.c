@@ -18,6 +18,17 @@
 
 #include "phodav-utils.h"
 
+void
+remove_trailing (gchar *str, gchar c)
+{
+  gsize len = strlen (str);
+
+  while (len > 0 && str[len - 1] == c)
+    len--;
+
+  str[len] = '\0';
+}
+
 static xmlDocPtr
 parse_xml (const gchar  *data,
            const goffset len,

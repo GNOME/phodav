@@ -22,6 +22,12 @@
 
 G_BEGIN_DECLS
 
+typedef struct _LockSubmitted
+{
+  gchar *path;
+  gchar *token;
+} LockSubmitted;
+
 DAVLock *        dav_lock_new             (Path *path, const gchar *token,
                                            LockScopeType scope, LockType type,
                                            DepthType depth, const xmlNodePtr owner,
@@ -33,6 +39,10 @@ void             dav_lock_refresh_timeout (DAVLock *lock, guint timeout);
 
 xmlNodePtr       dav_lock_get_activelock_node (const DAVLock *lock,
                                                xmlNsPtr       ns);
+
+LockSubmitted *  lock_submitted_new       (const gchar *path, const gchar *token);
+void             lock_submitted_free      (LockSubmitted *l);
+gboolean         locks_submitted_has      (GList *locks, DAVLock *lock);
 
 G_END_DECLS
 

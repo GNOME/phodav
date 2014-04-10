@@ -33,8 +33,10 @@ libphodav_1_0_la_SOURCES =			\
 	libphodav/phodav-path.h			\
 	libphodav/phodav-lock.c			\
 	libphodav/phodav-lock.h			\
+	libphodav/phodav-if.c			\
 	libphodav/phodav-method-get.c		\
 	libphodav/phodav-method-propfind.c	\
+	libphodav/phodav-method-proppatch.c	\
 	libphodav/phodav-multistatus.c		\
 	libphodav/phodav-multistatus.h		\
 	libphodav/phodav-server.c		\
