@@ -90,6 +90,10 @@ gboolean                server_foreach_parent_path           (PhodavServer *serv
                                                               const gchar *path,
                                                               PathCb cb, gpointer data);
 
+gint                    phodav_method_get                    (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
+gint                    phodav_method_propfind               (PathHandler *handler, SoupMessage *msg,
+                                                              const char *path, GError **err);
 G_END_DECLS
 
 #endif /* __PHODAV_PRIV_H__ */

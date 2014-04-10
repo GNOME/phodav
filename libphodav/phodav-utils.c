@@ -193,7 +193,7 @@ xml_node_has_name (xmlNodePtr node, const char *name)
   return xml_node_has_name_ns (node, name, "DAV:");
 }
 
-gboolean
+gboolean G_GNUC_PURE
 xml_node_is_element (xmlNodePtr node)
 {
   return node->type == XML_ELEMENT_NODE && node->name != NULL;

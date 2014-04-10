@@ -30,9 +30,6 @@
 #include "phodav-lock.h"
 #include "phodav-utils.h"
 
-#include "phodav-method-get.h"
-#include "phodav-method-propfind.h"
-
 /**
  * SECTION:phodav-server
  * @title: PhodavServer
