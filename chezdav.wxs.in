@@ -46,6 +46,9 @@
             <Component Id="CChezDAV" Guid="*">
               <File Id='chezdav' Name='chezdav.exe' DiskId='1' Source='$(var.DESTDIR)/bin/chezdav.exe' KeyPath='yes'/>
             </Component>
+            <Component Id="CLibPhoDAV" Guid="*">
+              <File Id='libphodav' Name='libphodav-1.0-0.dll' DiskId='1' Source='$(var.DESTDIR)/bin/libphodav-1.0-0.dll' KeyPath='yes'/>
+            </Component>
           </Directory>
           <Component Id="CDepsTxt" Guid="*">
             <File Id='depstxt' Name='deps.txt' DiskId='1' Source='deps.txt' KeyPath='yes'/>
@@ -57,6 +60,7 @@
     <Feature Id="Complete"  Level="1">
       <ComponentGroupRef Id="CG.libsoup"/>
       <ComponentRef Id="CChezDAV"/>
+      <ComponentRef Id="CLibPhoDAV"/>
       <ComponentRef Id="CDepsTxt"/>
     </Feature>
 
