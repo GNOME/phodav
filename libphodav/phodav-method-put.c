@@ -21,12 +21,11 @@
 
 static void
 method_put_finished (SoupMessage *msg,
-                     SoupBuffer  *chunk,
                      gpointer     user_data)
 {
   GFileOutputStream *output = user_data;
 
-  g_debug ("PUT finished");
+  g_debug ("PUT finished %p", output);
 
   g_object_unref (output);
 }
@@ -105,9 +104,10 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
   status = put_start (msg, file, &output, cancellable, err);
-  if (*err)
+  if (!output || *err)
     goto end;
 
+  g_debug ("PUT output %p", output);
   soup_message_body_set_accumulate (msg->request_body, FALSE);
   g_object_set_data (G_OBJECT (output), "handler", handler);
   g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), output);
