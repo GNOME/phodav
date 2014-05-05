@@ -142,7 +142,7 @@ if HAVE_SYSTEMD
 systemdunitdir = $(SYSTEMDSYSTEMUNITDIR)
 dist_systemdunit_DATA = \
 	$(top_srcdir)/data/spice-webdavd.service \
-	$(top_srcdir)/data/spice-webdavd.target
+	$(NULL)
 endif
 
 if HAVE_UDEV

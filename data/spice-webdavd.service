@@ -8,6 +8,3 @@ Type=simple
 EnvironmentFile=-/etc/sysconfig/spice-webdavd
 ExecStart=/usr/sbin/spice-webdavd -p 9843 $SPICE_WEBDAVD_EXTRA_ARGS
 Restart=on-success
-
-[Install]
-WantedBy=spice-webdavd.target
