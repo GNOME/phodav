@@ -38,7 +38,8 @@ static GaEntryGroupService *mdns_service;
 #include "libphodav/phodav.h"
 
 static PhodavServer *dav;
-static gint verbose = 0;
+static gint verbose;
+static gint port = 8080;
 
 G_GNUC_PRINTF (1, 2) static void
 my_error (const gchar *format, ...)
@@ -92,7 +93,6 @@ mdns_register_service (void)
         }
     }
 
-  guint port = phodav_server_get_port (dav);
   name = get_realm ();
   mdns_service = ga_entry_group_add_service (mdns_group,
                                              name, "_webdav._tcp",
@@ -192,7 +192,6 @@ main (int argc, char *argv[])
 {
   GError *error = NULL;
   GOptionContext *context;
-  gint port = 8080;
   const gchar *path = NULL;
   GMainLoop *mainloop = NULL;
 
@@ -242,7 +241,7 @@ main (int argc, char *argv[])
   g_unix_signal_add (SIGINT, sighup_received, mainloop);
 #endif
 
-  dav = phodav_server_new (port, path);
+  dav = phodav_server_new (path);
 
   if (htdigest)
     {
@@ -273,11 +272,14 @@ main (int argc, char *argv[])
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
-  phodav_server_run (dav);
-  g_main_loop_run (mainloop);
-  phodav_server_quit (dav);
-  g_main_loop_unref (mainloop);
+  SoupServer *server = phodav_server_get_soup_server (dav);
+  if (!soup_server_listen_local (server, port, 0, &error)) {
+    my_error (_ ("Listen failed: %s\n"), error->message);
+  }
 
+  g_main_loop_run (mainloop);
+
+  g_main_loop_unref (mainloop);
 #ifdef WITH_AVAHI
   g_object_unref (mdns_client);
 #endif

@@ -46,7 +46,6 @@ struct _PhodavServer
   GCancellable *cancellable;
   gchar        *root;
   PathHandler  *root_handler; /* weak ref */
-  guint         port;
   GHashTable   *paths;
 };
 
@@ -60,7 +59,6 @@ G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 /* Properties */
 enum {
   PROP_0,
-  PROP_PORT,
   PROP_ROOT,
   PROP_SERVER,
 };
@@ -174,9 +172,7 @@ phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  self->server = soup_server_new (SOUP_SERVER_PORT, self->port,
-                                  SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
-                                  SOUP_SERVER_ASYNC_CONTEXT, self->context,
+  self->server = soup_server_new (SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
                                   NULL);
 
   update_root_handler (self);
@@ -213,10 +209,6 @@ phodav_server_get_property (GObject    *gobject,
 
   switch (prop_id)
     {
-    case PROP_PORT:
-      g_value_set_uint (value, phodav_server_get_port (self));
-      break;
-
     case PROP_ROOT:
       g_value_set_string (value, self->root);
       break;
@@ -241,10 +233,6 @@ phodav_server_set_property (GObject      *gobject,
 
   switch (prop_id)
     {
-    case PROP_PORT:
-      self->port = g_value_get_uint (value);
-      break;
-
     case PROP_ROOT:
       g_free (self->root);
       self->root = g_value_dup_string (value);
@@ -266,16 +254,6 @@ phodav_server_class_init (PhodavServerClass *klass)
   gobject_class->constructed  = phodav_server_constructed;
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;
-
-  g_object_class_install_property
-    (gobject_class, PROP_PORT,
-    g_param_spec_uint ("port",
-                       "Port",
-                       "Port",
-                       0, G_MAXUINT16, 0,
-                       G_PARAM_CONSTRUCT_ONLY |
-                       G_PARAM_READWRITE |
-                       G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property
     (gobject_class, PROP_ROOT,
@@ -500,23 +478,6 @@ server_callback (SoupServer *server, SoupMessage *msg,
 }
 
 /**
- * phodav_server_get_port:
- * @server: a %PhodavServer
- *
- * Gets the TCP port that server is listening on. This is most useful
- * when you did not request a specific port, with value 0.
-*
- * Returns: the port @server is listening on.
- **/
-guint
-phodav_server_get_port (PhodavServer *self)
-{
-  g_return_val_if_fail (PHODAV_IS_SERVER (self), 0);
-
-  return soup_server_get_port (self->server);
-}
-
-/**
  * phodav_server_get_soup_server:
  * @server: a %PhodavServer
  *
@@ -532,62 +493,8 @@ phodav_server_get_soup_server (PhodavServer *self)
   return self->server;
 }
 
-static gpointer
-thread_func (gpointer data)
-{
-  PhodavServer *self = data;
-
-  g_debug ("Starting on port %u, serving %s", phodav_server_get_port (self), self->root);
-
-  soup_server_run_async (self->server);
-
-  g_main_loop_run (self->loop);
-
-  return NULL;
-}
-
-/**
- * phodav_server_run:
- * @server: a %PhodavServer
- *
- * Run the server in a separate thread.
- **/
-void
-phodav_server_run (PhodavServer *self)
-{
-  g_return_if_fail (PHODAV_IS_SERVER (self));
-
-  if (self->thread)
-    return;
-
-  g_object_ref (self);
-  self->thread = g_thread_new ("phodav-server", thread_func, self);
-}
-
-/**
- * phodav_server_quit:
- * @server: a %PhodavServer
- *
- * Stops the server from running.
- **/
-void
-phodav_server_quit (PhodavServer *self)
-{
-  g_return_if_fail (PHODAV_IS_SERVER (self));
-
-  if (!self->thread)
-    return;
-
-  soup_server_quit (self->server);
-  g_main_loop_quit (self->loop);
-  g_thread_join (self->thread);
-  self->thread = NULL;
-  g_object_unref (self);
-}
-
 /**
  * phodav_server_new:
- * @port: Port to listen on.
  * @root: (allow-none): Root path.
  *
  * Creates a new #PhodavServer.
@@ -595,10 +502,9 @@ phodav_server_quit (PhodavServer *self)
  * Returns: a new #PhodavServer
  **/
 PhodavServer *
-phodav_server_new (guint port, const gchar *root)
+phodav_server_new (const gchar *root)
 {
   return g_object_new (PHODAV_TYPE_SERVER,
-                       "port", port,
                        "root", root,
                        NULL);
 }
