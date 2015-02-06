@@ -9,7 +9,7 @@ makeflags_1 =
 AM_MAKEFLAGS = $(makeflags_$(V))
 
 SUBDIRS = . po spice libphodav doc
-lib_LTLIBRARIES = libphodav-1.0.la
+lib_LTLIBRARIES = libphodav-2.0.la
 bin_PROGRAMS = chezdav
 sbin_PROGRAMS = spice-webdavd
 
@@ -19,13 +19,13 @@ AM_CPPFLAGS =					\
 	$(WARN_CFLAGS)				\
 	$(NULL)
 
-libphodav_includedir = $(includedir)/libphodav-1.0/libphodav
+libphodav_includedir = $(includedir)/libphodav-2.0/libphodav
 libphodav_include_HEADERS =			\
 	libphodav/phodav-server.h		\
 	libphodav/phodav.h			\
 	$(NULL)
 
-libphodav_1_0_la_SOURCES =			\
+libphodav_2_0_la_SOURCES =			\
 	libphodav/guuid.c			\
 	libphodav/guuid.h			\
 	libphodav/phodav-priv.h			\
@@ -51,27 +51,27 @@ libphodav_1_0_la_SOURCES =			\
 	libphodav/phodav-utils.h		\
 	$(NULL)
 
-libphodav_1_0_la_CFLAGS =			\
+libphodav_2_0_la_CFLAGS =			\
 	$(GIO_CFLAGS)				\
 	$(SOUP_CFLAGS)				\
 	$(NULL)
 
-libphodav_1_0_la_LIBADD =			\
+libphodav_2_0_la_LIBADD =			\
 	$(GIO_LIBS)				\
 	$(SOUP_LIBS)				\
 	$(NULL)
 
-libphodav_1_0_la_LDFLAGS =				\
+libphodav_2_0_la_LDFLAGS =				\
 	-version-info 0:0:0				\
 	-Wl,--version-script=${srcdir}/libphodav.syms	\
 	-no-undefined					\
 	$(NULL)
 
-libphodav_1_0_la_DEPENDENCIES = libphodav.syms
+libphodav_2_0_la_DEPENDENCIES = libphodav.syms
 EXTRA_DIST += libphodav.syms
 
 pkgconfigdir = $(libdir)/pkgconfig
-pkgconfig_DATA = libphodav-1.0.pc
+pkgconfig_DATA = libphodav-2.0.pc
 
 spice_webdavd_SOURCES = spice/spice-webdavd.c
 
@@ -132,7 +132,7 @@ chezdav_CFLAGS =		\
 	$(NULL)
 
 chezdav_LDADD =			\
-	libphodav-1.0.la	\
+	libphodav-2.0.la	\
 	$(GLIB_LIBS)		\
 	$(GIO_LIBS)		\
 	$(AVAHI_LIBS)		\
