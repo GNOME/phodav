@@ -63,7 +63,7 @@ IT_PROG_INTLTOOL([0.40.0])
 AC_CHECK_HEADERS([attr/xattr.h])
 
 PKG_CHECK_MODULES(GIO, [$gio_os])
-PKG_CHECK_MODULES(SOUP, libsoup-2.4 >= 2.48.1 libxml-2.0)
+PKG_CHECK_MODULES(SOUP, libsoup-2.4 >= 2.48.0 libxml-2.0)
 
 AC_ARG_WITH([avahi],
   AS_HELP_STRING([--without-avahi], [Build without avahi/mdns]))
