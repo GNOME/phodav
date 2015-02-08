@@ -212,6 +212,13 @@ static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
 static OutputQueue *mux_queue;
 static GHashTable *clients;
+static GSocketService *socket_service;
+#ifdef G_OS_UNIX
+static gint port_fd;
+#elif defined(G_OS_WIN32)
+static HANDLE port_handle;
+#endif
+
 static void start_mux_read (GInputStream *istream);
 
 static void
@@ -292,9 +299,9 @@ read_thread (GSimpleAsyncResult *simple,
                            data->buffer, data->count, &bread,
                            cancellable, &error);
   g_debug ("my read result %" G_GSIZE_FORMAT, bread);
-  if (bread != data->count)
+  if (bread != data->count) {
     data->size = -1;
-  else
+  } else
     data->size = bread;
 
   if (error)
@@ -675,32 +682,83 @@ open_mux_path (const char *path)
   g_return_if_fail (!mux_ostream);
   g_return_if_fail (!mux_queue);
 
+  g_debug ("Open %s", path);
 #ifdef G_OS_UNIX
-  gint fd = g_open (path, O_RDWR);
-  if (fd == -1)
+  port_fd = g_open (path, O_RDWR);
+  if (port_fd == -1)
       exit (1);
 
-  wait_for_virtio_host (fd);
+  wait_for_virtio_host (port_fd);
 
-  mux_ostream = g_unix_output_stream_new (fd, TRUE);
-  mux_istream = g_unix_input_stream_new (fd, FALSE);
+  mux_ostream = g_unix_output_stream_new (port_fd, TRUE);
+  mux_istream = g_unix_input_stream_new (port_fd, FALSE);
 #else
-  HANDLE h = CreateFile (path,
+  port_handle = CreateFile (path,
                          GENERIC_WRITE | GENERIC_READ,
                          0,
                          NULL,
                          OPEN_EXISTING,
                          FILE_FLAG_OVERLAPPED,
                          NULL);
-  g_assert (h != INVALID_HANDLE_VALUE);
+  g_assert (port_handle != INVALID_HANDLE_VALUE);
 
-  mux_ostream = G_OUTPUT_STREAM (g_win32_output_stream_new (h, TRUE));
-  mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (h, TRUE));
+  mux_ostream = G_OUTPUT_STREAM (g_win32_output_stream_new (port_handle, TRUE));
+  mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (port_handle, TRUE));
 #endif
 
   mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream));
+}
+
+static void
+run_service (void)
+{
+  g_debug ("Run service");
+
+  g_socket_service_start (socket_service);
+
+  clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
+                                   NULL, (GDestroyNotify) client_free);
+
+  loop = g_main_loop_new (NULL, TRUE);
+#ifdef G_OS_UNIX
+  open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
+#else
+  open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
+#endif
+
+  /* listen on port for incoming clients, multiplex there input into
+     virtio path, demultiplex input from there to the respective
+     clients */
+
+#ifdef WITH_AVAHI
+  mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
+  g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
+  if (!ga_client_start (mdns_client, &error))
+    {
+      g_printerr ("%s\n", error->message);
+      exit (1);
+    }
+#endif
 
   start_mux_read (mux_istream);
+  g_main_loop_run (loop);
+  g_main_loop_unref (loop);
+
+  g_clear_object (&mux_istream);
+  g_clear_object (&mux_ostream);
+
+  output_queue_unref (mux_queue);
+  g_hash_table_unref (clients);
+
+  g_socket_service_stop (socket_service);
+
+  mux_queue = NULL;
+
+#ifdef G_OS_WIN32
+  CloseHandle (port_handle);
+#else
+  close (port_fd);
+#endif
 }
 
 #ifdef G_OS_WIN32
@@ -750,7 +808,10 @@ service_main (DWORD argc, TCHAR *argv[])
   service_status.dwWaitHint = 0;
   SetServiceStatus (service_status_handle, &service_status);
 
-  g_main_loop_run (loop);
+  while (!quit_service) {
+      run_service ();
+      g_usleep (G_USEC_PER_SEC);
+  }
 
   service_status.dwCurrentState = SERVICE_STOPPED;
   SetServiceStatus (service_status_handle, &service_status);
@@ -789,13 +850,16 @@ main (int argc, char *argv[])
 
   signal (SIGINT, quit);
 
-
-  GSocketService *service = g_socket_service_new ();
+  /* run socket service once at beginning, there seems to be a bug on
+     windows, and it can't accept new connections if cleanup and
+     restart a new service */
+  socket_service = g_socket_service_new ();
   GInetAddress *iaddr = g_inet_address_new_any (G_SOCKET_FAMILY_IPV4);
   GSocketAddress *saddr = g_inet_socket_address_new (iaddr, port);
   g_object_unref (iaddr);
 
-  g_socket_listener_add_address (G_SOCKET_LISTENER (service), saddr,
+  g_socket_listener_add_address (G_SOCKET_LISTENER (socket_service),
+                                 saddr,
                                  G_SOCKET_TYPE_STREAM,
                                  G_SOCKET_PROTOCOL_TCP,
                                  NULL,
@@ -807,55 +871,30 @@ main (int argc, char *argv[])
       exit (1);
     }
 
-  g_signal_connect (service,
+  g_signal_connect (socket_service,
                     "incoming", G_CALLBACK (incoming_callback),
                     NULL);
-
-  clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
-                                   NULL, (GDestroyNotify) client_free);
-
-  loop = g_main_loop_new (NULL, TRUE);
-#ifdef G_OS_UNIX
-  open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
-#else
-  open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
-#endif
-
-
-  /* listen on port for incoming clients, multiplex there input into
-     virtio path, demultiplex input from there to the respective
-     clients */
-
-  g_socket_service_start (service);
-
-#ifdef WITH_AVAHI
-  mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
-  g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
-  if (!ga_client_start (mdns_client, &error))
-    {
-      g_printerr ("%s\n", error->message);
-      exit (1);
-    }
-#endif
 
 #ifdef G_OS_WIN32
   SERVICE_TABLE_ENTRY service_table[] =
     {
       { (char *)"spice-webdavd", service_main }, { NULL, NULL }
     };
-  if (!StartServiceCtrlDispatcher (service_table))
+  if (!getenv("DEBUG"))
     {
-      g_error ("%s", g_win32_error_message(GetLastError()));
-      exit (1);
-    }
-#else
-  g_main_loop_run (loop);
+      if (!StartServiceCtrlDispatcher (service_table))
+        {
+          g_error ("%s", g_win32_error_message (GetLastError ()));
+          exit (1);
+        }
+    } else
 #endif
+  while (!quit_service) {
+    run_service ();
+    g_usleep (G_USEC_PER_SEC);
+  }
 
-  g_main_loop_unref (loop);
-
-  output_queue_unref (mux_queue);
-  g_hash_table_unref (clients);
+  g_clear_object (&socket_service);
 
   return 0;
 }
