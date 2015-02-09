@@ -393,8 +393,8 @@ mux_data_read_cb (GObject      *source_object,
       return;
     }
 
-  g_debug ("looking up client %" G_GINT64_FORMAT, demux.client);
   Client *c = g_hash_table_lookup (clients, &demux.client);
+  g_debug ("looked up client: %p", c);
   g_warn_if_fail(c != NULL);
 
   if (c)
@@ -499,7 +499,7 @@ client_read_cb (GObject      *source_object,
   gssize size;
 
   size = g_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
-  g_debug ("end read %" G_GSIZE_FORMAT, size);
+  g_debug ("end read %" G_GSSIZE_FORMAT, size);
   if (error)
     {
       g_warning ("error: %s", error->message);
@@ -525,7 +525,7 @@ client_start_read (Client *client)
   GIOStream *iostream = G_IO_STREAM (client->client_connection);
   GInputStream *istream = g_io_stream_get_input_stream (iostream);
 
-  g_debug ("start read");
+  g_debug ("start read client %p", client);
   g_input_stream_read_async (istream,
                              client->buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
                              NULL, client_read_cb, client);
