@@ -92,6 +92,8 @@ output_queue_ref (OutputQueue *q)
 static void
 output_queue_unref (OutputQueue *q)
 {
+  g_return_if_fail (q != NULL);
+
   q->refs--;
   if (q->refs == 0)
     output_queue_free (q);
@@ -171,8 +173,11 @@ static void
 output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
                    PushedCb pushed_cb, gpointer user_data)
 {
-  OutputQueueElem *e = g_new (OutputQueueElem, 1);
+  OutputQueueElem *e;
 
+  g_return_if_fail (q != NULL);
+
+  e = g_new (OutputQueueElem, 1);
   e->buf = buf;
   e->size = size;
   e->cb = pushed_cb;
