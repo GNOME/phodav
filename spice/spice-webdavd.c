@@ -206,6 +206,7 @@ typedef struct _Client
   OutputQueue       *queue;
 } Client;
 
+static gboolean quit_service;
 static GMainLoop *loop;
 static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
@@ -217,6 +218,9 @@ static void
 quit (int sig)
 {
   g_debug ("quit %d", sig);
+
+  if (sig == SIGINT || sig == SIGTERM)
+      quit_service = TRUE;
 
   g_main_loop_quit (loop);
 }
@@ -382,7 +386,7 @@ mux_data_read_cb (GObject      *source_object,
     {
       g_warning ("error: %s", error->message);
       g_clear_error (&error);
-      quit (1);
+      quit (-1);
       return;
     }
 
@@ -422,7 +426,7 @@ end:
       g_clear_error (&error);
     }
 
-  quit (2);
+  quit (-2);
 }
 
 static void
@@ -450,7 +454,7 @@ end:
       g_clear_error (&error);
     }
 
-  quit (3);
+  quit (-3);
 }
 
 static void
