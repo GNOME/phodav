@@ -46,12 +46,14 @@ typedef struct _OutputQueue
   GQueue        *queue;
 } OutputQueue;
 
+typedef void (*PushedCb) (OutputQueue *q, gpointer user_data, GError *error);
+
 typedef struct _OutputQueueElem
 {
   OutputQueue  *queue;
   const guint8 *buf;
   gsize         size;
-  GFunc         cb;
+  PushedCb      cb;
   gpointer      user_data;
 } OutputQueueElem;
 
@@ -144,11 +146,11 @@ output_queue_idle (gpointer user_data)
 
   g_debug ("flushing %" G_GSIZE_FORMAT, e->size);
   g_output_stream_write_all (q->output, e->buf, e->size, NULL, NULL, &error);
-  if (error)
-    goto end;
-
   if (e->cb)
-    e->cb (q, e->user_data);
+    e->cb (q, e->user_data, error);
+
+  if (error)
+      goto end;
 
   q->flushing = TRUE;
   g_output_stream_flush_async (q->output, G_PRIORITY_DEFAULT, NULL, output_queue_flush_cb, e);
@@ -157,12 +159,7 @@ output_queue_idle (gpointer user_data)
   return FALSE;
 
 end:
-  if (error)
-    {
-      g_warning ("error: %s", error->message);
-      g_clear_error (&error);
-    }
-
+  g_clear_error (&error);
   q->idle_id = 0;
   g_free (e);
   output_queue_unref (q);
@@ -172,7 +169,7 @@ end:
 
 static void
 output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
-                   GFunc pushed_cb, gpointer user_data)
+                   PushedCb pushed_cb, gpointer user_data)
 {
   OutputQueueElem *e = g_new (OutputQueueElem, 1);
 
@@ -343,8 +340,26 @@ my_input_stream_read_finish (GInputStream *stream,
 }
 
 static void
-mux_pushed_client_cb (OutputQueue *q, gpointer user_data)
+handle_push_error (OutputQueue *q, gpointer user_data, GError *error)
 {
+  Client *client = user_data;
+
+  if (!error)
+    return;
+
+  g_warning ("push error: %s", error->message);
+  remove_client (client);
+  return;
+}
+
+static void
+mux_pushed_client_cb (OutputQueue *q, gpointer user_data, GError *error)
+{
+  if (error) {
+    handle_push_error (q, user_data, error);
+    return;
+  }
+
   start_mux_read (mux_istream);
 }
 
@@ -372,7 +387,7 @@ mux_data_read_cb (GObject      *source_object,
 
   if (c)
     output_queue_push (c->queue, (guint8 *) demux.buf, demux.size,
-                       (GFunc) mux_pushed_client_cb, c);
+                       mux_pushed_client_cb, c);
   else
     start_mux_read (mux_istream);
 }
@@ -444,9 +459,14 @@ start_mux_read (GInputStream *istream)
 static void client_start_read (Client *client);
 
 static void
-mux_pushed_cb (OutputQueue *q, gpointer user_data)
+mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
 {
   Client *client = user_data;
+
+  if (error) {
+      handle_push_error (q, client, error);
+      return;
+  }
 
   if (client->size == 0)
     {
@@ -480,9 +500,9 @@ client_read_cb (GObject      *source_object,
   g_return_if_fail (size >= 0);
   client->size = size;
 
-  output_queue_push (mux_queue, (guint8 *) &client->id, sizeof (gint64), NULL, NULL);
-  output_queue_push (mux_queue, (guint8 *) &client->size, sizeof (guint16), NULL, NULL);
-  output_queue_push (mux_queue, (guint8 *) client->buf, size, (GFunc) mux_pushed_cb, client);
+  output_queue_push (mux_queue, (guint8 *) &client->id, sizeof (gint64), handle_push_error, client);
+  output_queue_push (mux_queue, (guint8 *) &client->size, sizeof (guint16), handle_push_error, client);
+  output_queue_push (mux_queue, (guint8 *) client->buf, size, mux_pushed_cb, client);
 
   return;
 }
