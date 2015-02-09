@@ -138,7 +138,7 @@ fi
 
 major=`echo $PACKAGE_VERSION | cut -d. -f1`
 minor=`echo $PACKAGE_VERSION | cut -d. -f2`
-micro=`echo $PACKAGE_VERSION | cut -d. -f3`
+micro=`echo $PACKAGE_VERSION | cut -d. -f3 | cut -d- -f1`
 buildid=`echo $with_buildid | cut -d. -f1`
 if test "x$buildid" = x; then
   buildid=0
