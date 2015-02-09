@@ -252,6 +252,9 @@ add_client (GSocketConnection *client_connection)
 static void
 client_free (Client *c)
 {
+  g_debug ("Free client %p", c);
+
+  g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
   g_object_unref (c->client_connection);
   output_queue_unref (c->queue);
   g_free (c);
