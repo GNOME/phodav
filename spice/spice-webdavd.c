@@ -57,6 +57,8 @@ typedef struct _OutputQueueElem
   gpointer      user_data;
 } OutputQueueElem;
 
+static GCancellable *cancel;
+
 static OutputQueue*
 output_queue_new (GOutputStream *output)
 {
@@ -147,7 +149,7 @@ output_queue_idle (gpointer user_data)
     }
 
   g_debug ("flushing %" G_GSIZE_FORMAT, e->size);
-  g_output_stream_write_all (q->output, e->buf, e->size, NULL, NULL, &error);
+  g_output_stream_write_all (q->output, e->buf, e->size, NULL, cancel, &error);
   if (e->cb)
     e->cb (q, e->user_data, error);
 
@@ -155,7 +157,7 @@ output_queue_idle (gpointer user_data)
       goto end;
 
   q->flushing = TRUE;
-  g_output_stream_flush_async (q->output, G_PRIORITY_DEFAULT, NULL, output_queue_flush_cb, e);
+  g_output_stream_flush_async (q->output, G_PRIORITY_DEFAULT, cancel, output_queue_flush_cb, e);
 
   q->idle_id = 0;
   return FALSE;
@@ -426,7 +428,7 @@ mux_size_read_cb (GObject      *source_object,
 
   my_input_stream_read_async (istream,
                               &demux.buf, demux.size, G_PRIORITY_DEFAULT,
-                              NULL, mux_data_read_cb, NULL);
+                              cancel, mux_data_read_cb, NULL);
   return;
 
 end:
@@ -454,7 +456,7 @@ mux_client_read_cb (GObject      *source_object,
     goto end;
   my_input_stream_read_async (istream,
                               &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
-                              NULL, mux_size_read_cb, NULL);
+                              cancel, mux_size_read_cb, NULL);
   return;
 
 end:
@@ -472,7 +474,7 @@ start_mux_read (GInputStream *istream)
 {
   my_input_stream_read_async (istream,
                               &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
-                              NULL, mux_client_read_cb, NULL);
+                              cancel, mux_client_read_cb, NULL);
 }
 
 static void client_start_read (Client *client);
@@ -716,6 +718,7 @@ run_service (void)
 
   g_socket_service_start (socket_service);
 
+  cancel = g_cancellable_new ();
   clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
                                    NULL, (GDestroyNotify) client_free);
 
@@ -744,6 +747,8 @@ run_service (void)
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
 
+  g_cancellable_cancel (cancel);
+
   g_clear_object (&mux_istream);
   g_clear_object (&mux_ostream);
 
@@ -753,6 +758,7 @@ run_service (void)
   g_socket_service_stop (socket_service);
 
   mux_queue = NULL;
+  g_clear_object (&cancel);
 
 #ifdef G_OS_WIN32
   CloseHandle (port_handle);
