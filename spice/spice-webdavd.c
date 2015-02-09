@@ -265,7 +265,7 @@ remove_client (Client *client)
 {
   g_debug ("remove client %p", client);
 
-  g_hash_table_remove (clients, client->client_connection);
+  g_hash_table_remove (clients, &client->id);
 }
 
 typedef struct ReadData
