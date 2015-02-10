@@ -734,6 +734,8 @@ run_service (void)
      clients */
 
 #ifdef WITH_AVAHI
+  GError *error = NULL;
+
   mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
   g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
   if (!ga_client_start (mdns_client, &error))
