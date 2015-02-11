@@ -1,15 +1,15 @@
 # Brazilian Portuguese translation for phodav.
 # Copyright (C) 2014 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Enrico Nicoletto <liverig@gmail.com>, 2014.
+# Enrico Nicoletto <liverig@gmail.com>, 2014, 2015.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2014-02-01 06:59+0000\n"
-"PO-Revision-Date: 2014-02-01 08:22-0300\n"
+"POT-Creation-Date: 2015-02-06 23:16+0000\n"
+"PO-Revision-Date: 2015-02-11 12:58-0300\n"
 "Last-Translator: Enrico Nicoletto <liverig@gmail.com>\n"
 "Language-Team: Brazilian Portuguese <gnome-pt_br-list@gnome.org>\n"
 "Language: pt_BR\n"
@@ -17,48 +17,53 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
-"X-Generator: Poedit 1.6.3\n"
+"X-Generator: Poedit 1.7.3\n"
 
-#: ../libphodav/chezdav.c:201
+#: ../libphodav/chezdav.c:200
 msgid "Print program version"
 msgstr "Exibe a versão do programa"
 
-#: ../libphodav/chezdav.c:202
+#: ../libphodav/chezdav.c:201
 msgid "Be verbose"
 msgstr "Detalhado"
 
-#: ../libphodav/chezdav.c:203
+#: ../libphodav/chezdav.c:202
 msgid "Port to listen to"
 msgstr "Escutar a porta"
 
-#: ../libphodav/chezdav.c:204
+#: ../libphodav/chezdav.c:203
 msgid "Path to export"
 msgstr "Caminho a exportar"
 
-#: ../libphodav/chezdav.c:205
+#: ../libphodav/chezdav.c:204
 msgid "Path to htdigest file"
 msgstr "Caminho para o arquivo htdigest"
 
-#: ../libphodav/chezdav.c:219
+#: ../libphodav/chezdav.c:218
 msgid "- simple WebDAV server"
 msgstr "- servidor WebDAV simples"
 
-#: ../libphodav/chezdav.c:220
+#: ../libphodav/chezdav.c:219
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Informe erros para <%s>"
 
-#: ../libphodav/chezdav.c:227
+#: ../libphodav/chezdav.c:226
 #, c-format
 msgid "option parsing failed: %s\n"
 msgstr "falha ao analisar opção: %s\n"
 
-#: ../libphodav/chezdav.c:254
+#: ../libphodav/chezdav.c:253
 #, c-format
 msgid "failed to open htdigest: %s\n"
 msgstr "falha ao abrir htdigest: %s\n"
 
-#: ../libphodav/chezdav.c:273
+#: ../libphodav/chezdav.c:272
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "falha do mDNS: %s\n"
+
+#: ../libphodav/chezdav.c:277
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "Ocorreu falha na escuta: %s\n"
