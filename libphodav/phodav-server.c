@@ -47,6 +47,7 @@ struct _PhodavServer
   gchar        *root;
   PathHandler  *root_handler; /* weak ref */
   GHashTable   *paths;
+  gboolean      readonly;
 };
 
 struct _PhodavServerClass
@@ -61,6 +62,7 @@ enum {
   PROP_0,
   PROP_ROOT,
   PROP_SERVER,
+  PROP_READONLY,
 };
 
 static void server_callback (SoupServer        *server,
@@ -217,6 +219,10 @@ phodav_server_get_property (GObject    *gobject,
       g_value_set_object (value, self->server);
       break;
 
+    case PROP_READONLY:
+      g_value_set_boolean (value, self->readonly);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
       break;
@@ -237,6 +243,10 @@ phodav_server_set_property (GObject      *gobject,
       g_free (self->root);
       self->root = g_value_dup_string (value);
       update_root_handler (self);
+      break;
+
+    case PROP_READONLY:
+      self->readonly = g_value_get_boolean (value);
       break;
 
     default:
@@ -273,6 +283,15 @@ phodav_server_class_init (PhodavServerClass *klass)
                           SOUP_TYPE_SERVER,
                           G_PARAM_READABLE |
                           G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property
+    (gobject_class, PROP_READONLY,
+     g_param_spec_boolean ("read-only",
+                           "Read-only access",
+                           "Read-only access",
+                           FALSE,
+                           G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS));
 }
 
 gboolean
@@ -435,7 +454,15 @@ server_callback (SoupServer *server, SoupMessage *msg,
                                          "text/xml", params);
   g_hash_table_destroy (params);
 
-  if (msg->method == SOUP_METHOD_OPTIONS)
+  if (handler->self->readonly &&
+      (msg->method == SOUP_METHOD_PROPPATCH ||
+       msg->method == SOUP_METHOD_MKCOL ||
+       msg->method == SOUP_METHOD_DELETE ||
+       msg->method == SOUP_METHOD_MOVE ||
+       msg->method == SOUP_METHOD_COPY ||
+       msg->method == SOUP_METHOD_LOCK))
+      status = SOUP_STATUS_FORBIDDEN;
+  else if (msg->method == SOUP_METHOD_OPTIONS)
     {
       soup_message_headers_append (msg->response_headers, "DAV", "1,2");
 
