@@ -39,6 +39,7 @@ static GaEntryGroupService *mdns_service;
 
 static PhodavServer *dav;
 static gint verbose;
+static gint readonly;
 static gint port = 8080;
 
 G_GNUC_PRINTF (1, 2) static void
@@ -202,6 +203,7 @@ main (int argc, char *argv[])
     { "port", 'p', 0, G_OPTION_ARG_INT, &port, N_ ("Port to listen to"), NULL },
     { "path", 'P', 0, G_OPTION_ARG_FILENAME, &path, N_ ("Path to export"), NULL },
     { "htdigest", 'd', 0, G_OPTION_ARG_FILENAME, &htdigest, N_ ("Path to htdigest file"), NULL },
+    { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
     { NULL }
   };
 
@@ -242,6 +244,7 @@ main (int argc, char *argv[])
 #endif
 
   dav = phodav_server_new (path);
+  g_object_set (dav, "read-only", readonly, NULL);
 
   if (htdigest)
     {
