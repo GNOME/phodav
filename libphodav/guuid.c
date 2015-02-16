@@ -27,7 +27,7 @@
 
 #include "guuid.h"
 
-/**
+/*
  * SECTION:uuid
  * @title: GUuid
  * @short_description: a universal unique identifier
@@ -92,7 +92,7 @@
 
 G_UUID_DEFINE_STATIC (uuid_nil, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
-/**
+/*
  * Common namespaces as defined in rfc4122:
  * http://tools.ietf.org/html/rfc4122.html#appendix-C
  */

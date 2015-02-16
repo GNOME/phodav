@@ -19,10 +19,15 @@ EXTRA_HFILES =
 IGNORE_HFILES =					\
 	guuid.h					\
 	glib-compat.h				\
+	phodav-priv.h				\
+	phodav-utils.h				\
+	phodav-lock.h				\
+	phodav-multistatus.h			\
+	phodav-path.h				\
 	$(NULL)
 
 GTKDOC_CFLAGS = $(SOUP_CFLAGS)
-GTKDOC_LIBS = $(top_builddir)/libphodav-1.0.la
+GTKDOC_LIBS = $(top_builddir)/libphodav-2.0.la
 
 include $(top_srcdir)/gtk-doc.make
 

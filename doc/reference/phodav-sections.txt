@@ -1,9 +1,6 @@
 <SECTION>
 <FILE>phodav-server</FILE>
 phodav_server_new
-phodav_server_run
-phodav_server_quit
-phodav_server_get_port
 phodav_server_get_soup_server
 PhodavServer
 PhodavServerClass
