@@ -7,6 +7,6 @@ Name: PhoDAV
 Description: A WebDAV library based on libsoup
 Requires: libsoup-2.4
 Version: @PACKAGE_VERSION@
-Libs: -L${libdir} -lphodav-1.0
-Cflags: -I${includedir}/libphodav-1.0
+Libs: -L${libdir} -lphodav-2.0
+Cflags: -I${includedir}/libphodav-2.0
 
