@@ -1,0 +1,77 @@
+# Turkish translation for phodav.
+# Copyright (C) 2015 phodav's COPYRIGHT HOLDER
+# This file is distributed under the same license as the phodav package.
+#
+# Necdet Yücel <necdetyucel@gmail.com>, 2015.
+# Muhammet Kara <muhammetk@gmail.com>, 2015.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: phodav master\n"
+"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
+"product=phodav&keywords=I18N+L10N&component=general\n"
+"POT-Creation-Date: 2015-02-15 17:48+0000\n"
+"PO-Revision-Date: 2015-02-16 15:43+0200\n"
+"Last-Translator: Muhammet Kara <muhammetk@gmail.com>\n"
+"Language-Team: Turkish <gnome-turk@gnome.org>\n"
+"Language: tr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Generator: Gtranslator 2.91.6\n"
+"X-POOTLE-MTIME: 1423952024.000000\n"
+
+#: ../libphodav/chezdav.c:201
+msgid "Print program version"
+msgstr "Program sürümünü yazdır"
+
+#: ../libphodav/chezdav.c:202
+msgid "Be verbose"
+msgstr "Detaylı ol"
+
+#: ../libphodav/chezdav.c:203
+msgid "Port to listen to"
+msgstr "Dinlenecek bağlantı noktası"
+
+#: ../libphodav/chezdav.c:204
+msgid "Path to export"
+msgstr "Dışa aktarılacak yol"
+
+#: ../libphodav/chezdav.c:205
+msgid "Path to htdigest file"
+msgstr "htdigest dosyasının yolu"
+
+#: ../libphodav/chezdav.c:206
+msgid "Read-only access"
+msgstr "Salt okunur erişim"
+
+#: ../libphodav/chezdav.c:220
+msgid "- simple WebDAV server"
+msgstr "- basit WebDAV sunucusu"
+
+#: ../libphodav/chezdav.c:221
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "Hataları <%s> adresine bildirin"
+
+#: ../libphodav/chezdav.c:228
+#, c-format
+msgid "option parsing failed: %s\n"
+msgstr "seçenek ayrıştırma başarısız oldu: %s\n"
+
+#: ../libphodav/chezdav.c:256
+#, c-format
+msgid "failed to open htdigest: %s\n"
+msgstr "htdigest açılamadı: %s\n"
+
+#: ../libphodav/chezdav.c:275
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS başarısız oldu: %s\n"
+
+#: ../libphodav/chezdav.c:280
+#, c-format
+#| msgid "mDNS failed: %s\n"
+msgid "Listen failed: %s\n"
+msgstr "Dinleme başarısız oldu: %s\n"
