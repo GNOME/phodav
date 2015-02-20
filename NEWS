@@ -1,3 +1,14 @@
+v2.0
+====
+
+- updated to fit with libsoup 2.50 API;
+  make the server not run its own thread, but let the client decide
+  how best to run the Soup server, as a result some API have been
+  removed, and the library is now libphodav-2.0
+- add a read-only mode
+- fixed spice-webdavd service to keep running when client is
+  disconnected
+
 v0.4
 ====
 
