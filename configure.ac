@@ -55,7 +55,7 @@ gl_WARN_ADD([-Wno-sign-compare])
 gl_WARN_ADD([-Wno-unused-parameter])
 gl_WARN_ADD([-Wno-missing-field-initializers])
 
-GETTEXT_PACKAGE=phodav
+GETTEXT_PACKAGE=phodav-2.0
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE, ["$GETTEXT_PACKAGE"], [Define to the Gettext package name])
 AC_SUBST(GETTEXT_PACKAGE)
 IT_PROG_INTLTOOL([0.40.0])
