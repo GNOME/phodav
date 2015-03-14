@@ -1,0 +1,73 @@
+# Bosnian translation for bosnianuniversetranslation
+# Copyright (c) 2014 Rosetta Contributors and Canonical Ltd 2014
+# This file is distributed under the same license as the bosnianuniversetranslation package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2014.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: bosnianuniversetranslation\n"
+"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
+"product=phodav&keywords=I18N+L10N&component=general\n"
+"POT-Creation-Date: 2015-02-26 23:46+0000\n"
+"PO-Revision-Date: 2015-02-27 09:53+0100\n"
+"Last-Translator: Samir Ribic <samir.ribic@etf.unsa.ba>\n"
+"Language-Team: Bosnian <bs@li.org>\n"
+"Language: bs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Launchpad-Export-Date: 2015-02-05 07:34+0000\n"
+"X-Generator: Launchpad (build 17331)\n"
+
+#: ../libphodav/chezdav.c:201
+msgid "Print program version"
+msgstr "Ispiši verziju programa"
+
+#: ../libphodav/chezdav.c:202
+msgid "Be verbose"
+msgstr "Opširniji ispis"
+
+#: ../libphodav/chezdav.c:203
+msgid "Port to listen to"
+msgstr "Port koji se osluškuje"
+
+#: ../libphodav/chezdav.c:204
+msgid "Path to export"
+msgstr "Put za izvoz"
+
+#: ../libphodav/chezdav.c:205
+msgid "Path to htdigest file"
+msgstr "Put do htdigest datoteke"
+
+#: ../libphodav/chezdav.c:206
+msgid "Read-only access"
+msgstr "Pristup samo za čitanje"
+
+#: ../libphodav/chezdav.c:220
+msgid "- simple WebDAV server"
+msgstr "- jednostavni WebDAV server"
+
+#: ../libphodav/chezdav.c:221
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "Prijava bugova na <%s>"
+
+#: ../libphodav/chezdav.c:228
+#, c-format
+msgid "option parsing failed: %s\n"
+msgstr "analiziranje opcija neuspjelo: %s\n"
+
+#: ../libphodav/chezdav.c:256
+#, c-format
+msgid "failed to open htdigest: %s\n"
+msgstr "nije uspio otvoriti htdigest:%s\n"
+
+#: ../libphodav/chezdav.c:275
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS nije uspjelo: %s\n"
+
+#: ../libphodav/chezdav.c:280
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "Osluškivanje nije uspjelo: %s\n"
