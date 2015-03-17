@@ -2,23 +2,23 @@
 # Copyright (C) 2014 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
-# Daniel Mustieles <daniel.mustieles@gmail.com>, 2014.
+# Daniel Mustieles <daniel.mustieles@gmail.com>, 2014, 2015.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2014-01-22 20:32+0000\n"
-"PO-Revision-Date: 2014-01-23 10:51+0100\n"
+"POT-Creation-Date: 2015-02-14 00:53+0000\n"
+"PO-Revision-Date: 2015-03-17 19:37+0100\n"
 "Last-Translator: Daniel Mustieles <daniel.mustieles@gmail.com>\n"
-"Language-Team: Español <gnome-es-list@gnome.org>\n"
+"Language-Team: Español; Castellano <gnome-es-list@gnome.org>\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Plural-Forms: nplurals=2; plural=(n!=1);\n"
-"X-Generator: Gtranslator 2.91.5\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Gtranslator 2.91.6\n"
 
 #: ../libphodav/chezdav.c:201
 msgid "Print program version"
@@ -40,26 +40,36 @@ msgstr "Ruta que exportar"
 msgid "Path to htdigest file"
 msgstr "Ruta al archivo htdigest"
 
-#: ../libphodav/chezdav.c:219
+#: ../libphodav/chezdav.c:206
+msgid "Read-only access"
+msgstr "Acceso de solo lectura"
+
+#: ../libphodav/chezdav.c:220
 msgid "- simple WebDAV server"
 msgstr "- servidor WebDAV sencillo"
 
-#: ../libphodav/chezdav.c:220
+#: ../libphodav/chezdav.c:221
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Informar de errores a <%s>"
 
-#: ../libphodav/chezdav.c:227
+#: ../libphodav/chezdav.c:228
 #, c-format
 msgid "option parsing failed: %s\n"
 msgstr "falló al analizar la opción: %s\n"
 
-#: ../libphodav/chezdav.c:254
+#: ../libphodav/chezdav.c:256
 #, c-format
 msgid "failed to open htdigest: %s\n"
 msgstr "falló al abrir htdigest: %s\n"
 
-#: ../libphodav/chezdav.c:273
+#: ../libphodav/chezdav.c:275
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "falló mDNS: %s\n"
+
+#: ../libphodav/chezdav.c:280
+#, c-format
+#| msgid "mDNS failed: %s\n"
+msgid "Listen failed: %s\n"
+msgstr "Falló al escuchar: %s\n"
