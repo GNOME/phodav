@@ -2,26 +2,27 @@
 # Copyright (C) 2014 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 #
-# Matej Urbančič <mateju@svn.gnome.org>, 2014.
+# Matej Urbančič <mateju@svn.gnome.org>, 2014-2015.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2014-03-21 23:30+0000\n"
-"PO-Revision-Date: 2014-03-21 23:30+0000\n"
+"POT-Creation-Date: 2015-03-24 11:56+0000\n"
+"PO-Revision-Date: 2015-03-24 19:46+0100\n"
 "Last-Translator: Matej Urbančič <mateju@svn.gnome.org>\n"
 "Language-Team: Slovenian GNOME Translation Team <gnome-si@googlegroups.com>\n"
 "Language: sl_SI\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Plural-Forms: nplurals=4; plural=(n%100==1 ? 1 : n%100==2 ? 2 : n%100==3 || n%100==4 ? 3 : 0);\n"
+"Plural-Forms: nplurals=4; plural=(n%100==1 ? 1 : n%100==2 ? 2 : n%100==3 || n"
+"%100==4 ? 3 : 0);\n"
 "X-Poedit-SourceCharset: utf-8\n"
 "X-Generator: Poedit 1.5.4\n"
-#: ../libphodav/chezdav.c:201
 
+#: ../libphodav/chezdav.c:201
 msgid "Print program version"
 msgstr "Izpiši različico programa"
 
@@ -41,26 +42,35 @@ msgstr "Pot za izvoz"
 msgid "Path to htdigest file"
 msgstr "Pot do datoteke htdigest"
 
-#: ../libphodav/chezdav.c:219
+#: ../libphodav/chezdav.c:206
+msgid "Read-only access"
+msgstr "Le za branje"
+
+#: ../libphodav/chezdav.c:220
 msgid "- simple WebDAV server"
 msgstr "- enostaven strežnik WebDAV"
 
-#: ../libphodav/chezdav.c:220
+#: ../libphodav/chezdav.c:221
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Poročila o hroščih pošljite na <%s>"
 
-#: ../libphodav/chezdav.c:227
+#: ../libphodav/chezdav.c:228
 #, c-format
 msgid "option parsing failed: %s\n"
 msgstr "razčlenjevanje možnosti je spodletelo %s\n"
 
-#: ../libphodav/chezdav.c:254
+#: ../libphodav/chezdav.c:256
 #, c-format
 msgid "failed to open htdigest: %s\n"
 msgstr "odpiranje datoteke htdigest je spodletelo %s\n"
 
-#: ../libphodav/chezdav.c:273
+#: ../libphodav/chezdav.c:275
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "izvajanje mDNS je spodletelo %s\n"
+
+#: ../libphodav/chezdav.c:280
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "Poslušanje je spodletelo: %s\n"
