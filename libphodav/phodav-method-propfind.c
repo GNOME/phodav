@@ -65,7 +65,7 @@ prop_resourcetype (PathHandler *handler, PropFind *pf,
 
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
     xmlNewChild (node, ns, BAD_CAST "collection", NULL);
-  else if (!g_file_info_get_file_type (info) == G_FILE_TYPE_REGULAR)
+  else if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR)
   {
     g_warn_if_reached ();
     status = SOUP_STATUS_NOT_FOUND;
