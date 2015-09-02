@@ -10,8 +10,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: phodav\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2015-02-15 18:47+0100\n"
-"PO-Revision-Date: 2015-02-15 18:48+0100\n"
+"POT-Creation-Date: 2015-09-02 02:59+0200\n"
+"PO-Revision-Date: 2015-09-02 03:00+0200\n"
 "Last-Translator: Piotr Drąg <piotrdrag@gmail.com>\n"
 "Language-Team: Polish <gnomepl@aviary.pl>\n"
 "Language: pl\n"
@@ -49,12 +49,12 @@ msgstr "Dostęp tylko do odczytu"
 
 #: ../libphodav/chezdav.c:220
 msgid "- simple WebDAV server"
-msgstr "- prosty serwer WebDAV"
+msgstr "— prosty serwer WebDAV"
 
 #: ../libphodav/chezdav.c:221
 #, c-format
 msgid "Report bugs to <%s>"
-msgstr "Prosimy zgłaszać błędy w <%s>"
+msgstr "Prosimy zgłaszać błędy w <%s> (w języku angielskim)"
 
 #: ../libphodav/chezdav.c:228
 #, c-format
