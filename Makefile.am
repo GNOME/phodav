@@ -135,6 +135,7 @@ chezdav_LDADD =			\
 	libphodav-2.0.la	\
 	$(GLIB_LIBS)		\
 	$(GIO_LIBS)		\
+	$(SOUP_LIBS)		\
 	$(AVAHI_LIBS)		\
 	$(NULL)
 
