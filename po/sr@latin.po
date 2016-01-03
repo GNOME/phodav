@@ -1,14 +1,14 @@
 # Serbian translation for phodav.
 # Copyright (C) 2014 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Miroslav Nikolić <miroslavnikolic@rocketmail.com>, 2014.
+# Miroslav Nikolić <miroslavnikolic@rocketmail.com>, 2014—2016.
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?product=phodav"
-"&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2014-01-26 13:34+0000\n"
-"PO-Revision-Date: 2014-01-29 11:26+0200\n"
+"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?product=phodav&"
+"keywords=I18N+L10N&component=general\n"
+"POT-Creation-Date: 2015-02-14 00:53+0000\n"
+"PO-Revision-Date: 2016-01-03 20:17+0200\n"
 "Last-Translator: Miroslav Nikolić <miroslavnikolic@rocketmail.com>\n"
 "Language-Team: Serbian <gnom@prevod.org>\n"
 "Language: sr\n"
@@ -39,26 +39,36 @@ msgstr "Putanja za izvoz"
 msgid "Path to htdigest file"
 msgstr "Putanja do datoteke „htdigest“"
 
-#: ../libphodav/chezdav.c:219
+#: ../libphodav/chezdav.c:206
+msgid "Read-only access"
+msgstr "Pristup samo za čitanje"
+
+#: ../libphodav/chezdav.c:220
 msgid "- simple WebDAV server"
 msgstr "— jednostavan VebDAV server"
 
-#: ../libphodav/chezdav.c:220
+#: ../libphodav/chezdav.c:221
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Greške prijavite na <%s>"
 
-#: ../libphodav/chezdav.c:227
+#: ../libphodav/chezdav.c:228
 #, c-format
 msgid "option parsing failed: %s\n"
 msgstr "nije uspela obrada opcije: %s\n"
 
-#: ../libphodav/chezdav.c:254
+#: ../libphodav/chezdav.c:256
 #, c-format
 msgid "failed to open htdigest: %s\n"
 msgstr "nisam uspeo da otvorim „htdigest“: %s\n"
 
-#: ../libphodav/chezdav.c:273
+#: ../libphodav/chezdav.c:275
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS nije uspelo: %s\n"
+
+#: ../libphodav/chezdav.c:280
+#, c-format
+#| msgid "mDNS failed: %s\n"
+msgid "Listen failed: %s\n"
+msgstr "Osluškivanje nije uspelo: %s\n"
