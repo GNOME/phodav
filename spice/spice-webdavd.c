@@ -222,6 +222,9 @@ static HANDLE port_handle;
 #endif
 
 static void start_mux_read (GInputStream *istream);
+#ifdef WITH_AVAHI
+static void mdns_unregister_service (void);
+#endif
 
 static void
 quit (int sig)
@@ -614,6 +617,24 @@ end:
 }
 
 static void
+mdns_unregister_service (void)
+{
+  GError *error = NULL;
+
+  if (mdns_group)
+    {
+      if (!ga_entry_group_reset (mdns_group, &error))
+        {
+          g_warning ("Could not disconnect MDNS service: %s", error->message);
+          g_clear_error (&error);
+        }
+
+      mdns_service = 0;
+      g_debug ("MDNS client disconected");
+    }
+}
+
+static void
 mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 {
   switch (state)
@@ -630,11 +651,7 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
     case GA_CLIENT_STATE_S_COLLISION:
     case GA_CLIENT_STATE_S_REGISTERING:
       g_message ("MDNS collision");
-      if (mdns_group)
-        {
-          ga_entry_group_reset (mdns_group, NULL);
-          mdns_service = 0;
-        }
+      mdns_unregister_service ();
       break;
 
     default:
