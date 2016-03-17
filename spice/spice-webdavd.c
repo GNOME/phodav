@@ -563,6 +563,10 @@ incoming_callback (GSocketService    *service,
 
 static int port;
 
+#ifdef G_OS_WIN32
+static gboolean no_service;
+#endif
+
 #ifdef WITH_AVAHI
 static GaClient *mdns_client;
 static GaEntryGroup *mdns_group;
@@ -852,6 +856,11 @@ static GOptionEntry entries[] = {
   { "port", 'p', 0,
     G_OPTION_ARG_INT, &port,
     "Port to listen on", NULL },
+#ifdef G_OS_WIN32
+  { "no-service", 0, 0,
+    G_OPTION_ARG_NONE, &no_service,
+    "Don't start as a service", NULL },
+#endif
   { NULL }
 };
 
@@ -910,7 +919,7 @@ main (int argc, char *argv[])
     {
       { (char *)"spice-webdavd", service_main }, { NULL, NULL }
     };
-  if (!getenv("DEBUG"))
+  if (!no_service && !getenv("DEBUG"))
     {
       if (!StartServiceCtrlDispatcher (service_table))
         {
