@@ -469,6 +469,9 @@ end:
       g_clear_error (&error);
     }
 
+#ifdef WITH_AVAHI
+  mdns_unregister_service ();
+#endif
   quit (-3);
 }
 
