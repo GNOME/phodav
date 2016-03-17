@@ -722,7 +722,9 @@ open_mux_path (const char *path)
                          OPEN_EXISTING,
                          FILE_FLAG_OVERLAPPED,
                          NULL);
-  g_assert (port_handle != INVALID_HANDLE_VALUE);
+
+  if (port_handle == INVALID_HANDLE_VALUE)
+      g_error ("%s", g_win32_error_message (GetLastError ()));
 
   mux_ostream = G_OUTPUT_STREAM (g_win32_output_stream_new (port_handle, TRUE));
   mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (port_handle, TRUE));
