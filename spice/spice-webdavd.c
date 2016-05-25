@@ -737,10 +737,145 @@ open_mux_path (const char *path)
   mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream));
 }
 
+#ifdef G_OS_WIN32
+#define MAX_SHARED_FOLDER_NAME_SIZE 64
+#define MAX_DRIVE_LETTER_SIZE 3
+typedef enum _MapDriveEnum
+{
+  MAP_DRIVE_OK,
+  MAP_DRIVE_TRY_AGAIN,
+  MAP_DRIVE_ERROR
+} MapDriveEnum;
+
+typedef struct _MapDriveData
+{
+  GCancellable *cancel_map;
+} MapDriveData;
+
+static gchar
+get_free_drive_letter(void)
+{
+  const guint32 max_mask = 1 << 25;
+  guint32 drives;
+  gint i;
+
+  drives = GetLogicalDrives ();
+  if (drives == 0)
+    {
+      g_warning ("%s", g_win32_error_message (GetLastError ()));
+      return 0;
+    }
+
+  for (i = 0; i < 26; i++)
+    {
+      guint32 mask = max_mask >> i;
+      if ((drives & mask) == 0)
+        return 'z' - i;
+    }
+
+  return 0;
+}
+
+/* User is required to call netresource_free, when no longer needed. */
+static void
+netresource_init(NETRESOURCE *net_resource, const gchar drive_letter)
+{
+  net_resource->dwType = RESOURCETYPE_DISK;
+  net_resource->lpLocalName = g_strdup_printf("%c:", drive_letter);
+  net_resource->lpRemoteName = g_strdup_printf("http://localhost:%d/", port);
+  net_resource->lpProvider = NULL;
+}
+
+static void
+netresource_free(NETRESOURCE *net_resource)
+{
+  g_free(net_resource->lpLocalName);
+  g_free(net_resource->lpRemoteName);
+}
+
+static MapDriveEnum
+map_drive(const gchar drive_letter)
+{
+  NETRESOURCE net_resource;
+  guint32 errn;
+
+  netresource_init(&net_resource, drive_letter);
+  errn = WNetAddConnection2 (&net_resource, NULL, NULL, CONNECT_TEMPORARY);
+  netresource_free(&net_resource);
+
+  if (errn == NO_ERROR)
+    {
+      g_debug ("Shared folder mapped to %c succesfully", drive_letter);
+      return MAP_DRIVE_OK;
+    }
+  else if (errn == ERROR_ALREADY_ASSIGNED)
+    {
+      g_debug ("Drive letter %c is already assigned", drive_letter);
+      return MAP_DRIVE_TRY_AGAIN;
+    }
+
+  g_warning ("map_drive error %d", errn);
+  return MAP_DRIVE_ERROR;
+}
+
+static void
+map_drive_cb(GTask *task,
+             gpointer source_object,
+             gpointer task_data,
+             GCancellable *cancellable)
+{
+  const guint32 delay = 500; //half a second
+  MapDriveData *map_drive_data = task_data;
+  gchar drive_letter;
+  GPollFD cancel_pollfd;
+  guint32 ret = 0;
+
+  if (!g_cancellable_make_pollfd (map_drive_data->cancel_map, &cancel_pollfd))
+    {
+      g_critical ("GPollFD failed to create.");
+      return;
+    }
+
+  ret = g_poll (&cancel_pollfd, 1, delay);
+  g_cancellable_release_fd (map_drive_data->cancel_map);
+
+  if (ret != 0)
+    {
+      return;
+    }
+
+  while (TRUE)
+    {
+      drive_letter = get_free_drive_letter ();
+      if (drive_letter == 0)
+        {
+          g_warning ("all drive letters already assigned.");
+          break;
+        }
+
+      if (map_drive (drive_letter) != MAP_DRIVE_TRY_AGAIN)
+        {
+          break;
+        }
+      //TODO: After mapping, rename network drive from \\localhost@PORT\DavWWWRoot
+      //      to something like SPICE Shared Folder
+    }
+}
+#endif
+
 static void
 run_service (void)
 {
   g_debug ("Run service");
+
+#ifdef G_OS_WIN32
+  MapDriveData map_drive_data;
+  map_drive_data.cancel_map = g_cancellable_new ();
+  GTask *map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
+  g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
+  g_task_run_in_thread (map_drive_task, map_drive_cb);
+  g_object_unref (map_drive_task);
+#endif
 
   g_socket_service_start (socket_service);
 
@@ -774,6 +909,11 @@ run_service (void)
   start_mux_read (mux_istream);
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
+
+#ifdef G_OS_WIN32
+  g_cancellable_cancel (map_drive_data.cancel_map);
+  g_object_unref (map_drive_data.cancel_map);
+#endif
 
   g_cancellable_cancel (cancel);
 

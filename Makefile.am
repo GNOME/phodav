@@ -87,6 +87,10 @@ spice_webdavd_LDADD =		\
 	$(PIE_LDFLAGS)		\
 	$(NULL)
 
+if OS_WIN32
+spice_webdavd_LDADD += -lnetapi32 -lmpr
+endif
+
 deps.txt:
 	$(AM_V_GEN)rpm -qa | grep $(host_os) | sort | unix2dos > $@
 
