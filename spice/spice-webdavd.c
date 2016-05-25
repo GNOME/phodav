@@ -776,6 +776,42 @@ get_free_drive_letter(void)
   return 0;
 }
 
+static gchar
+get_spice_folder_letter(void)
+{
+  const guint32 max_mask = 1 << 25;
+  gchar local_name[3] = "z:";
+  gchar *spice_folder_name;
+  gchar spice_folder_letter = 0;
+  guint32 drives;
+  guint32 i;
+
+  drives = GetLogicalDrives ();
+  spice_folder_name = g_strdup_printf("\\\\localhost@%d\\DavWWWRoot", port);
+
+  for (i = 0; i < 26; i++)
+    {
+      gchar remote_name[MAX_SHARED_FOLDER_NAME_SIZE];
+      guint32 size = sizeof(remote_name);
+      guint32 mask = max_mask >> i;
+      if (drives & mask)
+        {
+          local_name[0] = 'z' - i;
+          if ((WNetGetConnection (local_name, remote_name, (LPDWORD)&size) == NO_ERROR) &&
+              (g_strcmp0 (remote_name, spice_folder_name) == 0))
+            {
+              spice_folder_letter = local_name[0];
+              g_debug ("Found Spice Shared Folder at %c drive", spice_folder_letter);
+              break;
+            }
+        }
+    }
+
+  g_free(spice_folder_name);
+
+  return spice_folder_letter;
+}
+
 /* User is required to call netresource_free, when no longer needed. */
 static void
 netresource_init(NETRESOURCE *net_resource, const gchar drive_letter)
@@ -871,10 +907,15 @@ run_service (void)
 #ifdef G_OS_WIN32
   MapDriveData map_drive_data;
   map_drive_data.cancel_map = g_cancellable_new ();
-  GTask *map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
-  g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
-  g_task_run_in_thread (map_drive_task, map_drive_cb);
-  g_object_unref (map_drive_task);
+  gchar drive_letter = get_spice_folder_letter ();
+
+  if (drive_letter == 0)
+    {
+      GTask *map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
+      g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
+      g_task_run_in_thread (map_drive_task, map_drive_cb);
+      g_object_unref (map_drive_task);
+    }
 #endif
 
   g_socket_service_start (socket_service);
