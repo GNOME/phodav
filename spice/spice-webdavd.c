@@ -57,6 +57,14 @@ typedef struct _OutputQueueElem
   gpointer      user_data;
 } OutputQueueElem;
 
+typedef struct _ServiceData
+{
+#ifdef G_OS_WIN32
+  gchar drive_letter;
+  GMutex mutex;
+#endif
+} ServiceData;
+
 static GCancellable *cancel;
 
 static OutputQueue*
@@ -749,6 +757,7 @@ typedef enum _MapDriveEnum
 
 typedef struct _MapDriveData
 {
+  ServiceData *service_data;
   GCancellable *cancel_map;
 } MapDriveData;
 
@@ -855,6 +864,33 @@ map_drive(const gchar drive_letter)
 }
 
 static void
+unmap_drive(ServiceData *service_data)
+{
+  gchar local_name[MAX_DRIVE_LETTER_SIZE];
+  guint32 errn;
+
+  g_mutex_lock(&service_data->mutex);
+  g_snprintf(local_name, MAX_DRIVE_LETTER_SIZE, "%c:", service_data->drive_letter);
+  errn = WNetCancelConnection2(local_name, CONNECT_UPDATE_PROFILE, TRUE);
+
+  if (errn == NO_ERROR)
+    {
+      g_debug ("Shared folder unmapped succesfully");
+    }
+  else if (errn == ERROR_NOT_CONNECTED)
+    {
+      g_debug ("Drive %c is not connected", service_data->drive_letter);
+    }
+  else
+    {
+      g_warning ("map_drive error %d", errn);
+    }
+
+  g_mutex_unlock(&service_data->mutex);
+  return;
+}
+
+static void
 map_drive_cb(GTask *task,
              gpointer source_object,
              gpointer task_data,
@@ -896,11 +932,16 @@ map_drive_cb(GTask *task,
       //TODO: After mapping, rename network drive from \\localhost@PORT\DavWWWRoot
       //      to something like SPICE Shared Folder
     }
+
+  g_mutex_lock(&map_drive_data->service_data->mutex);
+  map_drive_data->service_data->drive_letter = drive_letter;
+  g_mutex_unlock(&map_drive_data->service_data->mutex);
 }
+
 #endif
 
 static void
-run_service (void)
+run_service (ServiceData *service_data)
 {
   g_debug ("Run service");
 
@@ -908,6 +949,11 @@ run_service (void)
   MapDriveData map_drive_data;
   map_drive_data.cancel_map = g_cancellable_new ();
   gchar drive_letter = get_spice_folder_letter ();
+
+  g_mutex_lock(&service_data->mutex);
+  service_data->drive_letter = drive_letter;
+  map_drive_data.service_data = service_data;
+  g_mutex_unlock(&service_data->mutex);
 
   if (drive_letter == 0)
     {
@@ -990,10 +1036,17 @@ service_ctrl_handler (DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx)
 {
   DWORD ret = NO_ERROR;
 
+  ServiceData *service_data = ctx;
+
   switch (ctrl)
     {
     case SERVICE_CONTROL_STOP:
     case SERVICE_CONTROL_SHUTDOWN:
+        if (service_data->drive_letter != 0)
+          {
+            unmap_drive (service_data);
+            g_mutex_clear(&service_data->mutex);
+          }
         quit (SIGTERM);
         service_status.dwCurrentState = SERVICE_STOP_PENDING;
         SetServiceStatus (service_status_handle, &service_status);
@@ -1009,8 +1062,13 @@ service_ctrl_handler (DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx)
 VOID WINAPI
 service_main (DWORD argc, TCHAR *argv[])
 {
+  ServiceData service_data;
+
+  service_data.drive_letter = 0;
+  g_mutex_init(&service_data.mutex);
+
   service_status_handle =
-    RegisterServiceCtrlHandlerEx ("spice-webdavd", service_ctrl_handler, NULL);
+    RegisterServiceCtrlHandlerEx ("spice-webdavd", service_ctrl_handler, &service_data);
 
   g_return_if_fail (service_status_handle != 0);
 
@@ -1024,7 +1082,7 @@ service_main (DWORD argc, TCHAR *argv[])
   SetServiceStatus (service_status_handle, &service_status);
 
   while (!quit_service) {
-      run_service ();
+      run_service (&service_data);
       g_usleep (G_USEC_PER_SEC);
   }
 
@@ -1048,6 +1106,7 @@ static GOptionEntry entries[] = {
 int
 main (int argc, char *argv[])
 {
+  ServiceData service_data;
   GOptionContext *opts;
   GError *error = NULL;
 
@@ -1095,6 +1154,9 @@ main (int argc, char *argv[])
                     "incoming", G_CALLBACK (incoming_callback),
                     NULL);
 
+  service_data.drive_letter = 0;
+  g_mutex_init(&service_data.mutex);
+
 #ifdef G_OS_WIN32
   SERVICE_TABLE_ENTRY service_table[] =
     {
@@ -1110,9 +1172,17 @@ main (int argc, char *argv[])
     } else
 #endif
   while (!quit_service) {
-    run_service ();
+    run_service (&service_data);
     g_usleep (G_USEC_PER_SEC);
   }
+
+#ifdef G_OS_WIN32
+  if (service_data.drive_letter != 0)
+    {
+      unmap_drive (&service_data);
+      g_mutex_clear(&service_data.mutex);
+    }
+#endif
 
   g_clear_object (&socket_service);
 
