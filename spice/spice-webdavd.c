@@ -1154,10 +1154,10 @@ main (int argc, char *argv[])
                     "incoming", G_CALLBACK (incoming_callback),
                     NULL);
 
+#ifdef G_OS_WIN32
   service_data.drive_letter = 0;
   g_mutex_init(&service_data.mutex);
 
-#ifdef G_OS_WIN32
   SERVICE_TABLE_ENTRY service_table[] =
     {
       { (char *)"spice-webdavd", service_main }, { NULL, NULL }
