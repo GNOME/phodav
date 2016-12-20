@@ -1,3 +1,14 @@
+v2.1
+====
+
+- spice-webdavd updates: (Lukas Venhoda)
+  - win32: auto-mount shared folder
+  - win32: adds --no-service argument (now needs both --no-server and DEBUG env)
+  - mdns: hide client folder when sharing is disabled
+  - more error handling
+- translations updates
+- various build fixes
+
 v2.0
 ====
 
