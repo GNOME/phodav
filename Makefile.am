@@ -171,6 +171,11 @@ EXTRA_DIST +=					\
 
 AM_DISTCHECK_CONFIGURE_FLAGS = --enable-gtk-doc
 
+DISTCLEANFILES = 	\
+	gtk-doc.make    \
+	m4/gtk-doc.m4   \
+	m4/intltool.m4
+
 MAINTAINERCLEANFILES =					\
 	$(srcdir)/gtk-doc.make				\
 	$(GITIGNORE_MAINTAINERCLEANFILES_TOPLEVEL)	\
