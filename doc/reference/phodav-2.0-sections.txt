@@ -1,0 +1,16 @@
+<SECTION>
+<FILE>phodav-server</FILE>
+phodav_server_new
+phodav_server_get_soup_server
+<SUBSECTION Standard>
+PHODAV_IS_SERVER
+PHODAV_IS_SERVER_CLASS
+PHODAV_SERVER
+PHODAV_SERVER_CLASS
+PHODAV_SERVER_GET_CLASS
+PHODAV_TYPE_SERVER
+PhodavServer
+PhodavServerClass
+phodav_server_get_type
+</SECTION>
+
