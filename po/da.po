@@ -1,22 +1,24 @@
 # Danish translation for phodav.
-# Copyright (C) 2014 phodav's COPYRIGHT HOLDER
+# Copyright (C) 2017 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 # Nikolaj64 <nikolajholmquist@gmail.com>, 2014.
+# Alan Mortensen <alanmortensen.am@gmail.com>, 2017.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2015-02-14 00:53+0000\n"
-"PO-Revision-Date: 2015-09-21 18:20+0200\n"
-"Last-Translator: Nikolaj Holmquist Pedersen <nikolajholmquist@gmail.com>\n"
+"POT-Creation-Date: 2015-09-21 16:20+0000\n"
+"PO-Revision-Date: 2017-01-14 12:36+0100\n"
+"Last-Translator: Alan Mortensen <alanmortensen.am@gmail.com>\n"
 "Language-Team: Danish <dansk@dansk-gruppen.dk>\n"
 "Language: da\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Poedit 1.8.7.1\n"
 
 #: ../libphodav/chezdav.c:201
 msgid "Print program version"
@@ -40,7 +42,7 @@ msgstr "Sti til htdigest-fil"
 
 #: ../libphodav/chezdav.c:206
 msgid "Read-only access"
-msgstr ""
+msgstr "Skrivebeskyttet adgang"
 
 #: ../libphodav/chezdav.c:220
 msgid "- simple WebDAV server"
@@ -69,4 +71,4 @@ msgstr "mDNS mislykkedes: %s\n"
 #: ../libphodav/chezdav.c:280
 #, c-format
 msgid "Listen failed: %s\n"
-msgstr ""
+msgstr "Lytte mislykkedes: %s\n"
