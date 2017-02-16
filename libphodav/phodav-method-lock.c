@@ -203,7 +203,7 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
   g_debug ("lock depth:%d scope:%d type:%d owner:%p, timeout: %u",
            depth, scope, type, owner, timeout);
 
-  uuid = g_uuid_random ();
+  uuid = g_uuid_string_random ();
   token = g_strdup_printf ("urn:uuid:%s", uuid);
   ltoken = g_strdup_printf ("<%s>", token);
   soup_message_headers_append (msg->response_headers, "Lock-Token", ltoken);

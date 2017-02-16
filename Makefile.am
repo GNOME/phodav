@@ -26,8 +26,6 @@ libphodav_include_HEADERS =			\
 	$(NULL)
 
 libphodav_2_0_la_SOURCES =			\
-	libphodav/guuid.c			\
-	libphodav/guuid.h			\
 	libphodav/phodav-priv.h			\
 	libphodav/phodav-path.c			\
 	libphodav/phodav-path.h			\
@@ -50,6 +48,13 @@ libphodav_2_0_la_SOURCES =			\
 	libphodav/phodav-utils.c		\
 	libphodav/phodav-utils.h		\
 	$(NULL)
+
+if BUILD_GUUID
+libphodav_2_0_la_SOURCES +=			\
+	libphodav/guuid.c			\
+	libphodav/guuid.h			\
+	$(NULL)
+endif
 
 libphodav_2_0_la_CFLAGS =			\
 	$(GIO_CFLAGS)				\

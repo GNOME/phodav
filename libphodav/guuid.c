@@ -45,7 +45,7 @@
  *
  * There are different mechanisms to generate UUIDs. The UUID
  * specification defines 5 versions. If all you want is a unique ID,
- * you should probably call g_uuid_random() or g_uuid_generate4(),
+ * you should probably call g_uuid_string_random() or g_uuid_generate4(),
  * which is the version 4.
  *
  * If you want to generate UUID based on a name within a namespace
@@ -338,7 +338,7 @@ g_uuid_generate4 (GUuid *uuid)
 }
 
 /**
- * g_uuid_random:
+ * g_uuid_string_random:
  *
  * Generates a random UUID (RFC 4122 version 4) as a string.
  *
@@ -346,7 +346,7 @@ g_uuid_generate4 (GUuid *uuid)
  * Since: 2.40
  **/
 gchar *
-g_uuid_random (void)
+g_uuid_string_random (void)
 {
   GUuid uuid;
 

@@ -77,7 +77,7 @@ gboolean      g_uuid_from_string           (const gchar   *str,
                                             gssize         len,
                                             GUuid         *uuid);
 
-gchar *       g_uuid_random                (void);
+gchar *       g_uuid_string_random         (void);
 void          g_uuid_generate4             (GUuid         *uuid);
 
 const GUuid * g_uuid_get_namespace         (GUuidNamespace namespace);

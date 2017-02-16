@@ -65,6 +65,12 @@ AC_CHECK_HEADERS([attr/xattr.h])
 PKG_CHECK_MODULES(GIO, [$gio_os])
 PKG_CHECK_MODULES(SOUP, libsoup-2.4 >= 2.48.0 libxml-2.0)
 
+# GLib's GUuid was introduce in GLib 2.51
+# https://bugzilla.gnome.org/show_bug.cgi?id=639078
+# do not build our version of it conditionally 
+PKG_CHECK_EXISTS([glib-2.0 > 2.51], [build_guuid=no], [build_guuid=yes])
+AM_CONDITIONAL(BUILD_GUUID, [test "x$build_guuid" = "xyes"])
+
 AC_ARG_WITH([avahi],
   AS_HELP_STRING([--without-avahi], [Build without avahi/mdns]))
 
