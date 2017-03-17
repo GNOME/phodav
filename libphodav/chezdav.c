@@ -41,6 +41,8 @@ static PhodavServer *dav;
 static gint verbose;
 static gint readonly;
 static gint port = 8080;
+static gint local = 0;
+static gint public = 0;
 
 G_GNUC_PRINTF (1, 2) static void
 my_error (const gchar *format, ...)
@@ -201,6 +203,8 @@ main (int argc, char *argv[])
     { "version", 0, 0, G_OPTION_ARG_NONE, &version, N_ ("Print program version"), NULL },
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, N_ ("Be verbose"), NULL },
     { "port", 'p', 0, G_OPTION_ARG_INT, &port, N_ ("Port to listen to"), NULL },
+    { "local", 0, 0, G_OPTION_ARG_NONE, &local, N_ ("listen on loopback only"), NULL },
+    { "public", 0, 0, G_OPTION_ARG_NONE, &public, N_ ("listen on all interfaces"), NULL },
     { "path", 'P', 0, G_OPTION_ARG_FILENAME, &path, N_ ("Path to export"), NULL },
     { "htdigest", 'd', 0, G_OPTION_ARG_FILENAME, &htdigest, N_ ("Path to htdigest file"), NULL },
     { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
@@ -228,11 +232,20 @@ main (int argc, char *argv[])
     my_error (_ ("option parsing failed: %s\n"), error->message);
   g_option_context_free (context);
 
+  if (argc != 1)
+    my_error (_ ("unsupported extra arguments: %s ...\n"), argv[1]);
+
   if (version)
     {
       g_printf (PACKAGE_STRING "\n");
       return 0;
     }
+
+  if (local && public)
+    my_error (_ ("--local and --public are mutually exclusive\n"));
+
+  if (!local && !public)
+    public = 1; // default
 
   if (!path)
       path = g_get_home_dir ();
@@ -276,7 +289,16 @@ main (int argc, char *argv[])
 #endif
 
   SoupServer *server = phodav_server_get_soup_server (dav);
-  if (!soup_server_listen_local (server, port, 0, &error)) {
+
+  int res;
+  if (local)
+    res = soup_server_listen_local (server, port, 0, &error);
+  else if (public)
+    res = soup_server_listen_all (server, port, 0, &error);
+  else
+    my_error (_ ("internal error, should not happen\n"));
+
+  if (!res) {
     my_error (_ ("Listen failed: %s\n"), error->message);
   }
 
