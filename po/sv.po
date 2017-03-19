@@ -6,68 +6,89 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
+"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2015-04-17 11:32+0000\n"
-"PO-Revision-Date: 2015-05-09 13:03+0100\n"
+"POT-Creation-Date: 2017-03-19 15:41+0000\n"
+"PO-Revision-Date: 2017-03-19 20:59+0100\n"
+"Last-Translator: Josef Andersson <l10nl18nsweja@gmail.com>\n"
 "Language-Team: Swedish <tp-sv@listor.tp-sv.se>\n"
 "Language: sv\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"Last-Translator: Anders Jonsson <anders.jonsson@norsjovallen.se>\n"
-"X-Generator: Poedit 1.7.6\n"
+"X-Generator: Poedit 1.8.11\n"
 
-#: ../libphodav/chezdav.c:201
+#: ../libphodav/chezdav.c:203
 msgid "Print program version"
 msgstr "Skriv ut version på programmet"
 
-#: ../libphodav/chezdav.c:202
+#: ../libphodav/chezdav.c:204
 msgid "Be verbose"
 msgstr "Var informativ"
 
-#: ../libphodav/chezdav.c:203
+#: ../libphodav/chezdav.c:205
 msgid "Port to listen to"
 msgstr "Port att lyssna på"
 
-#: ../libphodav/chezdav.c:204
+#: ../libphodav/chezdav.c:206
+msgid "Listen on loopback only"
+msgstr "Lyssna endast på loopback"
+
+#: ../libphodav/chezdav.c:207
+msgid "Listen on all interfaces"
+msgstr "Lyssna på alla gränssnitt"
+
+#: ../libphodav/chezdav.c:208
 msgid "Path to export"
 msgstr "Sökväg att exportera"
 
-#: ../libphodav/chezdav.c:205
+#: ../libphodav/chezdav.c:209
 msgid "Path to htdigest file"
 msgstr "Sökväg till htdigest-fil"
 
-#: ../libphodav/chezdav.c:206
+#: ../libphodav/chezdav.c:210
 msgid "Read-only access"
 msgstr "Skrivskyddad åtkomst"
 
-#: ../libphodav/chezdav.c:220
+#: ../libphodav/chezdav.c:224
 msgid "- simple WebDAV server"
 msgstr "- enkel WebDAV-server"
 
-#: ../libphodav/chezdav.c:221
+#: ../libphodav/chezdav.c:225
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Rapportera fel till <%s>"
 
-#: ../libphodav/chezdav.c:228
+#: ../libphodav/chezdav.c:232
 #, c-format
-msgid "option parsing failed: %s\n"
-msgstr "tolkande av flaggor misslyckades: %s\n"
+msgid "Option parsing failed: %s\n"
+msgstr "Tolkande av flaggor misslyckades: %s\n"
 
-#: ../libphodav/chezdav.c:256
+#: ../libphodav/chezdav.c:236
 #, c-format
-msgid "failed to open htdigest: %s\n"
-msgstr "kunde inte öppna htdigest: %s\n"
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr "Extra argument som ej stöds: %s …\n"
 
-#: ../libphodav/chezdav.c:275
+#: ../libphodav/chezdav.c:245
+msgid "--local and --public are mutually exclusive\n"
+msgstr "--local and --public är ömsesidigt uteslutande\n"
+
+#: ../libphodav/chezdav.c:269
+#, c-format
+msgid "Failed to open htdigest: %s\n"
+msgstr "Misslyckades med att öppna htdigest: %s\n"
+
+#: ../libphodav/chezdav.c:288
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS misslyckades: %s\n"
 
-#: ../libphodav/chezdav.c:280
+#: ../libphodav/chezdav.c:299
+msgid "Internal error, should not happen\n"
+msgstr "Internt fel, bör inte inträffa\n"
+
+#: ../libphodav/chezdav.c:302
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Misslyckades med att lyssna: %s\n"
