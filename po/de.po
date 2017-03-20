@@ -8,9 +8,10 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2017-03-19 08:35+0000\n"
-"PO-Revision-Date: 2017-03-19 12:29+0100\n"
+"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?"
+"product=phodav&keywords=I18N+L10N&component=general\n"
+"POT-Creation-Date: 2017-03-19 15:41+0000\n"
+"PO-Revision-Date: 2017-03-20 18:28+0100\n"
 "Last-Translator: Mario Blättermann <mario.blaettermann@gmail.com>\n"
 "Language-Team: German <gnome-de@gnome.org>\n"
 "Language: de\n"
@@ -33,11 +34,11 @@ msgid "Port to listen to"
 msgstr "Zu überwachender Port"
 
 #: ../libphodav/chezdav.c:206
-msgid "listen on loopback only"
+msgid "Listen on loopback only"
 msgstr "Nur Loopback-Schnittstelle überwachen"
 
 #: ../libphodav/chezdav.c:207
-msgid "listen on all interfaces"
+msgid "Listen on all interfaces"
 msgstr "Alle Schnittstellen überwachen"
 
 #: ../libphodav/chezdav.c:208
@@ -63,12 +64,12 @@ msgstr "Melden Sie Fehler an <%s>"
 
 #: ../libphodav/chezdav.c:232
 #, c-format
-msgid "option parsing failed: %s\n"
+msgid "Option parsing failed: %s\n"
 msgstr "Verarbeiten der Optionen fehlgeschlagen: %s\n"
 
 #: ../libphodav/chezdav.c:236
 #, c-format
-msgid "unsupported extra arguments: %s ...\n"
+msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nicht unterstützte zusätzliche Argumente: %s …\n"
 
 #: ../libphodav/chezdav.c:245
@@ -77,7 +78,7 @@ msgstr "--local und --public schließen sich gegenseitig aus\n"
 
 #: ../libphodav/chezdav.c:269
 #, c-format
-msgid "failed to open htdigest: %s\n"
+msgid "Failed to open htdigest: %s\n"
 msgstr "»htdigest« konnte nicht geöffnet werden: %s\n"
 
 #: ../libphodav/chezdav.c:288
@@ -86,8 +87,8 @@ msgid "mDNS failed: %s\n"
 msgstr "mDNS fehlgeschlagen: %s\n"
 
 #: ../libphodav/chezdav.c:299
-msgid "internal error, should not happen\n"
-msgstr "interner Fehler, sollte eigentlich nicht passieren\n"
+msgid "Internal error, should not happen\n"
+msgstr "Interner Fehler, sollte eigentlich nicht passieren\n"
 
 #: ../libphodav/chezdav.c:302
 #, c-format
