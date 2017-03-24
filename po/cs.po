@@ -68,7 +68,7 @@ msgstr "Selhalo zpracování přepínače: %s\n"
 #: ../libphodav/chezdav.c:236
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
-msgstr "Nepodporovaný dodatečný argument: %s …"
+msgstr "Nepodporovaný dodatečný argument: %s …\n"
 
 #: ../libphodav/chezdav.c:245
 msgid "--local and --public are mutually exclusive\n"
