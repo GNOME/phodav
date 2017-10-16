@@ -2,7 +2,7 @@
 # Copyright (C) 2014 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 #
-# Matej Urbančič <mateju@svn.gnome.org>, 2014–2017.
+# Matej Urbančič <mateju@svn.gnome.org>, + 2014–2017.
 #
 msgid ""
 msgstr ""
@@ -10,7 +10,7 @@ msgstr ""
 "Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?"
 "product=phodav&keywords=I18N+L10N&component=general\n"
 "POT-Creation-Date: 2017-05-09 16:49+0200\n"
-"PO-Revision-Date: 2017-05-09 16:52+0200\n"
+"PO-Revision-Date: 2017-10-15 20:44+0200\n"
 "Last-Translator: Matej Urbančič <mateju@svn.gnome.org>\n"
 "Language-Team: Slovenian GNOME Translation Team <gnome-si@googlegroups.com>\n"
 "Language: sl_SI\n"
@@ -20,7 +20,7 @@ msgstr ""
 "Plural-Forms: nplurals=4; plural=(n%100==1 ? 1 : n%100==2 ? 2 : n%100==3 || n"
 "%100==4 ? 3 : 0);\n"
 "X-Poedit-SourceCharset: utf-8\n"
-"X-Generator: Poedit 2.0.1\n"
+"X-Generator: Poedit 2.0.4\n"
 
 #: ../libphodav/chezdav.c:203
 msgid "Print program version"
@@ -56,7 +56,7 @@ msgstr "Le za branje"
 
 #: ../libphodav/chezdav.c:224
 msgid "- simple WebDAV server"
-msgstr "- enostaven strežnik WebDAV"
+msgstr "– enostaven strežnik WebDAV"
 
 #: ../libphodav/chezdav.c:225
 #, c-format
@@ -80,18 +80,18 @@ msgstr "--local in --public sta nezdružljiva parametra\n"
 #: ../libphodav/chezdav.c:269
 #, c-format
 msgid "Failed to open htdigest: %s\n"
-msgstr "Napaka med odpiranjem htdigest: %s\n"
+msgstr "Odpiranje htdigest je spodletelo: %s\n"
 
 #: ../libphodav/chezdav.c:288
 #, c-format
 msgid "mDNS failed: %s\n"
-msgstr "izvajanje mDNS je spodletelo %s\n"
+msgstr "Izvajanje mDNS je spodletelo %s\n"
 
 #: ../libphodav/chezdav.c:299
 msgid "Internal error, should not happen\n"
-msgstr "Notranja napaka, ki se ne bi smela zgoditi\n"
+msgstr "Prišlo je do notranje napake, ki se ne bi smela zgoditi!\n"
 
 #: ../libphodav/chezdav.c:302
 #, c-format
 msgid "Listen failed: %s\n"
-msgstr "Poslušanje je spodletelo: %s\n"
+msgstr "Prisluh je spodletel: %s\n"
