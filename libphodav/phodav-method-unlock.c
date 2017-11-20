@@ -47,11 +47,15 @@ phodav_method_unlock (PathHandler *handler, SoupMessage *msg,
 
   lock = server_path_get_lock (handler_get_server (handler), path, token);
   if (!lock)
-    return SOUP_STATUS_CONFLICT;
+    {
+      status = SOUP_STATUS_CONFLICT;
+      goto end;
+    }
 
   dav_lock_free (lock);
   status = SOUP_STATUS_NO_CONTENT;
 
+end:
   g_free (token);
   return status;
 }
