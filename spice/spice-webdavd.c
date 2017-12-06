@@ -1133,7 +1133,7 @@ main (int argc, char *argv[])
      windows, and it can't accept new connections if cleanup and
      restart a new service */
   socket_service = g_socket_service_new ();
-  GInetAddress *iaddr = g_inet_address_new_any (G_SOCKET_FAMILY_IPV4);
+  GInetAddress *iaddr = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
   GSocketAddress *saddr = g_inet_socket_address_new (iaddr, port);
   g_object_unref (iaddr);
 
