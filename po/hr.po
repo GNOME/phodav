@@ -1,0 +1,95 @@
+# Croatian translation for phodav.
+# Copyright (C) 2018 phodav's COPYRIGHT HOLDER
+# This file is distributed under the same license as the phodav package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: phodav master\n"
+"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?"
+"product=phodav&keywords=I18N+L10N&component=general\n"
+"POT-Creation-Date: 2017-12-06 11:15+0000\n"
+"PO-Revision-Date: 2018-03-27 22:06+0200\n"
+"Language-Team: Croatian <hr@li.org>\n"
+"Language: hr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n"
+"%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+"Last-Translator: \n"
+"X-Generator: Poedit 2.0.6\n"
+
+#: ../libphodav/chezdav.c:203
+msgid "Print program version"
+msgstr "Prikaži inačicu programa"
+
+#: ../libphodav/chezdav.c:204
+msgid "Be verbose"
+msgstr "Opširnije"
+
+#: ../libphodav/chezdav.c:205
+msgid "Port to listen to"
+msgstr "Ulaz za osluškivanje"
+
+#: ../libphodav/chezdav.c:206
+msgid "Listen on loopback only"
+msgstr "Osluškuj na loopback samo"
+
+#: ../libphodav/chezdav.c:207
+msgid "Listen on all interfaces"
+msgstr "Osluškuj na svim sučeljima"
+
+#: ../libphodav/chezdav.c:208
+msgid "Path to export"
+msgstr "Putanja za izvoz"
+
+#: ../libphodav/chezdav.c:209
+msgid "Path to htdigest file"
+msgstr "Putanja do htdigest datoteke"
+
+#: ../libphodav/chezdav.c:210
+msgid "Read-only access"
+msgstr "Pristup samo-za-čitanje"
+
+#: ../libphodav/chezdav.c:224
+msgid "- simple WebDAV server"
+msgstr "- jednostavan WebDAV poslužitelj"
+
+#: ../libphodav/chezdav.c:225
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "Prijavi greške na <%s>"
+
+#: ../libphodav/chezdav.c:232
+#, c-format
+msgid "Option parsing failed: %s\n"
+msgstr "Neuspjela mogućnost obrade: %s\n"
+
+#: ../libphodav/chezdav.c:236
+#, c-format
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr "Nepodržani dodatni argumenti: %s ...\n"
+
+#: ../libphodav/chezdav.c:245
+msgid "--local and --public are mutually exclusive\n"
+msgstr "--local i --public međusobno se isključuju\n"
+
+#: ../libphodav/chezdav.c:269
+#, c-format
+msgid "Failed to open htdigest: %s\n"
+msgstr "Neuspjelo otvaranje htdigest: %s\n"
+
+#: ../libphodav/chezdav.c:288
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS neuspjelo: %s\n"
+
+#: ../libphodav/chezdav.c:299
+msgid "Internal error, should not happen\n"
+msgstr "Unutrašnja greška, ne bi se trebala događati\n"
+
+#: ../libphodav/chezdav.c:302
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr ""
