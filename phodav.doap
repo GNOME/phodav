@@ -13,7 +13,7 @@
   <homepage rdf:resource="https://wiki.gnome.org/phodav" />
   <mailing-list rdf:resource="http://lists.freedesktop.org/mailman/listinfo/spice-devel" />
   <download-page rdf:resource="http://download.gnome.org/sources/phodav/" />
-  <bug-database rdf:resource="https://bugzilla.gnome.org/browse.cgi?product=phodav" />
+  <bug-database rdf:resource="https://gitlab.gnome.org/GNOME/phodav/issues/" />
 
   <maintainer>
     <foaf:Person>
