@@ -104,7 +104,6 @@ AC_DEFUN([gl_MANYWARN_ALL_GCC],
   gl_manywarn_set=
   for gl_manywarn_item in \
     -W \
-    -Wabi \
     -Waddress \
     -Waggressive-loop-optimizations \
     -Wall \
