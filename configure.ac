@@ -1,11 +1,12 @@
 AC_PREREQ([2.59])
 AC_INIT([phodav], [m4_esyscmd(build-aux/git-version-gen .tarball-version)],
-                  [https://bugzilla.gnome.org/enter_bug.cgi?product=phodav])
+                  [https://gitlab.gnome.org/GNOME/phodav/issues/new])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CANONICAL_HOST
 AC_PROG_CC
+AC_USE_SYSTEM_EXTENSIONS
 
 AC_CHECK_PROG([STOW], [stow], [yes], [no])
 AS_IF([test "x$STOW" = "xyes" && test -d /usr/local/stow], [
@@ -58,7 +59,8 @@ gl_WARN_ADD([-Wno-missing-field-initializers])
 GETTEXT_PACKAGE=phodav-2.0
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE, ["$GETTEXT_PACKAGE"], [Define to the Gettext package name])
 AC_SUBST(GETTEXT_PACKAGE)
-IT_PROG_INTLTOOL([0.40.0])
+AM_GNU_GETTEXT_VERSION([0.19.7])
+AM_GNU_GETTEXT([external])
 
 AC_CHECK_HEADERS([attr/xattr.h])
 
