@@ -292,35 +292,39 @@ typedef struct ReadData
 {
   void  *buffer;
   gsize  count;
-  gssize size;
 } ReadData;
 
 static void
-read_thread (GSimpleAsyncResult *simple,
-             GObject            *object,
-             GCancellable       *cancellable)
+read_thread (GTask *task,
+             gpointer source_object,
+             gpointer task_data,
+             GCancellable *cancellable)
 {
   GError *error = NULL;
-  GInputStream *stream = G_INPUT_STREAM (object);
+  GInputStream *stream = G_INPUT_STREAM (source_object);
   ReadData *data;
   gsize bread;
 
-  data = g_simple_async_result_get_op_res_gpointer (simple);
+  data = g_task_get_task_data (task);
 
   g_debug ("my read %" G_GSIZE_FORMAT, data->count);
   g_input_stream_read_all (stream,
                            data->buffer, data->count, &bread,
                            cancellable, &error);
   g_debug ("my read result %" G_GSIZE_FORMAT, bread);
-  if (bread != data->count) {
-    data->size = -1;
-  } else
-    data->size = bread;
 
   if (error)
     {
       g_debug ("error: %s", error->message);
-      g_simple_async_result_set_from_error (simple, error);
+      g_task_return_error (task, error);
+    }
+  if (bread != data->count)
+    {
+      g_task_return_int (task, -1);
+    }
+  else
+    {
+      g_task_return_int (task, bread);
     }
 }
 
@@ -333,19 +337,17 @@ my_input_stream_read_async (GInputStream       *stream,
                             GAsyncReadyCallback callback,
                             gpointer            user_data)
 {
-  GSimpleAsyncResult *simple;
+  GTask *task;
   ReadData *data = g_new (ReadData, 1);
 
   data->buffer = buffer;
   data->count = count;
 
-  simple = g_simple_async_result_new (G_OBJECT (stream),
-                                      callback, user_data,
-                                      my_input_stream_read_async);
+  task = g_task_new (stream, cancellable, callback, user_data);
+  g_task_set_task_data (task, data, g_free);
+  g_task_run_in_thread (task, read_thread);
 
-  g_simple_async_result_set_op_res_gpointer (simple, data, g_free);
-  g_simple_async_result_run_in_thread (simple, read_thread, io_priority, cancellable);
-  g_object_unref (simple);
+  g_object_unref (task);
 }
 
 static gssize
@@ -353,22 +355,9 @@ my_input_stream_read_finish (GInputStream *stream,
                              GAsyncResult *result,
                              GError      **error)
 {
-  GSimpleAsyncResult *simple;
-  ReadData *data;
+  g_return_val_if_fail (g_task_is_valid (result, stream), -1);
 
-  g_return_val_if_fail (g_simple_async_result_is_valid (result,
-                                                        G_OBJECT (stream),
-                                                        my_input_stream_read_async),
-                        -1);
-
-  simple = G_SIMPLE_ASYNC_RESULT (result);
-
-  if (g_simple_async_result_propagate_error (simple, error))
-    return -1;
-
-  data = g_simple_async_result_get_op_res_gpointer (simple);
-
-  return data->size;
+  return g_task_propagate_int (G_TASK (result), error);
 }
 
 static void
