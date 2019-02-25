@@ -1,0 +1,60 @@
+headers = [
+  'phodav.h',
+  'phodav-server.h',
+]
+
+install_headers(headers, subdir : 'libphodav-2.0/libphodav')
+
+sources = [
+  'phodav-if.c',
+  'phodav-lock.c',
+  'phodav-method-delete.c',
+  'phodav-method-get.c',
+  'phodav-method-lock.c',
+  'phodav-method-mkcol.c',
+  'phodav-method-movecopy.c',
+  'phodav-method-propfind.c',
+  'phodav-method-proppatch.c',
+  'phodav-method-put.c',
+  'phodav-method-unlock.c',
+  'phodav-multistatus.c',
+  'phodav-path.c',
+  'phodav-server.c',
+  'phodav-utils.c',
+]
+
+if not dependency('glib-2.0', version : '>= 2.51.2', required: false).found()
+  sources += 'guuid.c'
+endif
+
+mapfile = 'libphodav.syms'
+vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile)
+
+libphodav = library(
+  'phodav-2.0',
+  sources,
+  c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
+  include_directories : incdir,
+  version: '0.0.0',
+  link_args : [ '-Wl,--no-undefined', vflag ],
+  link_depends : mapfile,
+  dependencies : deps,
+  install : true,
+)
+
+pkgconfig = import('pkgconfig')
+pkgconfig.generate(
+  libphodav,
+  description : 'A WebDAV library based on libsoup',
+  subdirs : 'libphodav-2.0',
+  requires : 'libsoup-2.4'
+)
+
+executable(
+  'chezdav',
+  [ 'chezdav.c' ],
+  include_directories : incdir,
+  dependencies : avahi_deps + deps,
+  link_with : [ libphodav ],
+  install : true,
+)

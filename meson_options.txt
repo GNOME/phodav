@@ -1,0 +1,11 @@
+option('gtk_doc',
+       type : 'feature',
+       description : 'Generate API documentation with gtk-doc')
+
+option('avahi',
+       type : 'feature',
+       description : 'Build with avahi/mdns')
+
+option('systemd',
+       type : 'feature',
+       description : 'Install systemd units/configuration')

@@ -68,12 +68,12 @@ libphodav_2_0_la_LIBADD =			\
 
 libphodav_2_0_la_LDFLAGS =				\
 	-version-info 0:0:0				\
-	-Wl,--version-script=${srcdir}/libphodav.syms	\
+	-Wl,--version-script=${srcdir}/libphodav/libphodav.syms	\
 	-no-undefined					\
 	$(NULL)
 
-libphodav_2_0_la_DEPENDENCIES = libphodav.syms
-EXTRA_DIST += libphodav.syms
+libphodav_2_0_la_DEPENDENCIES = libphodav/libphodav.syms
+EXTRA_DIST += libphodav/libphodav.syms
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libphodav-2.0.pc
