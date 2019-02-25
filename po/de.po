@@ -8,9 +8,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?"
-"product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2017-03-19 15:41+0000\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
+"POT-Creation-Date: 2019-02-22 12:15+0100\n"
 "PO-Revision-Date: 2017-03-20 18:28+0100\n"
 "Last-Translator: Mario Blättermann <mario.blaettermann@gmail.com>\n"
 "Language-Team: German <gnome-de@gnome.org>\n"
@@ -21,76 +20,76 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Poedit 1.8.12\n"
 
-#: ../libphodav/chezdav.c:203
+#: libphodav/chezdav.c:203
 msgid "Print program version"
 msgstr "Programmversion ausgeben"
 
-#: ../libphodav/chezdav.c:204
+#: libphodav/chezdav.c:204
 msgid "Be verbose"
 msgstr "Ausführliche Ausgabe"
 
-#: ../libphodav/chezdav.c:205
+#: libphodav/chezdav.c:205
 msgid "Port to listen to"
 msgstr "Zu überwachender Port"
 
-#: ../libphodav/chezdav.c:206
+#: libphodav/chezdav.c:206
 msgid "Listen on loopback only"
 msgstr "Nur Loopback-Schnittstelle überwachen"
 
-#: ../libphodav/chezdav.c:207
+#: libphodav/chezdav.c:207
 msgid "Listen on all interfaces"
 msgstr "Alle Schnittstellen überwachen"
 
-#: ../libphodav/chezdav.c:208
+#: libphodav/chezdav.c:208
 msgid "Path to export"
 msgstr "Pfad zum Exportieren"
 
-#: ../libphodav/chezdav.c:209
+#: libphodav/chezdav.c:209
 msgid "Path to htdigest file"
 msgstr "Pfad zur »htdigest«-Datei"
 
-#: ../libphodav/chezdav.c:210
+#: libphodav/chezdav.c:210
 msgid "Read-only access"
 msgstr "Schreibgeschützter Zugriff"
 
-#: ../libphodav/chezdav.c:224
+#: libphodav/chezdav.c:224
 msgid "- simple WebDAV server"
 msgstr "- einfacher WebDAV-Server"
 
-#: ../libphodav/chezdav.c:225
+#: libphodav/chezdav.c:225
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Melden Sie Fehler an <%s>"
 
-#: ../libphodav/chezdav.c:232
+#: libphodav/chezdav.c:232
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Verarbeiten der Optionen fehlgeschlagen: %s\n"
 
-#: ../libphodav/chezdav.c:236
+#: libphodav/chezdav.c:236
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nicht unterstützte zusätzliche Argumente: %s …\n"
 
-#: ../libphodav/chezdav.c:245
+#: libphodav/chezdav.c:245
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local und --public schließen sich gegenseitig aus\n"
 
-#: ../libphodav/chezdav.c:269
+#: libphodav/chezdav.c:269
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "»htdigest« konnte nicht geöffnet werden: %s\n"
 
-#: ../libphodav/chezdav.c:288
+#: libphodav/chezdav.c:288
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS fehlgeschlagen: %s\n"
 
-#: ../libphodav/chezdav.c:299
+#: libphodav/chezdav.c:299
 msgid "Internal error, should not happen\n"
 msgstr "Interner Fehler, sollte eigentlich nicht passieren\n"
 
-#: ../libphodav/chezdav.c:302
+#: libphodav/chezdav.c:302
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Überwachen fehlgeschlagen: %s\n"

@@ -5,93 +5,90 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://bugzilla.gnome.org/enter_bug.cgi?product=phodav"
-"&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2017-03-19 15:41+0000\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
+"POT-Creation-Date: 2019-02-22 12:15+0100\n"
 "PO-Revision-Date: 2017-08-13 08:31+0200\n"
 "Last-Translator: Miroslav Nikolić <miroslavnikolic@rocketmail.com>\n"
 "Language-Team: srpski <gnome-sr@googlegroups.org>\n"
-"Language: sr\n"
+"Language: sr@latin\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
-"n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
+"%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "X-Generator: Virtaal 0.7.1\n"
 "X-Project-Style: gnome\n"
 
-#: ../libphodav/chezdav.c:203
+#: libphodav/chezdav.c:203
 msgid "Print program version"
 msgstr "Ispisuje izdanje programa"
 
-#: ../libphodav/chezdav.c:204
+#: libphodav/chezdav.c:204
 msgid "Be verbose"
 msgstr "Biva opširan"
 
-#: ../libphodav/chezdav.c:205
+#: libphodav/chezdav.c:205
 msgid "Port to listen to"
 msgstr "Priključnik za osluškivanje"
 
-#: ../libphodav/chezdav.c:206
+#: libphodav/chezdav.c:206
 msgid "Listen on loopback only"
 msgstr "Slušaj samo na povratnoj petlji"
 
-#: ../libphodav/chezdav.c:207
+#: libphodav/chezdav.c:207
 msgid "Listen on all interfaces"
 msgstr "Slušaj na svim sučeljima"
 
-#: ../libphodav/chezdav.c:208
+#: libphodav/chezdav.c:208
 msgid "Path to export"
 msgstr "Putanja za izvoz"
 
-#: ../libphodav/chezdav.c:209
+#: libphodav/chezdav.c:209
 msgid "Path to htdigest file"
 msgstr "Putanja do datoteke „htdigest“"
 
-#: ../libphodav/chezdav.c:210
+#: libphodav/chezdav.c:210
 msgid "Read-only access"
 msgstr "Pristup samo za čitanje"
 
-#: ../libphodav/chezdav.c:224
+#: libphodav/chezdav.c:224
 msgid "- simple WebDAV server"
 msgstr "— jednostavan VebDAV server"
 
-#: ../libphodav/chezdav.c:225
+#: libphodav/chezdav.c:225
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Greške prijavite na <%s>"
 
-#: ../libphodav/chezdav.c:232
+#: libphodav/chezdav.c:232
 #, c-format
-#| msgid "option parsing failed: %s\n"
 msgid "Option parsing failed: %s\n"
 msgstr "Nije uspela obrada opcije: %s\n"
 
-#: ../libphodav/chezdav.c:236
+#: libphodav/chezdav.c:236
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nepodržani dodatni argumenti: %s ...\n"
 
-#: ../libphodav/chezdav.c:245
+#: libphodav/chezdav.c:245
 msgid "--local and --public are mutually exclusive\n"
 msgstr "„--local“ i „--public“ se uzajamno isključuju\n"
 
-#: ../libphodav/chezdav.c:269
+#: libphodav/chezdav.c:269
 #, c-format
-#| msgid "failed to open htdigest: %s\n"
 msgid "Failed to open htdigest: %s\n"
 msgstr "Nisam uspeo da otvorim „htdigest“: %s\n"
 
-#: ../libphodav/chezdav.c:288
+#: libphodav/chezdav.c:288
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS nije uspelo: %s\n"
 
-#: ../libphodav/chezdav.c:299
+#: libphodav/chezdav.c:299
 msgid "Internal error, should not happen\n"
 msgstr "Unutrašnja greška, nije trebalo da se dogodi\n"
 
-#: ../libphodav/chezdav.c:302
+#: libphodav/chezdav.c:302
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Osluškivanje nije uspelo: %s\n"

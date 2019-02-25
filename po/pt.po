@@ -4,9 +4,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: http://bugzilla.gnome.org/enter_bug.cgi?"
-"product=phodav&keywords=I18N+L10N&component=general\n"
-"POT-Creation-Date: 2015-10-21 12:19+0000\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
+"POT-Creation-Date: 2019-02-22 12:15+0100\n"
 "PO-Revision-Date: 2015-11-15 09:33+0000\n"
 "Last-Translator:  <>\n"
 "Language-Team: Portuguese <gnome_pt@yahoogroups.com>\n"
@@ -17,55 +16,76 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Gtranslator 2.91.6\n"
 
-#: ../libphodav/chezdav.c:201
+#: libphodav/chezdav.c:203
 msgid "Print program version"
 msgstr "Imprimir versão do programa"
 
-#: ../libphodav/chezdav.c:202
+#: libphodav/chezdav.c:204
 msgid "Be verbose"
 msgstr "Ser detalhado"
 
-#: ../libphodav/chezdav.c:203
+#: libphodav/chezdav.c:205
 msgid "Port to listen to"
 msgstr "Porta a escutar"
 
-#: ../libphodav/chezdav.c:204
+#: libphodav/chezdav.c:206
+msgid "Listen on loopback only"
+msgstr ""
+
+#: libphodav/chezdav.c:207
+msgid "Listen on all interfaces"
+msgstr ""
+
+#: libphodav/chezdav.c:208
 msgid "Path to export"
 msgstr "Caminho para exportar"
 
-#: ../libphodav/chezdav.c:205
+#: libphodav/chezdav.c:209
 msgid "Path to htdigest file"
 msgstr "Caminho para o ficheiro htdigest"
 
-#: ../libphodav/chezdav.c:206
+#: libphodav/chezdav.c:210
 msgid "Read-only access"
 msgstr "Acesso só de leitura"
 
-#: ../libphodav/chezdav.c:220
+#: libphodav/chezdav.c:224
 msgid "- simple WebDAV server"
 msgstr "- servidor WebDAV simples"
 
-#: ../libphodav/chezdav.c:221
+#: libphodav/chezdav.c:225
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Relatar erros a <%s>"
 
-#: ../libphodav/chezdav.c:228
-#, c-format
-msgid "option parsing failed: %s\n"
+#: libphodav/chezdav.c:232
+#, fuzzy, c-format
+msgid "Option parsing failed: %s\n"
 msgstr "falha no processamento de opções: %s\n"
 
-#: ../libphodav/chezdav.c:256
+#: libphodav/chezdav.c:236
 #, c-format
-msgid "failed to open htdigest: %s\n"
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr ""
+
+#: libphodav/chezdav.c:245
+msgid "--local and --public are mutually exclusive\n"
+msgstr ""
+
+#: libphodav/chezdav.c:269
+#, fuzzy, c-format
+msgid "Failed to open htdigest: %s\n"
 msgstr "falha ao abrir htdigest: %s\n"
 
-#: ../libphodav/chezdav.c:275
+#: libphodav/chezdav.c:288
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "falha mDNS: %s\n"
 
-#: ../libphodav/chezdav.c:280
+#: libphodav/chezdav.c:299
+msgid "Internal error, should not happen\n"
+msgstr ""
+
+#: libphodav/chezdav.c:302
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Escuta falhou: %s\n"
