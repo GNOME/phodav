@@ -7,6 +7,7 @@ meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'
 
 proj_version = meson.project_version()
 proj_name = meson.project_name()
+proj_gettext = 'phodav-2.0'
 proj_bugurl = 'https://gitlab.gnome.org/GNOME/phodav/issues/new'
 
 gnome = import('gnome')
@@ -69,7 +70,7 @@ config = {
   'VERSION' : proj_version,
   'PACKAGE_NAME' : proj_name,
   'PACKAGE_VERSION' : proj_version,
-  'GETTEXT_PACKAGE' : proj_name,
+  'GETTEXT_PACKAGE' : proj_gettext,
   'LOCALEDIR' : localedir,
   'PACKAGE_STRING' : '@0@ @1@'.format(proj_name, proj_version),
   'PACKAGE_BUGREPORT' : proj_bugurl
