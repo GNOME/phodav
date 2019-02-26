@@ -1,0 +1,24 @@
+image: fedora:rawhide
+
+variables:
+  DEPENDENCIES:
+    asciidoc
+    avahi-gobject-devel
+    gcc
+    gcc-c++
+    gettext
+    git
+    libsoup-devel
+    meson
+    systemd-devel
+    systemd-units
+    xmlto
+
+build_stable:
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf update -y --nogpgcheck
+    - dnf install -y --nogpgcheck $DEPENDENCIES
+  script:
+    - meson build
+    - ninja -C build dist
