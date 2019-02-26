@@ -12,6 +12,7 @@ proj_bugurl = 'https://gitlab.gnome.org/GNOME/phodav/issues/new'
 
 gnome = import('gnome')
 prefix = get_option('prefix')
+sbindir = join_paths(prefix, get_option('sbindir'))
 datadir = join_paths(prefix, get_option('datadir'))
 mandir = join_paths(prefix, get_option('mandir'))
 localedir = join_paths(datadir, 'locale')

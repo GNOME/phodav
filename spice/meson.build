@@ -7,6 +7,7 @@ endif
 executable(
   'spice-webdavd',
   [ 'spice-webdavd.c' ],
+  install_dir : sbindir,
   include_directories : incdir,
   dependencies : win32_deps + avahi_deps + deps,
   link_with : [ libphodav ],
