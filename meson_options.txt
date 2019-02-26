@@ -9,3 +9,8 @@ option('avahi',
 option('systemd',
        type : 'feature',
        description : 'Install systemd units/configuration')
+
+option('build-id',
+       type : 'integer',
+       value : 0,
+       description : 'Build ID')

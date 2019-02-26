@@ -1,0 +1,15 @@
+#!/bin/sh
+
+export MANUFACTURER="The Spice Project"
+export DESTDIR=`mktemp -d`
+ninja install
+
+rpm -qa | sort | unix2dos > deps.txt
+
+for p in chezdav spice-webdavd ; do
+    wixl -D SourceDir="@prefix@" \
+         -D DESTDIR="$DESTDIR@prefix@" \
+         --arch @WIXL_ARCH@ \
+         -o $p-@WIXL_ARCH@-@VERSION@@BUILDID@.msi \
+         $p.wxs
+done

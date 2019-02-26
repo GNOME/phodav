@@ -4,7 +4,11 @@ ent_conf.set('PACKAGE_BUGREPORT', proj_bugurl)
 ent_conf.set('PACKAGE_NAME', 'PhoDAV')
 ent_conf.set('PACKAGE_STRING', proj_name)
 ent_conf.set('PACKAGE_VERSION', meson.project_version())
-configure_file(input: 'gtkdocentities.ent.in', output: 'gtkdocentities.ent', configuration: ent_conf)
+configure_file(
+  input: 'gtkdocentities.ent.in',
+  output: 'gtkdocentities.ent',
+  configuration: ent_conf
+)
 
 glib_prefix = dependency('glib-2.0').get_pkgconfig_variable('prefix')
 glib_docpath = join_paths(glib_prefix, 'share', 'gtk-doc', 'html')

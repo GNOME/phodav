@@ -1,4 +1,4 @@
-project('phodav', 'c',
+project('PhoDAV', 'c',
         version : run_command('build-aux/git-version-gen', '@0@/.tarball-version'.format(meson.source_root()), check : true).stdout().strip(),
         license : 'LGPLv2.1',
         meson_version : '>= 0.49')
@@ -64,17 +64,53 @@ subdir('libphodav')
 subdir('spice')
 subdir('doc')
 
-#
-# write config.h
-#
+buildid = get_option('build-id')
+version = proj_version.split('.')
+maj = version[0].to_int()
+min = version[1].split('-')[0].to_int()
+mic = 0
+if version.length() > 2
+  mic = version[2].split('-')[0].to_int()
+endif
+win_version = '@0@.@1@.@2@'.format(maj, min, mic * 256 + buildid)
+
+if buildid != 0
+  buildid = '@0@'.format(buildid)
+else
+  buildid = ''
+endif
+
+wixl_arch = 'x86'
+if build_machine.cpu_family() == 'x86_64'
+  wixl_arch = 'x64'
+endif
+
+if host_machine.system() == 'windows'
+  foreach out : [ 'chezdav.wxs', 'spice-webdavd.wxs', 'make-msi.sh' ]
+    configure_file(
+      input : '@0@.in'.format(out),
+      output : out,
+      install : false,
+      configuration : {
+        'BUILDID' : buildid,
+        'VERSION' : proj_version,
+        'WINDOWS_PRODUCTVERSION' : win_version,
+        'WIXL_ARCH' : wixl_arch,
+        'srcdir' : meson.current_source_dir(),
+        'prefix' : prefix,
+      }
+    )
+  endforeach
+endif
+
 config = {
-  'VERSION' : proj_version,
-  'PACKAGE_NAME' : proj_name,
-  'PACKAGE_VERSION' : proj_version,
   'GETTEXT_PACKAGE' : proj_gettext,
   'LOCALEDIR' : localedir,
+  'PACKAGE_BUGREPORT' : proj_bugurl,
+  'PACKAGE_NAME' : proj_name,
   'PACKAGE_STRING' : '@0@ @1@'.format(proj_name, proj_version),
-  'PACKAGE_BUGREPORT' : proj_bugurl
+  'PACKAGE_VERSION' : proj_version,
+  'VERSION' : proj_version,
 }
 foreach key, value : config
   conf.set_quoted(key, value)
