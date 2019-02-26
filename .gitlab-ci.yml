@@ -14,11 +14,40 @@ variables:
     systemd-units
     xmlto
 
-build_stable:
+  WIN_DEPENDENCIES:
+    dos2unix
+    gcc
+    gcc-c++
+    gettext
+    git
+    meson
+    mingw32-libsoup
+    mingw64-libsoup
+    mingw32-readline
+    mingw64-readline
+    msitools
+
+build:
   before_script:
-    - rm -f /etc/rpm/macros.image-language-conf
     - dnf update -y --nogpgcheck
     - dnf install -y --nogpgcheck $DEPENDENCIES
   script:
     - meson build
     - ninja -C build dist
+
+build_win:
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf update -y --nogpgcheck
+    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
+  script:
+    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x ./make-msi.sh
+    - pwd
+    - ls
+    - cd ..
+    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x ./make-msi.sh
+  artifacts:
+    paths:
+      - w32/*.msi
+      - w64/*.msi
+    expire_in: 1 week

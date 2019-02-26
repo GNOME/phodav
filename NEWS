@@ -4,6 +4,7 @@ v2.3
 - replace autotools with meson
 - spice-webdavd: switch to GTask
 - chezdav: add --local & --public to specify interfaces to listen on
+- translations updates
 
 v2.2
 ====

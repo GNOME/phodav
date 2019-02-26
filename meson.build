@@ -87,7 +87,7 @@ else
 endif
 
 wixl_arch = 'x86'
-if build_machine.cpu_family() == 'x86_64'
+if host_machine.cpu_family() == 'x86_64'
   wixl_arch = 'x64'
 endif
 
