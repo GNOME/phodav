@@ -1,7 +1,13 @@
-project('PhoDAV', 'c',
-        version : run_command('build-aux/git-version-gen', '@0@/.tarball-version'.format(meson.source_root()), check : true).stdout().strip(),
-        license : 'LGPLv2.1',
-        meson_version : '>= 0.49')
+project(
+  'phodav', 'c',
+  version : run_command(
+    'build-aux/git-version-gen',
+    '@0@/.tarball-version'.format(meson.source_root()),
+    check : true
+  ).stdout().strip(),
+  license : 'LGPLv2.1',
+  meson_version : '>= 0.49',
+)
 
 meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'.format(meson.project_version()))
 
@@ -75,7 +81,7 @@ endif
 win_version = '@0@.@1@.@2@'.format(maj, min, mic * 256 + buildid)
 
 if buildid != 0
-  buildid = '@0@'.format(buildid)
+  buildid = '-@0@'.format(buildid)
 else
   buildid = ''
 endif
