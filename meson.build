@@ -53,7 +53,7 @@ if systemd.found()
   )
 endif
 
-udev = dependency('udev', required : get_option('systemd'))
+udev = dependency('udev', required : get_option('udev'))
 if udev.found()
   install_data(
     'data/70-spice-webdavd.rules',
