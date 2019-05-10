@@ -237,8 +237,6 @@ static void mdns_unregister_service (void);
 static void
 quit (int sig)
 {
-  g_debug ("quit %d", sig);
-
   if (sig == SIGINT || sig == SIGTERM)
       quit_service = TRUE;
 
