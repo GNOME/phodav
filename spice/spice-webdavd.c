@@ -216,7 +216,7 @@ typedef struct _Client
   OutputQueue       *queue;
 } Client;
 
-static gboolean quit_service;
+static volatile gboolean quit_service;
 static GMainLoop *loop;
 static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
