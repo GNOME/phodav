@@ -932,10 +932,14 @@ map_drive_cb(GTask *task,
 
 #endif
 
-static void
+/* returns FALSE if the service should quit */
+static gboolean
 run_service (ServiceData *service_data)
 {
   g_debug ("Run service");
+
+  if (quit_service)
+    return FALSE;
 
 #ifdef G_OS_WIN32
   MapDriveData map_drive_data;
@@ -1012,6 +1016,7 @@ run_service (ServiceData *service_data)
 #else
   close (port_fd);
 #endif
+  return !quit_service;
 }
 
 #ifdef G_OS_WIN32
@@ -1073,9 +1078,8 @@ service_main (DWORD argc, TCHAR *argv[])
   service_status.dwWaitHint = 0;
   SetServiceStatus (service_status_handle, &service_status);
 
-  while (!quit_service) {
-      run_service (&service_data);
-      g_usleep (G_USEC_PER_SEC);
+  while (run_service(&service_data)) {
+    g_usleep(G_USEC_PER_SEC);
   }
 
   service_status.dwCurrentState = SERVICE_STOPPED;
@@ -1167,8 +1171,7 @@ main (int argc, char *argv[])
         }
     } else
 #endif
-  while (!quit_service) {
-    run_service (&service_data);
+  while (run_service(&service_data)) {
     g_usleep (G_USEC_PER_SEC);
   }
 
