@@ -241,7 +241,8 @@ quit (int sig)
   if (sig == SIGINT || sig == SIGTERM)
       quit_service = TRUE;
 
-  g_main_loop_quit (loop);
+  if (loop)
+    g_main_loop_quit (loop);
 }
 
 #ifdef G_OS_UNIX
@@ -989,7 +990,7 @@ run_service (ServiceData *service_data)
 
   start_mux_read (mux_istream);
   g_main_loop_run (loop);
-  g_main_loop_unref (loop);
+  g_clear_pointer (&loop, g_main_loop_unref);
 
 #ifdef G_OS_WIN32
   g_cancellable_cancel (map_drive_data.cancel_map);
