@@ -25,6 +25,7 @@
 #include <fcntl.h>
 #include <glib/gstdio.h>
 #include <glib-unix.h>
+#include <errno.h>
 #endif
 
 #ifdef G_OS_WIN32
@@ -712,8 +713,12 @@ open_mux_path (const char *path)
   g_debug ("Open %s", path);
 #ifdef G_OS_UNIX
   port_fd = g_open (path, O_RDWR);
+  gint errsv = errno;
   if (port_fd == -1)
+    {
+      g_printerr("Failed to open %s: %s\n", path, g_strerror(errsv));
       exit (1);
+    }
 
   wait_for_virtio_host (port_fd);
 
