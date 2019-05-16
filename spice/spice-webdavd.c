@@ -40,25 +40,7 @@
 #include <avahi-gobject/ga-entry-group.h>
 #endif
 
-typedef struct _OutputQueue
-{
-  guint          refs;
-  GOutputStream *output;
-  gboolean       flushing;
-  guint          idle_id;
-  GQueue        *queue;
-} OutputQueue;
-
-typedef void (*PushedCb) (OutputQueue *q, gpointer user_data, GError *error);
-
-typedef struct _OutputQueueElem
-{
-  OutputQueue  *queue;
-  const guint8 *buf;
-  gsize         size;
-  PushedCb      cb;
-  gpointer      user_data;
-} OutputQueueElem;
+#include "output-queue.h"
 
 typedef struct _ServiceData
 {
@@ -69,139 +51,6 @@ typedef struct _ServiceData
 } ServiceData;
 
 static GCancellable *cancel;
-
-static OutputQueue*
-output_queue_new (GOutputStream *output)
-{
-  OutputQueue *queue = g_new0 (OutputQueue, 1);
-
-  queue->output = g_object_ref (output);
-  queue->queue = g_queue_new ();
-  queue->refs = 1;
-
-  return queue;
-}
-
-static
-void
-output_queue_free (OutputQueue *queue)
-{
-  g_warn_if_fail (g_queue_get_length (queue->queue) == 0);
-  g_warn_if_fail (!queue->flushing);
-  g_warn_if_fail (!queue->idle_id);
-
-  g_queue_free_full (queue->queue, g_free);
-  g_clear_object (&queue->output);
-  g_free (queue);
-}
-
-static OutputQueue*
-output_queue_ref (OutputQueue *q)
-{
-  q->refs++;
-  return q;
-}
-
-static void
-output_queue_unref (OutputQueue *q)
-{
-  g_return_if_fail (q != NULL);
-
-  q->refs--;
-  if (q->refs == 0)
-    output_queue_free (q);
-}
-
-static gboolean output_queue_idle (gpointer user_data);
-
-static void
-output_queue_flush_cb (GObject      *source_object,
-                       GAsyncResult *res,
-                       gpointer      user_data)
-{
-  GError *error = NULL;
-  OutputQueueElem *e = user_data;
-  OutputQueue *q = e->queue;
-
-  g_debug ("flushed");
-  q->flushing = FALSE;
-  g_output_stream_flush_finish (G_OUTPUT_STREAM (source_object),
-                                res, &error);
-  if (error)
-    g_warning ("error: %s", error->message);
-
-  g_clear_error (&error);
-
-  if (!q->idle_id)
-    q->idle_id = g_idle_add (output_queue_idle, output_queue_ref (q));
-
-  g_free (e);
-  output_queue_unref (q);
-}
-
-static gboolean
-output_queue_idle (gpointer user_data)
-{
-  OutputQueue *q = user_data;
-  OutputQueueElem *e = NULL;
-  GError *error = NULL;
-
-  if (q->flushing)
-    {
-      g_debug ("already flushing");
-      goto end;
-    }
-
-  e = g_queue_pop_head (q->queue);
-  if (!e)
-    {
-      g_debug ("No more data to flush");
-      goto end;
-    }
-
-  g_debug ("flushing %" G_GSIZE_FORMAT, e->size);
-  g_output_stream_write_all (q->output, e->buf, e->size, NULL, cancel, &error);
-  if (e->cb)
-    e->cb (q, e->user_data, error);
-
-  if (error)
-      goto end;
-
-  q->flushing = TRUE;
-  g_output_stream_flush_async (q->output, G_PRIORITY_DEFAULT, cancel, output_queue_flush_cb, e);
-
-  q->idle_id = 0;
-  return FALSE;
-
-end:
-  g_clear_error (&error);
-  q->idle_id = 0;
-  g_free (e);
-  output_queue_unref (q);
-
-  return FALSE;
-}
-
-static void
-output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
-                   PushedCb pushed_cb, gpointer user_data)
-{
-  OutputQueueElem *e;
-
-  g_return_if_fail (q != NULL);
-
-  e = g_new (OutputQueueElem, 1);
-  e->buf = buf;
-  e->size = size;
-  e->cb = pushed_cb;
-  e->user_data = user_data;
-  e->queue = q;
-  g_queue_push_tail (q->queue, e);
-
-  if (!q->idle_id && !q->flushing)
-    q->idle_id = g_idle_add (output_queue_idle, output_queue_ref (q));
-}
-
 
 static struct _DemuxData
 {
@@ -271,7 +120,7 @@ add_client (GSocketConnection *client_connection)
   client->client_connection = g_object_ref (client_connection);
   // TODO: check if usage of this idiom is portable, or if we need to check collisions
   client->id = GPOINTER_TO_INT (client_connection);
-  client->queue = output_queue_new (bostream);
+  client->queue = output_queue_new (bostream, cancel);
   g_object_unref (bostream);
 
   g_hash_table_insert (clients, &client->id, client);
@@ -287,7 +136,7 @@ client_free (Client *c)
 
   g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
   g_object_unref (c->client_connection);
-  output_queue_unref (c->queue);
+  g_object_unref (c->queue);
   g_free (c);
 }
 
@@ -739,7 +588,7 @@ open_mux_path (const char *path)
   mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (port_handle, TRUE));
 #endif
 
-  mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream));
+  mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream), cancel);
 }
 
 #ifdef G_OS_WIN32
@@ -1009,12 +858,11 @@ run_service (ServiceData *service_data)
   g_clear_object (&mux_istream);
   g_clear_object (&mux_ostream);
 
-  output_queue_unref (mux_queue);
+  g_clear_object (&mux_queue);
   g_hash_table_unref (clients);
 
   g_socket_service_stop (socket_service);
 
-  mux_queue = NULL;
   g_clear_object (&cancel);
 
 #ifdef G_OS_WIN32
