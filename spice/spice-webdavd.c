@@ -747,12 +747,6 @@ open_mux_path (const char *path)
 #ifdef G_OS_WIN32
 #define MAX_SHARED_FOLDER_NAME_SIZE 64
 #define MAX_DRIVE_LETTER_SIZE 3
-typedef enum _MapDriveEnum
-{
-  MAP_DRIVE_OK,
-  MAP_DRIVE_TRY_AGAIN,
-  MAP_DRIVE_ERROR
-} MapDriveEnum;
 
 typedef struct _MapDriveData
 {
@@ -837,7 +831,7 @@ netresource_free(NETRESOURCE *net_resource)
   g_free(net_resource->lpRemoteName);
 }
 
-static MapDriveEnum
+static guint32
 map_drive(const gchar drive_letter)
 {
   NETRESOURCE net_resource;
@@ -850,16 +844,17 @@ map_drive(const gchar drive_letter)
   if (errn == NO_ERROR)
     {
       g_debug ("Shared folder mapped to %c succesfully", drive_letter);
-      return MAP_DRIVE_OK;
     }
   else if (errn == ERROR_ALREADY_ASSIGNED)
     {
       g_debug ("Drive letter %c is already assigned", drive_letter);
-      return MAP_DRIVE_TRY_AGAIN;
+    }
+  else
+    {
+      g_warning ("map_drive error %d", errn);
     }
 
-  g_warning ("map_drive error %d", errn);
-  return MAP_DRIVE_ERROR;
+  return errn;
 }
 
 static void
@@ -924,7 +919,7 @@ map_drive_cb(GTask *task,
           break;
         }
 
-      if (map_drive (drive_letter) != MAP_DRIVE_TRY_AGAIN)
+      if (map_drive (drive_letter) != ERROR_ALREADY_ASSIGNED)
         {
           break;
         }
