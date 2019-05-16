@@ -32,6 +32,7 @@
 #include <gio/gwin32inputstream.h>
 #include <gio/gwin32outputstream.h>
 #include <windows.h>
+#define SERVICE_NAME "spice-webdavd"
 #endif
 
 #ifdef WITH_AVAHI
@@ -1069,7 +1070,7 @@ service_main (DWORD argc, TCHAR *argv[])
   g_mutex_init(&service_data.mutex);
 
   service_status_handle =
-    RegisterServiceCtrlHandlerEx ("spice-webdavd", service_ctrl_handler, &service_data);
+    RegisterServiceCtrlHandlerEx (SERVICE_NAME, service_ctrl_handler, &service_data);
 
   g_return_if_fail (service_status_handle != 0);
 
@@ -1165,7 +1166,7 @@ main (int argc, char *argv[])
 
   SERVICE_TABLE_ENTRY service_table[] =
     {
-      { (char *)"spice-webdavd", service_main }, { NULL, NULL }
+      { SERVICE_NAME, service_main }, { NULL, NULL }
     };
   if (!no_service && !getenv("DEBUG"))
     {
