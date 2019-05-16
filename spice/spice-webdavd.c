@@ -1148,6 +1148,7 @@ main (int argc, char *argv[])
                                  NULL,
                                  NULL,
                                  &error);
+  g_object_unref (saddr);
   if (error)
     {
       g_printerr ("%s\n", error->message);
