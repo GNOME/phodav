@@ -919,14 +919,20 @@ map_drive_cb(GTask *task,
           break;
         }
 
-      if (map_drive (drive_letter) != ERROR_ALREADY_ASSIGNED)
+      ret = map_drive (drive_letter);
+      if (ret == ERROR_ALREADY_ASSIGNED)
         {
-          break;
+          /* try again with another letter */
+          continue;
         }
+      if (ret != NO_ERROR)
+        {
+          drive_letter = 0;
+        }
+      break;
       //TODO: After mapping, rename network drive from \\localhost@PORT\DavWWWRoot
       //      to something like SPICE Shared Folder
     }
-
   g_mutex_lock(&map_drive_data->service_data->mutex);
   map_drive_data->service_data->drive_letter = drive_letter;
   g_mutex_unlock(&map_drive_data->service_data->mutex);
