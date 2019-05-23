@@ -21,11 +21,11 @@ contribution!
 
 = Contributing
 
-    git clone git://git.gnome.org/phodav
+    git clone https://gitlab.gnome.org/GNOME/phodav.git
 
     http://lists.freedesktop.org/mailman/listinfo/spice-devel
 
 Please report bug there:
 https://bugzilla.gnome.org/enter_bug.cgi?product=phodav
 
-Forking and sending github pull requests is also welcome.
+Forking on gitlab and making pull requests is recommended, as it runs CI test.
