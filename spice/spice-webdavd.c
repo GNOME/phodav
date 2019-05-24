@@ -665,13 +665,6 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 #endif
 
-#ifndef G_SOURCE_REMOVE
-#define G_SOURCE_REMOVE FALSE
-#endif
-#ifndef G_SOURCE_CONTINUE
-#define G_SOURCE_CONTINUE TRUE
-#endif
-
 #ifdef G_OS_UNIX
 static void
 wait_for_virtio_host (gint fd)
