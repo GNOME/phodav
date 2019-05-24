@@ -24,6 +24,7 @@
 #include <gio/gunixoutputstream.h>
 #include <fcntl.h>
 #include <glib/gstdio.h>
+#include <glib-unix.h>
 #endif
 
 #ifdef G_OS_WIN32
@@ -242,6 +243,15 @@ quit (int sig)
 
   g_main_loop_quit (loop);
 }
+
+#ifdef G_OS_UNIX
+static gboolean
+signal_handler (gpointer user_data)
+{
+  quit(SIGINT);
+  return G_SOURCE_REMOVE;
+}
+#endif
 
 static Client *
 add_client (GSocketConnection *client_connection)
@@ -1107,7 +1117,11 @@ main (int argc, char *argv[])
     }
   g_option_context_free (opts);
 
+#ifdef G_OS_UNIX
+  g_unix_signal_add (SIGINT, signal_handler, NULL);
+#else
   signal (SIGINT, quit);
+#endif
 
   /* run socket service once at beginning, there seems to be a bug on
      windows, and it can't accept new connections if cleanup and
