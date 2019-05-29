@@ -22,9 +22,10 @@ contribution!
 
     git clone https://gitlab.gnome.org/GNOME/phodav.git
 
+Mailing list:
 http://lists.freedesktop.org/mailman/listinfo/spice-devel
 
-Please report bug there:
-https://bugzilla.gnome.org/enter_bug.cgi?product=phodav
+Please report bugs on gitlab:
+https://gitlab.gnome.org/GNOME/phodav/issues
 
 Forking on gitlab and making pull requests is recommended, as it runs CI test.
