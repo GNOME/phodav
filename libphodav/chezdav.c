@@ -216,9 +216,6 @@ main (int argc, char *argv[])
   bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
   bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
 
-#if !GLIB_CHECK_VERSION (2, 35, 1)
-  g_type_init ();
-#endif
   g_set_prgname ("chezdav");
 
   context = g_option_context_new (_ ("- simple WebDAV server"));

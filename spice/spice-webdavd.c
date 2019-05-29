@@ -24,12 +24,15 @@
 #include <gio/gunixoutputstream.h>
 #include <fcntl.h>
 #include <glib/gstdio.h>
+#include <glib-unix.h>
+#include <errno.h>
 #endif
 
 #ifdef G_OS_WIN32
 #include <gio/gwin32inputstream.h>
 #include <gio/gwin32outputstream.h>
 #include <windows.h>
+#define SERVICE_NAME "spice-webdavd"
 #endif
 
 #ifdef WITH_AVAHI
@@ -37,25 +40,7 @@
 #include <avahi-gobject/ga-entry-group.h>
 #endif
 
-typedef struct _OutputQueue
-{
-  guint          refs;
-  GOutputStream *output;
-  gboolean       flushing;
-  guint          idle_id;
-  GQueue        *queue;
-} OutputQueue;
-
-typedef void (*PushedCb) (OutputQueue *q, gpointer user_data, GError *error);
-
-typedef struct _OutputQueueElem
-{
-  OutputQueue  *queue;
-  const guint8 *buf;
-  gsize         size;
-  PushedCb      cb;
-  gpointer      user_data;
-} OutputQueueElem;
+#include "output-queue.h"
 
 typedef struct _ServiceData
 {
@@ -66,139 +51,6 @@ typedef struct _ServiceData
 } ServiceData;
 
 static GCancellable *cancel;
-
-static OutputQueue*
-output_queue_new (GOutputStream *output)
-{
-  OutputQueue *queue = g_new0 (OutputQueue, 1);
-
-  queue->output = g_object_ref (output);
-  queue->queue = g_queue_new ();
-  queue->refs = 1;
-
-  return queue;
-}
-
-static
-void
-output_queue_free (OutputQueue *queue)
-{
-  g_warn_if_fail (g_queue_get_length (queue->queue) == 0);
-  g_warn_if_fail (!queue->flushing);
-  g_warn_if_fail (!queue->idle_id);
-
-  g_queue_free_full (queue->queue, g_free);
-  g_clear_object (&queue->output);
-  g_free (queue);
-}
-
-static OutputQueue*
-output_queue_ref (OutputQueue *q)
-{
-  q->refs++;
-  return q;
-}
-
-static void
-output_queue_unref (OutputQueue *q)
-{
-  g_return_if_fail (q != NULL);
-
-  q->refs--;
-  if (q->refs == 0)
-    output_queue_free (q);
-}
-
-static gboolean output_queue_idle (gpointer user_data);
-
-static void
-output_queue_flush_cb (GObject      *source_object,
-                       GAsyncResult *res,
-                       gpointer      user_data)
-{
-  GError *error = NULL;
-  OutputQueueElem *e = user_data;
-  OutputQueue *q = e->queue;
-
-  g_debug ("flushed");
-  q->flushing = FALSE;
-  g_output_stream_flush_finish (G_OUTPUT_STREAM (source_object),
-                                res, &error);
-  if (error)
-    g_warning ("error: %s", error->message);
-
-  g_clear_error (&error);
-
-  if (!q->idle_id)
-    q->idle_id = g_idle_add (output_queue_idle, output_queue_ref (q));
-
-  g_free (e);
-  output_queue_unref (q);
-}
-
-static gboolean
-output_queue_idle (gpointer user_data)
-{
-  OutputQueue *q = user_data;
-  OutputQueueElem *e = NULL;
-  GError *error = NULL;
-
-  if (q->flushing)
-    {
-      g_debug ("already flushing");
-      goto end;
-    }
-
-  e = g_queue_pop_head (q->queue);
-  if (!e)
-    {
-      g_debug ("No more data to flush");
-      goto end;
-    }
-
-  g_debug ("flushing %" G_GSIZE_FORMAT, e->size);
-  g_output_stream_write_all (q->output, e->buf, e->size, NULL, cancel, &error);
-  if (e->cb)
-    e->cb (q, e->user_data, error);
-
-  if (error)
-      goto end;
-
-  q->flushing = TRUE;
-  g_output_stream_flush_async (q->output, G_PRIORITY_DEFAULT, cancel, output_queue_flush_cb, e);
-
-  q->idle_id = 0;
-  return FALSE;
-
-end:
-  g_clear_error (&error);
-  q->idle_id = 0;
-  g_free (e);
-  output_queue_unref (q);
-
-  return FALSE;
-}
-
-static void
-output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
-                   PushedCb pushed_cb, gpointer user_data)
-{
-  OutputQueueElem *e;
-
-  g_return_if_fail (q != NULL);
-
-  e = g_new (OutputQueueElem, 1);
-  e->buf = buf;
-  e->size = size;
-  e->cb = pushed_cb;
-  e->user_data = user_data;
-  e->queue = q;
-  g_queue_push_tail (q->queue, e);
-
-  if (!q->idle_id && !q->flushing)
-    q->idle_id = g_idle_add (output_queue_idle, output_queue_ref (q));
-}
-
 
 static struct _DemuxData
 {
@@ -216,7 +68,7 @@ typedef struct _Client
   OutputQueue       *queue;
 } Client;
 
-static gboolean quit_service;
+static volatile gboolean quit_service;
 static GMainLoop *loop;
 static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
@@ -242,8 +94,18 @@ quit (int sig)
   if (sig == SIGINT || sig == SIGTERM)
       quit_service = TRUE;
 
-  g_main_loop_quit (loop);
+  if (loop)
+    g_main_loop_quit (loop);
 }
+
+#ifdef G_OS_UNIX
+static gboolean
+signal_handler (gpointer user_data)
+{
+  quit(SIGINT);
+  return G_SOURCE_REMOVE;
+}
+#endif
 
 static Client *
 add_client (GSocketConnection *client_connection)
@@ -260,7 +122,7 @@ add_client (GSocketConnection *client_connection)
   client->client_connection = g_object_ref (client_connection);
   // TODO: check if usage of this idiom is portable, or if we need to check collisions
   client->id = GPOINTER_TO_INT (client_connection);
-  client->queue = output_queue_new (bostream);
+  client->queue = output_queue_new (bostream, cancel);
   g_object_unref (bostream);
 
   g_hash_table_insert (clients, &client->id, client);
@@ -276,7 +138,7 @@ client_free (Client *c)
 
   g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
   g_object_unref (c->client_connection);
-  output_queue_unref (c->queue);
+  g_object_unref (c->queue);
   g_free (c);
 }
 
@@ -307,11 +169,11 @@ read_thread (GTask *task,
 
   data = g_task_get_task_data (task);
 
-  g_debug ("my read %" G_GSIZE_FORMAT, data->count);
+  g_debug ("thread read %" G_GSIZE_FORMAT, data->count);
   g_input_stream_read_all (stream,
                            data->buffer, data->count, &bread,
                            cancellable, &error);
-  g_debug ("my read result %" G_GSIZE_FORMAT, bread);
+  g_debug ("thread read result %" G_GSIZE_FORMAT, bread);
 
   if (error)
     {
@@ -329,13 +191,13 @@ read_thread (GTask *task,
 }
 
 static void
-my_input_stream_read_async (GInputStream       *stream,
-                            void               *buffer,
-                            gsize               count,
-                            int                 io_priority,
-                            GCancellable       *cancellable,
-                            GAsyncReadyCallback callback,
-                            gpointer            user_data)
+input_stream_read_thread_async (GInputStream       *stream,
+                                void               *buffer,
+                                gsize               count,
+                                int                 io_priority,
+                                GCancellable       *cancellable,
+                                GAsyncReadyCallback callback,
+                                gpointer            user_data)
 {
   GTask *task;
   ReadData *data = g_new (ReadData, 1);
@@ -351,9 +213,9 @@ my_input_stream_read_async (GInputStream       *stream,
 }
 
 static gssize
-my_input_stream_read_finish (GInputStream *stream,
-                             GAsyncResult *result,
-                             GError      **error)
+input_stream_read_thread_finish (GInputStream *stream,
+                                 GAsyncResult *result,
+                                 GError      **error)
 {
   g_return_val_if_fail (g_task_is_valid (result, stream), -1);
 
@@ -392,7 +254,7 @@ mux_data_read_cb (GObject      *source_object,
   GError *error = NULL;
   gssize size;
 
-  size = my_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
+  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
   g_return_if_fail (size == demux.size);
   if (error)
     {
@@ -422,13 +284,13 @@ mux_size_read_cb (GObject      *source_object,
   GError *error = NULL;
   gssize size;
 
-  size = my_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
+  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
   if (error || size != sizeof (guint16))
     goto end;
 
-  my_input_stream_read_async (istream,
-                              &demux.buf, demux.size, G_PRIORITY_DEFAULT,
-                              cancel, mux_data_read_cb, NULL);
+  input_stream_read_thread_async (istream,
+                                  &demux.buf, demux.size, G_PRIORITY_DEFAULT,
+                                  cancel, mux_data_read_cb, NULL);
   return;
 
 end:
@@ -450,13 +312,13 @@ mux_client_read_cb (GObject      *source_object,
   GError *error = NULL;
   gssize size;
 
-  size = my_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
+  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
   g_debug ("read %" G_GSSIZE_FORMAT, size);
   if (error || size != sizeof (gint64))
     goto end;
-  my_input_stream_read_async (istream,
-                              &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
-                              cancel, mux_size_read_cb, NULL);
+  input_stream_read_thread_async (istream,
+                                  &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
+                                  cancel, mux_size_read_cb, NULL);
   return;
 
 end:
@@ -475,9 +337,9 @@ end:
 static void
 start_mux_read (GInputStream *istream)
 {
-  my_input_stream_read_async (istream,
-                              &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
-                              cancel, mux_client_read_cb, NULL);
+  input_stream_read_thread_async (istream,
+                                  &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
+                                  cancel, mux_client_read_cb, NULL);
 }
 
 static void client_start_read (Client *client);
@@ -665,13 +527,6 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 #endif
 
-#ifndef G_SOURCE_REMOVE
-#define G_SOURCE_REMOVE FALSE
-#endif
-#ifndef G_SOURCE_CONTINUE
-#define G_SOURCE_CONTINUE TRUE
-#endif
-
 #ifdef G_OS_UNIX
 static void
 wait_for_virtio_host (gint fd)
@@ -708,8 +563,12 @@ open_mux_path (const char *path)
   g_debug ("Open %s", path);
 #ifdef G_OS_UNIX
   port_fd = g_open (path, O_RDWR);
+  gint errsv = errno;
   if (port_fd == -1)
+    {
+      g_printerr("Failed to open %s: %s\n", path, g_strerror(errsv));
       exit (1);
+    }
 
   wait_for_virtio_host (port_fd);
 
@@ -731,18 +590,12 @@ open_mux_path (const char *path)
   mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (port_handle, TRUE));
 #endif
 
-  mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream));
+  mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream), cancel);
 }
 
 #ifdef G_OS_WIN32
 #define MAX_SHARED_FOLDER_NAME_SIZE 64
 #define MAX_DRIVE_LETTER_SIZE 3
-typedef enum _MapDriveEnum
-{
-  MAP_DRIVE_OK,
-  MAP_DRIVE_TRY_AGAIN,
-  MAP_DRIVE_ERROR
-} MapDriveEnum;
 
 typedef struct _MapDriveData
 {
@@ -827,7 +680,7 @@ netresource_free(NETRESOURCE *net_resource)
   g_free(net_resource->lpRemoteName);
 }
 
-static MapDriveEnum
+static guint32
 map_drive(const gchar drive_letter)
 {
   NETRESOURCE net_resource;
@@ -840,16 +693,17 @@ map_drive(const gchar drive_letter)
   if (errn == NO_ERROR)
     {
       g_debug ("Shared folder mapped to %c succesfully", drive_letter);
-      return MAP_DRIVE_OK;
     }
   else if (errn == ERROR_ALREADY_ASSIGNED)
     {
       g_debug ("Drive letter %c is already assigned", drive_letter);
-      return MAP_DRIVE_TRY_AGAIN;
+    }
+  else
+    {
+      g_warning ("map_drive error %d", errn);
     }
 
-  g_warning ("map_drive error %d", errn);
-  return MAP_DRIVE_ERROR;
+  return errn;
 }
 
 static void
@@ -914,14 +768,20 @@ map_drive_cb(GTask *task,
           break;
         }
 
-      if (map_drive (drive_letter) != MAP_DRIVE_TRY_AGAIN)
+      ret = map_drive (drive_letter);
+      if (ret == ERROR_ALREADY_ASSIGNED)
         {
-          break;
+          /* try again with another letter */
+          continue;
         }
+      if (ret != NO_ERROR)
+        {
+          drive_letter = 0;
+        }
+      break;
       //TODO: After mapping, rename network drive from \\localhost@PORT\DavWWWRoot
       //      to something like SPICE Shared Folder
     }
-
   g_mutex_lock(&map_drive_data->service_data->mutex);
   map_drive_data->service_data->drive_letter = drive_letter;
   g_mutex_unlock(&map_drive_data->service_data->mutex);
@@ -929,10 +789,14 @@ map_drive_cb(GTask *task,
 
 #endif
 
-static void
+/* returns FALSE if the service should quit */
+static gboolean
 run_service (ServiceData *service_data)
 {
   g_debug ("Run service");
+
+  if (quit_service)
+    return FALSE;
 
 #ifdef G_OS_WIN32
   MapDriveData map_drive_data;
@@ -984,7 +848,7 @@ run_service (ServiceData *service_data)
 
   start_mux_read (mux_istream);
   g_main_loop_run (loop);
-  g_main_loop_unref (loop);
+  g_clear_pointer (&loop, g_main_loop_unref);
 
 #ifdef G_OS_WIN32
   g_cancellable_cancel (map_drive_data.cancel_map);
@@ -996,12 +860,11 @@ run_service (ServiceData *service_data)
   g_clear_object (&mux_istream);
   g_clear_object (&mux_ostream);
 
-  output_queue_unref (mux_queue);
+  g_clear_object (&mux_queue);
   g_hash_table_unref (clients);
 
   g_socket_service_stop (socket_service);
 
-  mux_queue = NULL;
   g_clear_object (&cancel);
 
 #ifdef G_OS_WIN32
@@ -1009,6 +872,7 @@ run_service (ServiceData *service_data)
 #else
   close (port_fd);
 #endif
+  return !quit_service;
 }
 
 #ifdef G_OS_WIN32
@@ -1057,7 +921,7 @@ service_main (DWORD argc, TCHAR *argv[])
   g_mutex_init(&service_data.mutex);
 
   service_status_handle =
-    RegisterServiceCtrlHandlerEx ("spice-webdavd", service_ctrl_handler, &service_data);
+    RegisterServiceCtrlHandlerEx (SERVICE_NAME, service_ctrl_handler, &service_data);
 
   g_return_if_fail (service_status_handle != 0);
 
@@ -1070,9 +934,8 @@ service_main (DWORD argc, TCHAR *argv[])
   service_status.dwWaitHint = 0;
   SetServiceStatus (service_status_handle, &service_status);
 
-  while (!quit_service) {
-      run_service (&service_data);
-      g_usleep (G_USEC_PER_SEC);
+  while (run_service(&service_data)) {
+    g_usleep(G_USEC_PER_SEC);
   }
 
   service_status.dwCurrentState = SERVICE_STOPPED;
@@ -1116,7 +979,11 @@ main (int argc, char *argv[])
     }
   g_option_context_free (opts);
 
+#ifdef G_OS_UNIX
+  g_unix_signal_add (SIGINT, signal_handler, NULL);
+#else
   signal (SIGINT, quit);
+#endif
 
   /* run socket service once at beginning, there seems to be a bug on
      windows, and it can't accept new connections if cleanup and
@@ -1133,6 +1000,7 @@ main (int argc, char *argv[])
                                  NULL,
                                  NULL,
                                  &error);
+  g_object_unref (saddr);
   if (error)
     {
       g_printerr ("%s\n", error->message);
@@ -1149,7 +1017,7 @@ main (int argc, char *argv[])
 
   SERVICE_TABLE_ENTRY service_table[] =
     {
-      { (char *)"spice-webdavd", service_main }, { NULL, NULL }
+      { SERVICE_NAME, service_main }, { NULL, NULL }
     };
   if (!no_service && !getenv("DEBUG"))
     {
@@ -1160,8 +1028,7 @@ main (int argc, char *argv[])
         }
     } else
 #endif
-  while (!quit_service) {
-    run_service (&service_data);
+  while (run_service(&service_data)) {
     g_usleep (G_USEC_PER_SEC);
   }
 

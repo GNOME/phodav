@@ -4,9 +4,15 @@ if host_machine.system() == 'windows'
   win32_deps += compiler.find_library('mpr')
 endif
 
+sources = [
+  'spice-webdavd.c',
+  'output-queue.c',
+  'output-queue.h'
+]
+
 executable(
   'spice-webdavd',
-  [ 'spice-webdavd.c' ],
+  sources,
   install_dir : sbindir,
   include_directories : incdir,
   dependencies : win32_deps + avahi_deps + deps,

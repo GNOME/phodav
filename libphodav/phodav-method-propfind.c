@@ -361,7 +361,6 @@ end:
   return node;
 }
 
-#if GLIB_CHECK_VERSION (2, 38, 0)
 static xmlNodePtr
 prop_quota_used (PathHandler *handler, PropFind *pf,
                  const gchar *path, GFileInfo *info, xmlNsPtr ns)
@@ -396,7 +395,6 @@ end:
   PROP_SET_STATUS (node, status);
   return node;
 }
-#endif
 
 static gint
 node_compare_int (xmlNodePtr a,
@@ -431,9 +429,7 @@ static const struct _PropList
   PROP (supportedlock, 0),
   PROP (lockdiscovery, 0),
   { "quota-available-bytes", prop_quota_available, },
-#if GLIB_CHECK_VERSION (2, 38, 0)
   { "quota-used-bytes", prop_quota_used, FALSE, TRUE, }
-#endif
 };
 
 static xmlNodePtr
