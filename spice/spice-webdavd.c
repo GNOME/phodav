@@ -251,11 +251,13 @@ mux_data_read_cb (GObject      *source_object,
   gssize size;
 
   size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
-  g_return_if_fail (size == demux.size);
   if (error)
     {
       g_warning ("error: %s", error->message);
       g_clear_error (&error);
+    }
+  if (size != demux.size)
+    {
       quit (-1);
       return;
     }
