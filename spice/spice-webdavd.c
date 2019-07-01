@@ -180,10 +180,6 @@ read_thread (GTask *task,
       g_debug ("error: %s", error->message);
       g_task_return_error (task, error);
     }
-  if (bread != data->count)
-    {
-      g_task_return_int (task, -1);
-    }
   else
     {
       g_task_return_int (task, bread);
