@@ -60,9 +60,12 @@ static struct _DemuxData
 
 typedef struct _Client
 {
-  gint64             id;
-  guint8             buf[G_MAXUINT16];
-  guint16            size;
+  struct
+  {
+    gint64             id;
+    guint16            size;
+    guint8             buf[G_MAXUINT16];
+  } mux;
   GSocketConnection *client_connection;
   OutputQueue       *queue;
 } Client;
@@ -117,12 +120,12 @@ add_client (GSocketConnection *client_connection)
   client = g_new0 (Client, 1);
   client->client_connection = g_object_ref (client_connection);
   // TODO: check if usage of this idiom is portable, or if we need to check collisions
-  client->id = GPOINTER_TO_INT (client_connection);
+  client->mux.id = GPOINTER_TO_INT (client_connection);
   client->queue = output_queue_new (bostream, cancel);
   g_object_unref (bostream);
 
-  g_hash_table_insert (clients, &client->id, client);
-  g_warn_if_fail (g_hash_table_lookup (clients, &client->id));
+  g_hash_table_insert (clients, &client->mux.id, client);
+  g_warn_if_fail (g_hash_table_lookup (clients, &client->mux.id));
 
   return client;
 }
@@ -143,7 +146,7 @@ remove_client (Client *client)
 {
   g_debug ("remove client %p", client);
 
-  g_hash_table_remove (clients, &client->id);
+  g_hash_table_remove (clients, &client->mux.id);
 }
 
 typedef struct ReadData
@@ -343,7 +346,7 @@ mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
       return;
   }
 
-  if (client->size == 0)
+  if (client->mux.size == 0)
     {
       remove_client (client);
       return;
@@ -373,11 +376,10 @@ client_read_cb (GObject      *source_object,
 
   g_return_if_fail (size <= G_MAXUINT16);
   g_return_if_fail (size >= 0);
-  client->size = size;
+  client->mux.size = size;
 
-  output_queue_push (mux_queue, (guint8 *) &client->id, sizeof (gint64), handle_push_error, client);
-  output_queue_push (mux_queue, (guint8 *) &client->size, sizeof (guint16), handle_push_error, client);
-  output_queue_push (mux_queue, (guint8 *) client->buf, size, mux_pushed_cb, client);
+  output_queue_push (mux_queue, (guint8 *) &client->mux,
+    sizeof (gint64) + sizeof (guint16) + size, mux_pushed_cb, client);
 }
 
 static void
@@ -388,7 +390,7 @@ client_start_read (Client *client)
 
   g_debug ("start read client %p", client);
   g_input_stream_read_async (istream,
-                             client->buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
+                             client->mux.buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
                              NULL, client_read_cb, client);
 }
 
