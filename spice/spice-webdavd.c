@@ -149,74 +149,6 @@ remove_client (Client *client)
   g_hash_table_remove (clients, &client->mux.id);
 }
 
-typedef struct ReadData
-{
-  void  *buffer;
-  gsize  count;
-} ReadData;
-
-static void
-read_thread (GTask *task,
-             gpointer source_object,
-             gpointer task_data,
-             GCancellable *cancellable)
-{
-  GError *error = NULL;
-  GInputStream *stream = G_INPUT_STREAM (source_object);
-  ReadData *data;
-  gsize bread;
-
-  data = g_task_get_task_data (task);
-
-  g_debug ("thread read %" G_GSIZE_FORMAT, data->count);
-  g_input_stream_read_all (stream,
-                           data->buffer, data->count, &bread,
-                           cancellable, &error);
-  g_debug ("thread read result %" G_GSIZE_FORMAT, bread);
-
-  if (error)
-    {
-      g_debug ("error: %s", error->message);
-      g_task_return_error (task, error);
-    }
-  else
-    {
-      g_task_return_int (task, bread);
-    }
-}
-
-static void
-input_stream_read_thread_async (GInputStream       *stream,
-                                void               *buffer,
-                                gsize               count,
-                                int                 io_priority,
-                                GCancellable       *cancellable,
-                                GAsyncReadyCallback callback,
-                                gpointer            user_data)
-{
-  GTask *task;
-  ReadData *data = g_new (ReadData, 1);
-
-  data->buffer = buffer;
-  data->count = count;
-
-  task = g_task_new (stream, cancellable, callback, user_data);
-  g_task_set_task_data (task, data, g_free);
-  g_task_run_in_thread (task, read_thread);
-
-  g_object_unref (task);
-}
-
-static gssize
-input_stream_read_thread_finish (GInputStream *stream,
-                                 GAsyncResult *result,
-                                 GError      **error)
-{
-  g_return_val_if_fail (g_task_is_valid (result, stream), -1);
-
-  return g_task_propagate_int (G_TASK (result), error);
-}
-
 static void
 handle_push_error (OutputQueue *q, gpointer user_data, GError *error)
 {
@@ -245,9 +177,9 @@ mux_data_read_cb (GObject      *source_object,
                   gpointer      user_data)
 {
   GError *error = NULL;
-  gssize size;
+  gsize size;
 
-  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
+  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
   if (error)
     {
       g_warning ("error: %s", error->message);
@@ -277,15 +209,15 @@ mux_size_read_cb (GObject      *source_object,
 {
   GInputStream *istream = G_INPUT_STREAM (source_object);
   GError *error = NULL;
-  gssize size;
+  gsize size;
 
-  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
+  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
   if (error || size != sizeof (guint16))
     goto end;
 
-  input_stream_read_thread_async (istream,
-                                  &demux.buf, demux.size, G_PRIORITY_DEFAULT,
-                                  cancel, mux_data_read_cb, NULL);
+  g_input_stream_read_all_async (istream,
+                                 &demux.buf, demux.size, G_PRIORITY_DEFAULT,
+                                 cancel, mux_data_read_cb, NULL);
   return;
 
 end:
@@ -305,15 +237,15 @@ mux_client_read_cb (GObject      *source_object,
 {
   GInputStream *istream = G_INPUT_STREAM (source_object);
   GError *error = NULL;
-  gssize size;
+  gsize size;
 
-  size = input_stream_read_thread_finish (G_INPUT_STREAM (source_object), res, &error);
+  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
   g_debug ("read %" G_GSSIZE_FORMAT, size);
   if (error || size != sizeof (gint64))
     goto end;
-  input_stream_read_thread_async (istream,
-                                  &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
-                                  cancel, mux_size_read_cb, NULL);
+  g_input_stream_read_all_async (istream,
+                                 &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
+                                 cancel, mux_size_read_cb, NULL);
   return;
 
 end:
@@ -329,9 +261,9 @@ end:
 static void
 start_mux_read (GInputStream *istream)
 {
-  input_stream_read_thread_async (istream,
-                                  &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
-                                  cancel, mux_client_read_cb, NULL);
+  g_input_stream_read_all_async (istream,
+                                 &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
+                                 cancel, mux_client_read_cb, NULL);
 }
 
 static void client_start_read (Client *client);
