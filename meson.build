@@ -29,9 +29,9 @@ conf = configuration_data()
 
 deps = []
 if host_machine.system() == 'windows'
-  deps += dependency('gio-windows-2.0', version : '>= 2.38')
+  deps += dependency('gio-windows-2.0', version : '>= 2.44')
 else
-  deps += dependency('gio-unix-2.0', version : '>= 2.38')
+  deps += dependency('gio-unix-2.0', version : '>= 2.44')
 endif
 
 deps += dependency('libsoup-2.4', version : '>= 2.48.0')
