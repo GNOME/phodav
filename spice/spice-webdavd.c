@@ -231,7 +231,6 @@ mux_pushed_client_cb (OutputQueue *q, gpointer user_data, GError *error)
 {
   if (error) {
     handle_push_error (q, user_data, error);
-    return;
   }
 
   start_mux_read (mux_istream);
