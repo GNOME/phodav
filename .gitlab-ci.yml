@@ -34,6 +34,11 @@ build:
   script:
     - meson build
     - ninja -C build dist
+  artifacts:
+    paths:
+      - build/meson-logs/*.txt
+    expire_in: 1 week
+    when: always
 
 build_win:
   before_script:
@@ -50,4 +55,7 @@ build_win:
     paths:
       - w32/*.msi
       - w64/*.msi
+      - w32/meson-logs/*.txt
+      - w64/meson-logs/*.txt
     expire_in: 1 week
+    when: always
