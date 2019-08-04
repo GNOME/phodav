@@ -224,7 +224,6 @@ handle_push_error (OutputQueue *q, gpointer user_data, GError *error)
 
   g_warning ("push error: %s", error->message);
   remove_client (client);
-  return;
 }
 
 static void
@@ -380,8 +379,6 @@ client_read_cb (GObject      *source_object,
   output_queue_push (mux_queue, (guint8 *) &client->id, sizeof (gint64), handle_push_error, client);
   output_queue_push (mux_queue, (guint8 *) &client->size, sizeof (guint16), handle_push_error, client);
   output_queue_push (mux_queue, (guint8 *) client->buf, size, mux_pushed_cb, client);
-
-  return;
 }
 
 static void
@@ -620,7 +617,6 @@ unmap_drive(ServiceData *service_data)
     }
 
   g_mutex_unlock(&service_data->mutex);
-  return;
 }
 
 static void
