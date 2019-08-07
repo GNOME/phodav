@@ -135,7 +135,7 @@ client_unref (gpointer user_data)
   if (--c->ref_count > 0)
     return;
 
-  g_debug ("Free client %p", c);
+  g_debug ("Free client %" G_GINT64_FORMAT, c->mux.id);
 
   g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
   g_object_unref (c->client_connection);
@@ -145,7 +145,7 @@ client_unref (gpointer user_data)
 static void
 remove_client (Client *client)
 {
-  g_debug ("remove client %p", client);
+  g_debug ("remove client %" G_GINT64_FORMAT, client->mux.id);
 
   g_hash_table_remove (clients, &client->mux.id);
 }
@@ -161,7 +161,8 @@ mux_pushed_client_cb (GObject *source_object,
 
   if (error)
     {
-      g_warning ("error pushing to client %p: %s", client, error->message);
+      g_warning ("error pushing to client %" G_GINT64_FORMAT ": %s",
+        client->mux.id, error->message);
       g_error_free (error);
       remove_client (client);
     }
@@ -179,9 +180,10 @@ mux_data_read_cb (GObject      *source_object,
   gsize size;
 
   g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
+  g_debug ("read %" G_GSIZE_FORMAT " bytes from mux", size);
   if (error)
     {
-      g_warning ("error: %s", error->message);
+      g_warning ("%s: error: %s", __FUNCTION__, error->message);
       g_clear_error (&error);
     }
   if (size != demux.size)
@@ -191,8 +193,7 @@ mux_data_read_cb (GObject      *source_object,
     }
 
   Client *c = g_hash_table_lookup (clients, &demux.client);
-  g_debug ("looked up client: %p", c);
-  g_warn_if_fail(c != NULL);
+  g_debug ("looked up client %" G_GINT64_FORMAT ": %p", demux.client, c);
 
   if (c)
     {
@@ -226,7 +227,7 @@ mux_size_read_cb (GObject      *source_object,
 end:
   if (error)
     {
-      g_warning ("error: %s", error->message);
+      g_warning ("%s: error: %s", __FUNCTION__, error->message);
       g_clear_error (&error);
     }
 
@@ -243,7 +244,6 @@ mux_client_read_cb (GObject      *source_object,
   gsize size;
 
   g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
-  g_debug ("read %" G_GSSIZE_FORMAT, size);
   if (error || size != sizeof (gint64))
     goto end;
   g_input_stream_read_all_async (istream,
@@ -254,7 +254,7 @@ mux_client_read_cb (GObject      *source_object,
 end:
   if (error)
     {
-      g_warning ("error: %s", error->message);
+      g_warning ("%s: error: %s", __FUNCTION__, error->message);
       g_clear_error (&error);
     }
 
@@ -264,6 +264,7 @@ end:
 static void
 start_mux_read (GInputStream *istream)
 {
+  g_debug ("start reading mux");
   g_input_stream_read_all_async (istream,
                                  &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
                                  cancel, mux_client_read_cb, NULL);
@@ -278,7 +279,8 @@ mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
 
   if (error)
     {
-      g_warning ("error pushing to mux from client %p: %s", client, error->message);
+      g_warning ("error pushing to mux from client %" G_GINT64_FORMAT ": %s",
+        client->mux.id, error->message);
       remove_client (client);
       goto end;
     }
@@ -304,10 +306,11 @@ client_read_cb (GObject      *source_object,
   gssize size;
 
   size = g_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
-  g_debug ("end read %" G_GSSIZE_FORMAT, size);
+  g_debug ("read %" G_GSSIZE_FORMAT " bytes from client %" G_GINT64_FORMAT, size, client->mux.id);
   if (error)
     {
-      g_warning ("error: %s", error->message);
+      g_warning ("%s: error for client %" G_GINT64_FORMAT ": %s",
+        __FUNCTION__, client->mux.id, error->message);
       g_clear_error (&error);
       remove_client (client);
       client_unref (client);
@@ -328,7 +331,7 @@ client_start_read (Client *client)
   GIOStream *iostream = G_IO_STREAM (client->client_connection);
   GInputStream *istream = g_io_stream_get_input_stream (iostream);
 
-  g_debug ("start read client %p", client);
+  g_debug ("start read client %" G_GINT64_FORMAT, client->mux.id);
   g_input_stream_read_async (istream,
                              client->mux.buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
                              cancel, client_read_cb, client_ref (client));
@@ -342,8 +345,8 @@ incoming_callback (GSocketService    *service,
 {
   Client *client;
 
-  g_debug ("new client!");
   client = add_client (client_connection);
+  g_debug ("new client %" G_GINT64_FORMAT, client->mux.id);
   client_start_read (client);
 
   return FALSE;
