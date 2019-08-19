@@ -1,0 +1,93 @@
+# Finnish translation for phodav.
+# Copyright (C) 2019 phodav's COPYRIGHT HOLDER
+# This file is distributed under the same license as the phodav package.
+# Jiri Grönroos <jiri.gronroos@iki.fi>, 2019.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: phodav master\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2019-07-26 09:31+0000\n"
+"PO-Revision-Date: 2019-08-19 22:15+0300\n"
+"Language-Team: Finnish <lokalisointi-lista@googlegroups.com>\n"
+"Language: fi\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"Last-Translator: Jiri Grönroos <jiri.gronroos+l10n@iki.fi>\n"
+"X-Generator: Poedit 2.0.6\n"
+
+#: libphodav/chezdav.c:203
+msgid "Print program version"
+msgstr "Tulosta ohjelman versio"
+
+#: libphodav/chezdav.c:204
+msgid "Be verbose"
+msgstr "Ole runsassanainen"
+
+#: libphodav/chezdav.c:205
+msgid "Port to listen to"
+msgstr "Kuunneltava portti"
+
+#: libphodav/chezdav.c:206
+msgid "Listen on loopback only"
+msgstr "Kuuntele vain loopback-osoitetta"
+
+#: libphodav/chezdav.c:207
+msgid "Listen on all interfaces"
+msgstr "Kuuntele kaikissa liitännöissä"
+
+#: libphodav/chezdav.c:208
+msgid "Path to export"
+msgstr "Tuotava polku"
+
+#: libphodav/chezdav.c:209
+msgid "Path to htdigest file"
+msgstr "Polku htdigest-tiedostoon"
+
+#: libphodav/chezdav.c:210
+msgid "Read-only access"
+msgstr "Vain lukuoikeus"
+
+#: libphodav/chezdav.c:221
+msgid "- simple WebDAV server"
+msgstr "- yksinkertainen WebDAV-palvelin"
+
+#: libphodav/chezdav.c:222
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "Ilmoita bugeista <%s>"
+
+#: libphodav/chezdav.c:229
+#, c-format
+msgid "Option parsing failed: %s\n"
+msgstr "Valinnan jäsentäminen epäonnistui: %s\n"
+
+#: libphodav/chezdav.c:233
+#, c-format
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr ""
+
+#: libphodav/chezdav.c:242
+msgid "--local and --public are mutually exclusive\n"
+msgstr "--local ja --public eivät ole samanaikaisesti käytettävissä\n"
+
+#: libphodav/chezdav.c:266
+#, c-format
+msgid "Failed to open htdigest: %s\n"
+msgstr ""
+
+#: libphodav/chezdav.c:285
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS epäonnistui: %s\n"
+
+#: libphodav/chezdav.c:296
+msgid "Internal error, should not happen\n"
+msgstr "Sisäinen virhe, ei pitäisi tapahtua\n"
+
+#: libphodav/chezdav.c:299
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "Kuuntelu epäonnistui: %s\n"
