@@ -60,6 +60,7 @@ static struct _DemuxData
 
 typedef struct _Client
 {
+  guint              ref_count;
   struct
   {
     gint64             id;
@@ -118,6 +119,7 @@ add_client (GSocketConnection *client_connection)
   g_buffered_output_stream_set_auto_grow (G_BUFFERED_OUTPUT_STREAM (bostream), TRUE);
 
   client = g_new0 (Client, 1);
+  client->ref_count = 1;
   client->client_connection = g_object_ref (client_connection);
   // TODO: check if usage of this idiom is portable, or if we need to check collisions
   client->mux.id = GPOINTER_TO_INT (client_connection);
@@ -130,9 +132,20 @@ add_client (GSocketConnection *client_connection)
   return client;
 }
 
-static void
-client_free (Client *c)
+static Client *
+client_ref (Client *c)
 {
+  c->ref_count++;
+  return c;
+}
+
+static void
+client_unref (gpointer user_data)
+{
+  Client *c = user_data;
+  if (--c->ref_count > 0)
+    return;
+
   g_debug ("Free client %p", c);
 
   g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
@@ -167,6 +180,7 @@ mux_pushed_client_cb (OutputQueue *q, gpointer user_data, GError *error)
   if (error) {
     handle_push_error (q, user_data, error);
   }
+  client_unref (user_data);
 
   start_mux_read (mux_istream);
 }
@@ -197,7 +211,7 @@ mux_data_read_cb (GObject      *source_object,
 
   if (c)
     output_queue_push (c->queue, (guint8 *) demux.buf, demux.size,
-                       mux_pushed_client_cb, c);
+                       mux_pushed_client_cb, client_ref (c));
   else
     start_mux_read (mux_istream);
 }
@@ -273,18 +287,21 @@ mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
 {
   Client *client = user_data;
 
-  if (error) {
+  if (error)
+    {
       handle_push_error (q, client, error);
-      return;
-  }
+      goto end;
+    }
 
   if (client->mux.size == 0)
     {
       remove_client (client);
-      return;
+      goto end;
     }
 
   client_start_read (client);
+end:
+  client_unref (client);
 }
 
 static void
@@ -303,6 +320,7 @@ client_read_cb (GObject      *source_object,
       g_warning ("error: %s", error->message);
       g_clear_error (&error);
       remove_client (client);
+      client_unref (client);
       return;
     }
 
@@ -323,7 +341,7 @@ client_start_read (Client *client)
   g_debug ("start read client %p", client);
   g_input_stream_read_async (istream,
                              client->mux.buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
-                             cancel, client_read_cb, client);
+                             cancel, client_read_cb, client_ref (client));
 }
 
 static gboolean
@@ -640,7 +658,7 @@ run_service (ServiceData *service_data)
 
   cancel = g_cancellable_new ();
   clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
-                                   NULL, (GDestroyNotify) client_free);
+                                   NULL, client_unref);
 
   loop = g_main_loop_new (NULL, TRUE);
 #ifdef G_OS_UNIX
