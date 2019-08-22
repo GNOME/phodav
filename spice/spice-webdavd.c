@@ -323,7 +323,7 @@ client_start_read (Client *client)
   g_debug ("start read client %p", client);
   g_input_stream_read_async (istream,
                              client->mux.buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
-                             NULL, client_read_cb, client);
+                             cancel, client_read_cb, client);
 }
 
 static gboolean
