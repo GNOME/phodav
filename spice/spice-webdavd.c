@@ -68,7 +68,6 @@ typedef struct _Client
     guint8             buf[G_MAXUINT16];
   } mux;
   GSocketConnection *client_connection;
-  OutputQueue       *queue;
 } Client;
 
 static volatile gboolean quit_service;
@@ -110,22 +109,12 @@ signal_handler (gpointer user_data)
 static Client *
 add_client (GSocketConnection *client_connection)
 {
-  GIOStream *iostream = G_IO_STREAM (client_connection);
-  GOutputStream *ostream = g_io_stream_get_output_stream (iostream);
-  GOutputStream *bostream;
   Client *client;
-
-  bostream = g_buffered_output_stream_new (ostream);
-  g_buffered_output_stream_set_auto_grow (G_BUFFERED_OUTPUT_STREAM (bostream), TRUE);
-
   client = g_new0 (Client, 1);
   client->ref_count = 1;
   client->client_connection = g_object_ref (client_connection);
   // TODO: check if usage of this idiom is portable, or if we need to check collisions
   client->mux.id = GPOINTER_TO_INT (client_connection);
-  client->queue = output_queue_new (bostream, cancel);
-  g_object_unref (bostream);
-
   g_hash_table_insert (clients, &client->mux.id, client);
   g_warn_if_fail (g_hash_table_lookup (clients, &client->mux.id));
 
@@ -150,7 +139,6 @@ client_unref (gpointer user_data)
 
   g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
   g_object_unref (c->client_connection);
-  g_object_unref (c->queue);
   g_free (c);
 }
 
@@ -163,24 +151,21 @@ remove_client (Client *client)
 }
 
 static void
-handle_push_error (OutputQueue *q, gpointer user_data, GError *error)
+mux_pushed_client_cb (GObject *source_object,
+                      GAsyncResult *res,
+                      gpointer user_data)
 {
   Client *client = user_data;
+  GError *error = NULL;
+  g_output_stream_write_all_finish (G_OUTPUT_STREAM (source_object), res, NULL, &error);
 
-  if (!error)
-    return;
-
-  g_warning ("push error: %s", error->message);
-  remove_client (client);
-}
-
-static void
-mux_pushed_client_cb (OutputQueue *q, gpointer user_data, GError *error)
-{
-  if (error) {
-    handle_push_error (q, user_data, error);
-  }
-  client_unref (user_data);
+  if (error)
+    {
+      g_warning ("error pushing to client %p: %s", client, error->message);
+      g_error_free (error);
+      remove_client (client);
+    }
+  client_unref (client);
 
   start_mux_read (mux_istream);
 }
@@ -210,8 +195,12 @@ mux_data_read_cb (GObject      *source_object,
   g_warn_if_fail(c != NULL);
 
   if (c)
-    output_queue_push (c->queue, (guint8 *) demux.buf, demux.size,
-                       mux_pushed_client_cb, client_ref (c));
+    {
+      GOutputStream *out;
+      out = g_io_stream_get_output_stream (G_IO_STREAM (c->client_connection));
+      g_output_stream_write_all_async (out, demux.buf, demux.size,
+        G_PRIORITY_DEFAULT, cancel, mux_pushed_client_cb, client_ref (c));
+    }
   else
     start_mux_read (mux_istream);
 }
@@ -289,7 +278,8 @@ mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
 
   if (error)
     {
-      handle_push_error (q, client, error);
+      g_warning ("error pushing to mux from client %p: %s", client, error->message);
+      remove_client (client);
       goto end;
     }
 
