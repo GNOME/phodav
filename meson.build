@@ -40,8 +40,10 @@ deps += dependency('libxml-2.0')
 d1 = dependency('avahi-gobject', required : get_option('avahi'))
 d2 = dependency('avahi-client', required : get_option('avahi'))
 avahi_deps = []
+avahi_common = []
 if d1.found() and d2.found()
   avahi_deps += [ d1, d2 ]
+  avahi_common += [ '../avahi-common.c', ]
   conf.set('WITH_AVAHI', 1)
 endif
 

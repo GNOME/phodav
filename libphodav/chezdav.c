@@ -27,12 +27,7 @@
 #endif
 
 #ifdef WITH_AVAHI
-#include <avahi-gobject/ga-client.h>
-#include <avahi-gobject/ga-entry-group.h>
-
-static GaClient *mdns_client;
-static GaEntryGroup *mdns_group;
-static GaEntryGroupService *mdns_service;
+#include "avahi-common.h"
 #endif
 
 #include "libphodav/phodav.h"
@@ -76,88 +71,6 @@ get_realm (void)
 {
     return g_strdup_printf ("%s\'s public share", g_get_user_name ());
 }
-
-#ifdef WITH_AVAHI
-static void
-mdns_register_service (void)
-{
-  GError *error = NULL;
-  gchar *name = NULL;
-
-  if (!mdns_group)
-    {
-      mdns_group = ga_entry_group_new ();
-
-      if (!ga_entry_group_attach (mdns_group, mdns_client, &error))
-        {
-          g_warning ("Could not attach MDNS group to client: %s", error->message);
-          g_clear_error (&error);
-          return;
-        }
-    }
-
-  name = get_realm ();
-  mdns_service = ga_entry_group_add_service (mdns_group,
-                                             name, "_webdav._tcp",
-                                             port, &error,
-                                             NULL);
-  if (!mdns_service)
-    {
-      g_warning ("Could not create service: %s", error->message);
-      g_clear_error (&error);
-      goto end;
-    }
-
-  ga_entry_group_service_freeze (mdns_service);
-  if (!ga_entry_group_service_set (mdns_service, "u", "", &error) ||
-      !ga_entry_group_service_set (mdns_service, "p", "", &error) ||
-      !ga_entry_group_service_set (mdns_service, "path", "/", &error) ||
-      !ga_entry_group_service_thaw (mdns_service, &error))
-    {
-      g_warning ("Could not update TXT: %s", error->message);
-      g_clear_error (&error);
-    }
-
-  if (!ga_entry_group_commit (mdns_group, &error))
-    {
-      g_warning ("Could not announce MDNS service: %s", error->message);
-      g_clear_error (&error);
-    }
-
-end:
-  g_free (name);
-}
-
-static void
-mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
-{
-  switch (state)
-    {
-    case GA_CLIENT_STATE_FAILURE:
-      g_warning ("MDNS client state failure");
-      break;
-
-    case GA_CLIENT_STATE_S_RUNNING:
-      g_debug ("MDNS client found server running");
-      mdns_register_service ();
-      break;
-
-    case GA_CLIENT_STATE_S_COLLISION:
-    case GA_CLIENT_STATE_S_REGISTERING:
-      g_message ("MDNS collision");
-      if (mdns_group)
-        {
-          ga_entry_group_reset (mdns_group, NULL);
-          mdns_service = 0;
-        }
-      break;
-
-    default:
-      // Do nothing
-      break;
-    }
-}
-#endif // WITH_AVAHI
 
 gchar *htdigest = NULL;
 
@@ -279,9 +192,8 @@ main (int argc, char *argv[])
 
 
 #ifdef WITH_AVAHI
-  mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
-  g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
-  if (!ga_client_start (mdns_client, &error))
+  gchar *name = get_realm ();
+  if (!avahi_client_start (name, port, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
@@ -303,7 +215,8 @@ main (int argc, char *argv[])
 
   g_main_loop_unref (mainloop);
 #ifdef WITH_AVAHI
-  g_object_unref (mdns_client);
+  avahi_client_stop ();
+  g_free (name);
 #endif
   g_object_unref (dav);
 

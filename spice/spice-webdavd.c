@@ -36,8 +36,7 @@
 #endif
 
 #ifdef WITH_AVAHI
-#include <avahi-gobject/ga-client.h>
-#include <avahi-gobject/ga-entry-group.h>
+#include "avahi-common.h"
 #endif
 
 #include "output-queue.h"
@@ -82,9 +81,6 @@ static HANDLE port_handle;
 #endif
 
 static void start_mux_read (GInputStream *istream);
-#ifdef WITH_AVAHI
-static void mdns_unregister_service (void);
-#endif
 
 static void
 quit (int sig)
@@ -421,107 +417,6 @@ static int port;
 static gboolean no_service;
 #endif
 
-#ifdef WITH_AVAHI
-static GaClient *mdns_client;
-static GaEntryGroup *mdns_group;
-static GaEntryGroupService *mdns_service;
-
-static void
-mdns_register_service (void)
-{
-  GError *error = NULL;
-  gchar *name = NULL;
-
-  if (!mdns_group)
-    {
-      mdns_group = ga_entry_group_new ();
-
-      if (!ga_entry_group_attach (mdns_group, mdns_client, &error))
-        {
-          g_warning ("Could not attach MDNS group to client: %s", error->message);
-          g_clear_error (&error);
-          goto end;
-        }
-    }
-
-  name = g_strdup_printf ("Spice client folder");
-  mdns_service = ga_entry_group_add_service (mdns_group,
-                                             name, "_webdav._tcp",
-                                             port, &error,
-                                             NULL);
-  if (!mdns_service)
-    {
-      g_warning ("Could not create service: %s", error->message);
-      g_clear_error (&error);
-      goto end;
-
-    }
-
-  ga_entry_group_service_freeze (mdns_service);
-  if (!ga_entry_group_service_set (mdns_service, "u", "", &error) ||
-      !ga_entry_group_service_set (mdns_service, "p", "", &error) ||
-      !ga_entry_group_service_set (mdns_service, "path", "/", &error) ||
-      !ga_entry_group_service_thaw (mdns_service, &error))
-    {
-      g_warning ("Could not update TXT: %s", error->message);
-      g_clear_error (&error);
-    }
-
-  if (!ga_entry_group_commit (mdns_group, &error))
-    {
-      g_warning ("Could not announce MDNS service: %s", error->message);
-      g_clear_error (&error);
-    }
-
-end:
-  g_free (name);
-}
-
-static void
-mdns_unregister_service (void)
-{
-  GError *error = NULL;
-
-  if (mdns_group)
-    {
-      if (!ga_entry_group_reset (mdns_group, &error))
-        {
-          g_warning ("Could not disconnect MDNS service: %s", error->message);
-          g_clear_error (&error);
-        }
-
-      mdns_service = 0;
-      g_debug ("MDNS client disconected");
-    }
-}
-
-static void
-mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
-{
-  switch (state)
-    {
-    case GA_CLIENT_STATE_FAILURE:
-      g_warning ("MDNS client state failure");
-      break;
-
-    case GA_CLIENT_STATE_S_RUNNING:
-      g_debug ("MDNS client found server running");
-      mdns_register_service ();
-      break;
-
-    case GA_CLIENT_STATE_S_COLLISION:
-    case GA_CLIENT_STATE_S_REGISTERING:
-      g_message ("MDNS collision");
-      mdns_unregister_service ();
-      break;
-
-    default:
-      // Do nothing
-      break;
-    }
-}
-#endif
-
 #ifdef G_OS_UNIX
 static void
 wait_for_virtio_host (gint fd)
@@ -831,10 +726,7 @@ run_service (ServiceData *service_data)
 
 #ifdef WITH_AVAHI
   GError *error = NULL;
-
-  mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
-  g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
-  if (!ga_client_start (mdns_client, &error))
+  if (!avahi_client_start ("Spice client folder", port, &error))
     {
       g_printerr ("%s\n", error->message);
       exit (1);
@@ -859,7 +751,7 @@ run_service (ServiceData *service_data)
   g_hash_table_unref (clients);
 
 #ifdef WITH_AVAHI
-  mdns_unregister_service ();
+  avahi_client_stop ();
 #endif
   g_socket_service_stop (socket_service);
 
