@@ -726,7 +726,7 @@ run_service (ServiceData *service_data)
 
 #ifdef WITH_AVAHI
   GError *error = NULL;
-  if (!avahi_client_start ("Spice client folder", port, &error))
+  if (!avahi_client_start ("Spice client folder", port, TRUE, &error))
     {
       g_printerr ("%s\n", error->message);
       exit (1);

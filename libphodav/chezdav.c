@@ -193,7 +193,7 @@ main (int argc, char *argv[])
 
 #ifdef WITH_AVAHI
   gchar *name = get_realm ();
-  if (!avahi_client_start (name, port, &error))
+  if (!avahi_client_start (name, port, local, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 

@@ -21,11 +21,68 @@
 #include <avahi-gobject/ga-client.h>
 #include <avahi-gobject/ga-entry-group.h>
 
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <errno.h>
+
 static GaClient *mdns_client;
 static GaEntryGroup *mdns_group;
 
 static const gchar *s_name;
 static guint s_port;
+static gboolean s_local;
+
+static gboolean
+ifaddr_is_loopback (struct ifaddrs *ifa)
+{
+  union {
+    struct sockaddr_in *in;
+    struct sockaddr_in6 *in6;
+  } sa;
+
+  if (!(ifa->ifa_flags & IFF_LOOPBACK))
+    return FALSE;
+
+  if (!ifa->ifa_addr)
+    return FALSE;
+
+  switch (ifa->ifa_addr->sa_family)
+    {
+      case AF_INET:
+        sa.in = (struct sockaddr_in *)(ifa->ifa_addr);
+        return sa.in->sin_addr.s_addr == g_htonl (0x7f000001); // 127.0.0.1
+      case AF_INET6:
+        sa.in6 = (struct sockaddr_in6 *)(ifa->ifa_addr);
+        return IN6_IS_ADDR_LOOPBACK (&sa.in6->sin6_addr);
+    }
+  return FALSE;
+}
+
+static guint
+get_loopback_if_id ()
+{
+  struct ifaddrs *ifaddr, *ifa;
+  guint id = AVAHI_IF_UNSPEC;
+
+  if (getifaddrs (&ifaddr) == -1)
+    {
+      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror(errno));
+      return id;
+    }
+
+  for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+    {
+      if (ifaddr_is_loopback (ifa))
+        {
+          id = if_nametoindex (ifa->ifa_name);
+          break;
+        }
+    }
+
+  freeifaddrs (ifaddr);
+  return id;
+}
 
 static void
 mdns_register_service (void)
@@ -45,10 +102,15 @@ mdns_register_service (void)
         }
     }
 
-  mdns_service = ga_entry_group_add_service (mdns_group,
-                                             s_name, "_webdav._tcp",
-                                             s_port, &error,
-                                             NULL);
+  mdns_service =
+    ga_entry_group_add_service_full (mdns_group,
+                                     s_local ? get_loopback_if_id () : AVAHI_IF_UNSPEC,
+                                     AVAHI_PROTO_UNSPEC,
+                                     0,
+                                     s_name, "_webdav._tcp",
+                                     NULL, NULL,
+                                     s_port, &error,
+                                     NULL);
   if (!mdns_service)
     {
       g_warning ("Could not create service: %s", error->message);
@@ -116,13 +178,14 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 
 gboolean
-avahi_client_start (const gchar *name, guint port, GError **error)
+avahi_client_start (const gchar *name, guint port, gboolean local, GError **error)
 {
   g_return_val_if_fail (mdns_client == NULL, FALSE);
 
   mdns_client = ga_client_new (GA_CLIENT_FLAG_NO_FLAGS);
   s_name = name;
   s_port = port;
+  s_local = local;
 
   g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
   return ga_client_start (mdns_client, error);
