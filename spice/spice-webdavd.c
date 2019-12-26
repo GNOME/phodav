@@ -326,9 +326,6 @@ end:
       g_clear_error (&error);
     }
 
-#ifdef WITH_AVAHI
-  mdns_unregister_service ();
-#endif
   quit (-3);
 }
 
@@ -861,6 +858,9 @@ run_service (ServiceData *service_data)
   g_clear_object (&mux_queue);
   g_hash_table_unref (clients);
 
+#ifdef WITH_AVAHI
+  mdns_unregister_service ();
+#endif
   g_socket_service_stop (socket_service);
 
   g_clear_object (&cancel);
