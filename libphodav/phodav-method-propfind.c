@@ -327,6 +327,7 @@ static xmlNodePtr
 prop_quota_available (PathHandler *handler, PropFind *pf,
                       const gchar *path, GFileInfo *_info, xmlNsPtr ns)
 {
+  GFile *file;
   GFileInfo *info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
@@ -338,8 +339,11 @@ prop_quota_available (PathHandler *handler, PropFind *pf,
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  info = g_file_query_filesystem_info (handler_get_file (handler), "filesystem::*",
+  file = g_file_get_child (handler_get_file (handler), path + 1);
+  info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
+  g_object_unref (file);
+
   if (error)
     {
       g_warning ("Filesystem info error: %s", error->message);
@@ -365,6 +369,7 @@ static xmlNodePtr
 prop_quota_used (PathHandler *handler, PropFind *pf,
                  const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
+  GFile *file = NULL;
   gint status = SOUP_STATUS_OK;
   GCancellable *cancellable = handler_get_cancellable(handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
@@ -375,7 +380,8 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  if (!g_file_measure_disk_usage (handler_get_file (handler),
+  file = g_file_get_child (handler_get_file (handler), path + 1);
+  if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
                                   cancellable,
                                   NULL, NULL,
@@ -391,6 +397,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
+  g_clear_object (&file);
   g_free (tmp);
   PROP_SET_STATUS (node, status);
   return node;
