@@ -12,7 +12,7 @@ sources = [
 
 executable(
   'spice-webdavd',
-  sources,
+  sources + avahi_common,
   install_dir : sbindir,
   include_directories : incdir,
   dependencies : win32_deps + avahi_deps + deps,

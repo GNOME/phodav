@@ -53,7 +53,7 @@ pkgconfig.generate(
 
 executable(
   'chezdav',
-  [ 'chezdav.c' ],
+  [ 'chezdav.c' ] + avahi_common,
   include_directories : incdir,
   dependencies : avahi_deps + deps,
   link_with : [ libphodav ],
