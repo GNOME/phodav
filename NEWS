@@ -1,3 +1,20 @@
+v2.4
+====
+
+- Requires GIO >= 2.44
+- !2 - Added udev option to meson
+- spice-webdavd:
+  - !3 : several improvements and fixes including some leaks
+  - !4 : disconnect the client gracefully
+  - !5 : code refcatory to improve performance and error handling
+  - !6 : avahi fixes on registering and unregistering service
+  - !7 : Fixes DAV:quota-used-bytes in resource is not in root fs
+
+- Translations
+  - Added Basque
+  - Added Dutch
+  - Added Finnish
+
 v2.3
 ====
 
