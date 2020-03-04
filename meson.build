@@ -6,7 +6,7 @@ project(
     check : true
   ).stdout().strip(),
   license : 'LGPLv2.1',
-  meson_version : '>= 0.49',
+  meson_version : '>= 0.50',
 )
 
 meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'.format(meson.project_version()))
