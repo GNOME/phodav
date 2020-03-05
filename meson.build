@@ -47,22 +47,6 @@ if d1.found() and d2.found()
   conf.set('WITH_AVAHI', 1)
 endif
 
-systemd = dependency('systemd', required : get_option('systemd'))
-if systemd.found()
-  install_data(
-    'data/spice-webdavd.service',
-    install_dir : systemd.get_pkgconfig_variable('systemdsystemunitdir')
-  )
-endif
-
-udev = dependency('udev', required : get_option('udev'))
-if udev.found()
-  install_data(
-    'data/70-spice-webdavd.rules',
-    install_dir : '@0@/@1@'.format(udev.get_pkgconfig_variable('udevdir'), 'rules.d'),
-  )
-endif
-
 if compiler.has_header('attr/xattr.h')
   conf.set('HAVE_ATTR_XATTR_H', 1)
 endif
