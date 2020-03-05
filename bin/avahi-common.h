@@ -18,4 +18,4 @@
 #include <glib-object.h>
 
 gboolean avahi_client_start (const gchar *name, guint port, gboolean local, GError **error);
-void avahi_client_stop ();
+void avahi_client_stop (void);
