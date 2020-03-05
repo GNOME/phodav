@@ -53,7 +53,7 @@ endif
 
 subdir('po')
 subdir('libphodav')
-subdir('spice')
+subdir('bin')
 subdir('doc')
 subdir('data')
 

@@ -46,7 +46,7 @@ if host_machine.system() == 'windows'
                         'VERSION' : proj_version,
                         'WINDOWS_PRODUCTVERSION' : win_version,
                         'WIXL_ARCH' : wixl_arch,
-                        'srcdir' : meson.current_source_dir(),
+                        'top_srcdir' : meson.source_root(),
                         'prefix' : prefix,
                       }
     )
