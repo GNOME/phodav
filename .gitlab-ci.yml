@@ -46,11 +46,11 @@ build_win:
     - dnf update -y --nogpgcheck
     - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
   script:
-    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x ./make-msi.sh
+    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
     - pwd
     - ls
     - cd ..
-    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x ./make-msi.sh
+    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
   artifacts:
     paths:
       - w32/*.msi
