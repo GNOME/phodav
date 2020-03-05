@@ -19,3 +19,12 @@ executable(
   link_with : [ libphodav ],
   install : true,
 )
+
+executable(
+  'chezdav',
+  [ 'chezdav.c' ] + avahi_common,
+  include_directories : incdir,
+  dependencies : avahi_deps + deps,
+  link_with : [ libphodav ],
+  install : true,
+)

@@ -50,12 +50,3 @@ pkgconfig.generate(
   subdirs : 'libphodav-2.0',
   requires : 'libsoup-2.4'
 )
-
-executable(
-  'chezdav',
-  [ 'chezdav.c' ] + avahi_common,
-  include_directories : incdir,
-  dependencies : avahi_deps + deps,
-  link_with : [ libphodav ],
-  install : true,
-)
