@@ -4,6 +4,11 @@ if host_machine.system() == 'windows'
   win32_deps += compiler.find_library('mpr')
 endif
 
+avahi_common = []
+if conf.has('WITH_AVAHI')
+  avahi_common += files('avahi-common.c')
+endif
+
 sources = [
   'spice-webdavd.c',
   'output-queue.c',
