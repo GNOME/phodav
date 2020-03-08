@@ -36,4 +36,4 @@ void                    path_add_lock               (Path *path, DAVLock *lock);
 
 G_END_DECLS
 
-#endif /* __PHODAV_LOCK_H__ */
+#endif /* __PHODAV_PATH_H__ */
