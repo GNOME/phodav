@@ -29,7 +29,7 @@ typedef struct _LockSubmitted
 } LockSubmitted;
 
 DAVLock *        dav_lock_new             (Path *path, const gchar *token,
-                                           LockScopeType scope, LockType type,
+                                           DAVLockScopeType scope, DAVLockType type,
                                            DepthType depth, const xmlNodePtr owner,
                                            guint timeout);
 

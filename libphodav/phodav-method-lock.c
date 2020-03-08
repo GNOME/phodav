@@ -34,11 +34,11 @@ check_lock (const gchar *key, Path *path, gpointer data)
   for (l = path->locks; l; l = l->next)
     {
       other = l->data;
-      if (other->scope == LOCK_SCOPE_EXCLUSIVE)
+      if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
         return FALSE;
     }
 
-  if (other && lock->scope == LOCK_SCOPE_EXCLUSIVE)
+  if (other && lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
     return FALSE;
 
   return TRUE;
@@ -85,7 +85,7 @@ lock_ensure_file (PathHandler *handler, const char *path,
   return created;
 }
 
-static LockScopeType
+static DAVLockScopeType
 parse_lockscope (xmlNodePtr rt)
 {
   xmlNodePtr node;
@@ -95,17 +95,17 @@ parse_lockscope (xmlNodePtr rt)
       break;
 
   if (node == NULL)
-    return LOCK_SCOPE_NONE;
+    return DAV_LOCK_SCOPE_NONE;
 
   if (!g_strcmp0 ((char *) node->name, "exclusive"))
-    return LOCK_SCOPE_EXCLUSIVE;
+    return DAV_LOCK_SCOPE_EXCLUSIVE;
   else if (!g_strcmp0 ((char *) node->name, "shared"))
-    return LOCK_SCOPE_SHARED;
+    return DAV_LOCK_SCOPE_SHARED;
   else
-    return LOCK_SCOPE_NONE;
+    return DAV_LOCK_SCOPE_NONE;
 }
 
-static LockType
+static DAVLockType
 parse_locktype (xmlNodePtr rt)
 {
   xmlNodePtr node;
@@ -115,12 +115,12 @@ parse_locktype (xmlNodePtr rt)
       break;
 
   if (node == NULL)
-    return LOCK_NONE;
+    return DAV_LOCK_NONE;
 
   if (!g_strcmp0 ((char *) node->name, "write"))
-    return LOCK_WRITE;
+    return DAV_LOCK_WRITE;
   else
-    return LOCK_NONE;
+    return DAV_LOCK_NONE;
 }
 
 gint
@@ -134,8 +134,8 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
   DavDoc doc = {0, };
   xmlNodePtr node = NULL, owner = NULL, root = NULL;
   xmlNsPtr ns = NULL;
-  LockScopeType scope = LOCK_SCOPE_SHARED;
-  LockType type;
+  DAVLockScopeType scope = DAV_LOCK_SCOPE_SHARED;
+  DAVLockType type;
   DepthType depth;
   guint timeout;
   gchar *ltoken = NULL, *uuid = NULL, *token = NULL;
@@ -182,13 +182,13 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
       if (xml_node_has_name (node, "lockscope"))
         {
           scope = parse_lockscope (node);
-          if (scope == LOCK_SCOPE_NONE)
+          if (scope == DAV_LOCK_SCOPE_NONE)
             break;
         }
       else if (xml_node_has_name (node, "locktype"))
         {
           type = parse_locktype (node);
-          if (type == LOCK_NONE)
+          if (type == DAV_LOCK_NONE)
             break;
         }
       else if (xml_node_has_name (node, "owner"))

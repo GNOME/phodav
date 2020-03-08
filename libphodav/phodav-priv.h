@@ -36,16 +36,16 @@ typedef struct _DAVLock DAVLock;
 typedef struct _Path    Path;
 typedef struct _PathHandler PathHandler;
 
-typedef enum _LockScopeType {
-  LOCK_SCOPE_NONE,
-  LOCK_SCOPE_EXCLUSIVE,
-  LOCK_SCOPE_SHARED,
-} LockScopeType;
+typedef enum _DAVLockScopeType {
+  DAV_LOCK_SCOPE_NONE,
+  DAV_LOCK_SCOPE_EXCLUSIVE,
+  DAV_LOCK_SCOPE_SHARED,
+} DAVLockScopeType;
 
-typedef enum _LockType {
-  LOCK_NONE,
-  LOCK_WRITE,
-} LockType;
+typedef enum _DAVLockType {
+  DAV_LOCK_NONE,
+  DAV_LOCK_WRITE,
+} DAVLockType;
 
 typedef enum _DepthType {
   DEPTH_ZERO,
@@ -61,13 +61,13 @@ typedef enum _PropFindType {
 
 struct _DAVLock
 {
-  Path         *path;
-  gchar         token[45];
-  LockScopeType scope;
-  LockType      type;
-  DepthType     depth;
-  xmlNodePtr    owner;
-  guint64       timeout;
+  Path            *path;
+  gchar            token[45];
+  DAVLockScopeType scope;
+  DAVLockType      type;
+  DepthType        depth;
+  xmlNodePtr       owner;
+  guint64          timeout;
 };
 
 typedef gboolean (* PathCb) (const gchar *key,

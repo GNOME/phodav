@@ -31,7 +31,7 @@ dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
 
 DAVLock *
 dav_lock_new (Path *path, const gchar *token,
-              LockScopeType scope, LockType type,
+              DAVLockScopeType scope, DAVLockType type,
               DepthType depth, const xmlNodePtr owner,
               guint timeout)
 {
@@ -69,20 +69,20 @@ dav_lock_free (DAVLock *lock)
 }
 
 static const gchar *
-locktype_to_string (LockType type)
+locktype_to_string (DAVLockType type)
 {
-  if (type == LOCK_WRITE)
+  if (type == DAV_LOCK_WRITE)
     return "write";
 
   g_return_val_if_reached (NULL);
 }
 
 static const gchar *
-lockscope_to_string (LockScopeType type)
+lockscope_to_string (DAVLockScopeType type)
 {
-  if (type == LOCK_SCOPE_EXCLUSIVE)
+  if (type == DAV_LOCK_SCOPE_EXCLUSIVE)
     return "exclusive";
-  else if (type == LOCK_SCOPE_SHARED)
+  else if (type == DAV_LOCK_SCOPE_SHARED)
     return "shared";
 
   g_return_val_if_reached (NULL);
