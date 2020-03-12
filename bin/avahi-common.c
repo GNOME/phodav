@@ -60,7 +60,7 @@ ifaddr_is_loopback (struct ifaddrs *ifa)
 }
 
 static guint
-get_loopback_if_id ()
+get_loopback_if_id (void)
 {
   struct ifaddrs *ifaddr, *ifa;
   guint id = AVAHI_IF_UNSPEC;
@@ -192,7 +192,7 @@ avahi_client_start (const gchar *name, guint port, gboolean local, GError **erro
 }
 
 void
-avahi_client_stop ()
+avahi_client_stop (void)
 {
   mdns_unregister_service ();
   g_clear_object (&mdns_group);

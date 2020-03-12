@@ -11,5 +11,5 @@ for p in chezdav spice-webdavd ; do
          -D DESTDIR="$DESTDIR@prefix@" \
          --arch @WIXL_ARCH@ \
          -o $p-@WIXL_ARCH@-@VERSION@@BUILDID@.msi \
-         $p.wxs
+         data/$p.wxs
 done
