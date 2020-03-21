@@ -21,8 +21,8 @@
 #include "phodav-utils.h"
 
 #include <sys/types.h>
-#ifdef HAVE_ATTR_XATTR_H
-#include <attr/xattr.h>
+#ifdef HAVE_SYS_XATTR_H
+#include <sys/xattr.h>
 #endif
 
 
@@ -50,12 +50,12 @@ set_attr (GFile *file, xmlNodePtr attrnode,
       attrname = xml_node_get_xattr_name (attrnode, "user.");
       g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
 
-      /* https://bugzilla.gnome.org/show_bug.cgi?id=720506 */
+      /* https://gitlab.gnome.org/GNOME/glib/issues/1187 */
       gchar *path = g_file_get_path (file);
-#ifdef HAVE_ATTR_XATTR_H
+#ifdef HAVE_SYS_XATTR_H
       removexattr (path, attrname);
 #else
-      g_debug ("fixme");
+      g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
 #endif
       g_free (path);
     }
