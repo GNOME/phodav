@@ -4,7 +4,8 @@
 
 phởdav is a WebDav server implementation using libsoup (RFC 4918).
 
-Releases: http://ftp.gnome.org/pub/GNOME/sources/phodav/
+Releases are uploaded in [GNOME's FTP](http://ftp.gnome.org/pub/GNOME/sources/phodav/)
+and in the [tags section](https://gitlab.gnome.org/GNOME/phodav/-/tags)
 
 ## Tools
 
