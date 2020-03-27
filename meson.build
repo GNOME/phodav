@@ -45,8 +45,8 @@ if d1.found() and d2.found()
   conf.set('WITH_AVAHI', 1)
 endif
 
-if compiler.has_header('attr/xattr.h')
-  conf.set('HAVE_ATTR_XATTR_H', 1)
+if compiler.has_header('sys/xattr.h')
+  conf.set('HAVE_SYS_XATTR_H', 1)
 endif
 
 subdir('po')
