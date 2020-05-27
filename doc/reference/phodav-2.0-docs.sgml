@@ -19,7 +19,7 @@
   <chapter>
     <title>PhoDAV API</title>
         <xi:include href="xml/phodav-server.xml"/>
-
+        <xi:include href="xml/phodav-virtual-dir.xml"/>
   </chapter>
   <chapter id="object-tree">
     <title>Object Hierarchy</title>

@@ -1,6 +1,7 @@
 headers = [
   'phodav.h',
   'phodav-server.h',
+  'phodav-virtual-dir.h',
 ]
 
 install_headers(headers, subdir : 'libphodav-2.0/libphodav')
@@ -21,6 +22,7 @@ sources = [
   'phodav-path.c',
   'phodav-server.c',
   'phodav-utils.c',
+  'phodav-virtual-dir.c'
 ]
 
 if not dependency('glib-2.0', version : '>= 2.51.2', required: false).found()
