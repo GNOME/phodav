@@ -156,7 +156,7 @@ update_root_handler (PhodavServer *self)
 
   handler = path_handler_new (self, g_file_new_for_path (self->root));
 
-  soup_server_add_handler (self->server, NULL,
+  soup_server_add_handler (self->server, "/",
                            server_callback,
                            handler,
                            (GDestroyNotify) path_handler_free);
@@ -186,6 +186,12 @@ phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
+  /* SoupServer could live longer than PhodavServer,
+   * this frees the PhodavHandler passed as user_data */
+  soup_server_remove_handler (self->server, "/");
+  g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+  g_clear_object (&self->server);
+  g_clear_object (&self->cancellable);
   g_clear_pointer (&self->root, g_free);
   g_clear_pointer (&self->paths, g_hash_table_unref);
 
