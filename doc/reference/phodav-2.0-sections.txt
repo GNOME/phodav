@@ -1,6 +1,7 @@
 <SECTION>
 <FILE>phodav-server</FILE>
 phodav_server_new
+phodav_server_new_for_root_file
 phodav_server_get_soup_server
 <SUBSECTION Standard>
 PHODAV_IS_SERVER

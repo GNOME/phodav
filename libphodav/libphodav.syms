@@ -4,6 +4,7 @@ LIBPHODAV1_0.0 {
         phodav_server_get_soup_server;
         phodav_server_get_type;
         phodav_server_new;
+        phodav_server_new_for_root_file;
         phodav_server_quit;
         phodav_server_run;
         phodav_virtual_dir_new_root;

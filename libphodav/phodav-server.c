@@ -40,7 +40,7 @@ struct _PhodavServer
   GObject       parent;
   SoupServer   *server;
   GCancellable *cancellable;
-  gchar        *root;
+  GFile        *root_file;
   PathHandler  *root_handler; /* weak ref */
   GHashTable   *paths;
   gboolean      readonly;
@@ -57,6 +57,7 @@ G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 enum {
   PROP_0,
   PROP_ROOT,
+  PROP_ROOT_FILE,
   PROP_SERVER,
   PROP_READONLY,
 };
@@ -125,7 +126,7 @@ path_handler_new (PhodavServer *self, GFile *file)
   PathHandler *h = g_slice_new0 (PathHandler);
 
   h->self = self;
-  h->file = file;
+  h->file = g_object_ref (file);
   return h;
 }
 
@@ -150,10 +151,10 @@ update_root_handler (PhodavServer *self)
 {
   PathHandler *handler;
 
-  if (!self->root || !self->server)
+  if (!self->root_file || !self->server)
     return;
 
-  handler = path_handler_new (self, g_file_new_for_path (self->root));
+  handler = path_handler_new (self, self->root_file);
 
   soup_server_add_handler (self->server, "/",
                            server_callback,
@@ -191,7 +192,7 @@ phodav_server_dispose (GObject *gobject)
   g_signal_handlers_disconnect_by_func (self->server, request_started, self);
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
-  g_clear_pointer (&self->root, g_free);
+  g_clear_object (&self->root_file);
   g_clear_pointer (&self->paths, g_hash_table_unref);
 
   /* Chain up to the parent class */
@@ -210,7 +211,12 @@ phodav_server_get_property (GObject    *gobject,
   switch (prop_id)
     {
     case PROP_ROOT:
-      g_value_set_string (value, self->root);
+      g_value_take_string (value, self->root_file ?
+        g_file_get_path (self->root_file) : NULL);
+      break;
+
+    case PROP_ROOT_FILE:
+      g_value_set_object (value, self->root_file);
       break;
 
     case PROP_SERVER:
@@ -234,12 +240,26 @@ phodav_server_set_property (GObject      *gobject,
                             GParamSpec   *pspec)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
+  const gchar *root;
+
+  /* do not overwrite the root file during construction,
+   * phodav should be constructed either with "root" or "root-file", not both */
+  if (!self->server && self->root_file)
+    return;
 
   switch (prop_id)
     {
     case PROP_ROOT:
-      g_free (self->root);
-      self->root = g_value_dup_string (value);
+      root = g_value_get_string (value);
+      g_clear_object (&self->root_file);
+      if (root)
+        self->root_file = g_file_new_for_path (root);
+      update_root_handler (self);
+      break;
+
+    case PROP_ROOT_FILE:
+      g_clear_object (&self->root_file);
+      self->root_file = g_value_dup_object (value);
       update_root_handler (self);
       break;
 
@@ -263,6 +283,15 @@ phodav_server_class_init (PhodavServerClass *klass)
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;
 
+  /**
+   * PhodavServer:root:
+   *
+   * This property is interconnected with the property #PhodavServer:root-file.
+   * Changing #PhodavServer:root affects #PhodavServer:root-file and vice versa.
+   *
+   * You can use either of them or none to construct a new #PhodavServer,
+   * you should not use both.
+   **/
   g_object_class_install_property
     (gobject_class, PROP_ROOT,
     g_param_spec_string ("root",
@@ -272,6 +301,24 @@ phodav_server_class_init (PhodavServerClass *klass)
                          G_PARAM_CONSTRUCT |
                          G_PARAM_READWRITE |
                          G_PARAM_STATIC_STRINGS));
+
+/**
+   * PhodavServer:root-file:
+   *
+   * A more generic version of #PhodavServer:root,
+   * see it for more details.
+   *
+   * Since: 2.5
+   **/
+  g_object_class_install_property
+    (gobject_class, PROP_ROOT_FILE,
+     g_param_spec_object ("root-file",
+                          "Root file",
+                          "Root file",
+                          G_TYPE_FILE,
+                          G_PARAM_CONSTRUCT |
+                          G_PARAM_READWRITE |
+                          G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property
     (gobject_class, PROP_SERVER,
@@ -523,6 +570,8 @@ phodav_server_get_soup_server (PhodavServer *self)
  * @root: (allow-none): Root path.
  *
  * Creates a new #PhodavServer.
+ * This is equivalent to constructing a #GFile from @root
+ * and using phodav_server_new_for_root_file().
  *
  * Returns: a new #PhodavServer
  **/
@@ -531,5 +580,24 @@ phodav_server_new (const gchar *root)
 {
   return g_object_new (PHODAV_TYPE_SERVER,
                        "root", root,
+                       NULL);
+}
+
+/**
+ * phodav_server_new_for_root_file:
+ * @root: (nullable): a #GFile specifying the root
+ *
+ * Creates a new #PhodavServer and publishes the files under @root.
+ *
+ * Returns: (transfer full): a new #PhodavServer
+ *
+ * Since: 2.5
+ **/
+PhodavServer *
+phodav_server_new_for_root_file (GFile *root)
+{
+  return g_object_new (PHODAV_TYPE_SERVER,
+                       "root-file",
+                       root,
                        NULL);
 }
