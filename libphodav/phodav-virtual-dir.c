@@ -68,6 +68,7 @@ struct _PhodavVirtualDir {
   gboolean          dummy;
   PhodavVirtualDir *parent;
   GList            *children;
+  GFile            *real_root; /* only set for virtual root, otherwise NULL */
 
   /* TODO: we could store just the base name and build up the path when needed */
   gchar            *path;
@@ -85,6 +86,7 @@ struct _PhodavVirtualDirEnumerator {
   GFileQueryInfoFlags  flags;
   GList               *children;
   GList               *current;
+  GFileEnumerator     *real_root_enumerator;
 };
 
 G_DEFINE_TYPE (PhodavVirtualDirEnumerator, phodav_virtual_dir_enumerator, G_TYPE_FILE_ENUMERATOR)
@@ -98,7 +100,11 @@ phodav_virtual_dir_enumerator_next_file (GFileEnumerator *enumerator,
   GFile *file;
 
   if (!self->current || !self->current->data)
-    return NULL;
+    {
+      if (self->real_root_enumerator)
+        return g_file_enumerator_next_file (self->real_root_enumerator, cancellable, error);
+      return NULL;
+    }
 
   file = G_FILE (self->current->data);
   self->current = self->current->next;
@@ -114,6 +120,7 @@ phodav_virtual_dir_enumerator_close (GFileEnumerator *enumerator,
   g_clear_pointer (&self->attributes, g_free);
   g_list_free_full (self->children, g_object_unref);
   self->children = NULL;
+  g_clear_object (&self->real_root_enumerator);
   return TRUE;
 }
 
@@ -160,6 +167,8 @@ static gchar *
 phodav_virtual_dir_get_path (GFile *file)
 {
   PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+  if (self->real_root)
+    return g_file_get_path (self->real_root);
   return g_strdup (self->path);
 }
 
@@ -179,6 +188,9 @@ phodav_virtual_dir_query_info (GFile                *file,
       g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "file has no parent");
       return NULL;
     }
+
+  if (self->real_root)
+    return g_file_query_info (self->real_root, attributes, flags, cancellable, error);
 
   info = g_file_info_new ();
   base = phodav_virtual_dir_get_basename (file);
@@ -206,6 +218,9 @@ phodav_virtual_dir_query_filesystem_info (GFile         *file,
       return NULL;
     }
 
+  if (self->real_root)
+    return g_file_query_filesystem_info (self->real_root, attributes, cancellable, error);
+
   info = g_file_info_new ();
   g_file_info_set_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_FREE, 0);
   return info;
@@ -223,6 +238,10 @@ phodav_virtual_dir_measure_disk_usage (GFile                         *file,
                                        GError                       **error)
 {
   /* prop_quota_used in phodav-method-propfind.c is only interested in @disk_usage */
+  PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+  if (self->real_root)
+    return g_file_measure_disk_usage (self->real_root, flags, cancellable, progress_callback,
+                                      progress_data, disk_usage, num_dirs, num_files, error);
   g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Operation not supported");
   return FALSE;
 }
@@ -256,6 +275,15 @@ phodav_virtual_dir_enumerate_children (GFile                *file,
   enumerator->flags = flags;
   enumerator->children = g_list_copy_deep (self->children, (GCopyFunc) g_object_ref, NULL);
   enumerator->current = enumerator->children;
+  if (self->real_root)
+    {
+      enumerator->real_root_enumerator =
+        g_file_enumerate_children(self->real_root,
+                                  attributes,
+                                  flags,
+                                  cancellable,
+                                  error);
+    }
   return G_FILE_ENUMERATOR (enumerator);
 }
 
@@ -290,12 +318,12 @@ phodav_virtual_dir_find_direct_child (PhodavVirtualDir *parent,
  *     1) PhodavVirtualDir
  *     2) GFile attached to PhodavVirtualDir
  *     3) GFile (child of attached GFile)
- *     4) NULL
- * In case 1) and 2), the reference count is incremented by 1,
- * this means that the result should always be freed. */
+ *     4) NULL (when not found)
+ * If returned value is non-NULL, call g_object_unref(). */
 static GFile *
 phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
-                                         const gchar      *path)
+                                         const gchar      *path,
+                                         gboolean         *common_segment)
 {
   GFile *current;
   gchar **segments, **segment_ptr, *real;
@@ -303,6 +331,9 @@ phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
   g_return_val_if_fail (parent != NULL, NULL);
   g_return_val_if_fail (path != NULL, NULL);
   g_return_val_if_fail (path[0] != '\0', NULL);
+
+  if (common_segment)
+    *common_segment = FALSE;
 
   segments = g_strsplit (path, "/", -1);
 
@@ -325,8 +356,15 @@ phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
           return current;
         }
       current = phodav_virtual_dir_find_direct_child (PHODAV_VIRTUAL_DIR (current), *segment_ptr);
-      if (!current)
-        break;
+      if (current)
+        {
+          if (common_segment)
+            *common_segment = TRUE;
+        }
+      else
+        {
+          break;
+        }
     }
 
   g_strfreev (segments);
@@ -341,15 +379,20 @@ phodav_virtual_dir_resolve_relative_path (GFile       *file,
 {
   PhodavVirtualDir *parent;
   GFile *child;
+  gboolean common_segment;
 
   if (relative_path[0] == '\0')
     return g_object_ref (file);
 
-  /* try to find the file first */
+  /* try to find the file inside virtual dirs first */
   parent = PHODAV_VIRTUAL_DIR (file);
-  child = phodav_virtual_dir_find_child_recursive (parent, relative_path);
+  child = phodav_virtual_dir_find_child_recursive (parent, relative_path, &common_segment);
   if (child)
     return child;
+  if (common_segment)
+    return virtual_dir_dummy_new ();
+  if (parent->real_root)
+    return g_file_resolve_relative_path (parent->real_root, relative_path);
 
   return virtual_dir_dummy_new ();
 }
@@ -439,6 +482,23 @@ phodav_virtual_dir_set_display_name (GFile         *file,
 }
 
 static gboolean
+phodav_virtual_dir_set_attribute (GFile                *file,
+                                  const char           *attribute,
+                                  GFileAttributeType    type,
+                                  gpointer              value_p,
+                                  GFileQueryInfoFlags   flags,
+                                  GCancellable         *cancellable,
+                                  GError              **error)
+{
+  PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+  if (self->real_root)
+    return g_file_set_attribute (self->real_root, attribute, type,
+                                 value_p, flags, cancellable, error);
+  g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Operation not supported");
+  return FALSE;
+}
+
+static gboolean
 phodav_virtual_dir_set_attributes_from_info (GFile                *file,
                                              GFileInfo            *info,
                                              GFileQueryInfoFlags   flags,
@@ -476,6 +536,7 @@ phodav_virtual_dir_file_interface_init (GFileIface *iface)
   iface->get_relative_path = phodav_virtual_dir_get_relative_path;
   iface->get_child_for_display_name = phodav_virtual_dir_get_child_for_display_name;
   iface->set_display_name = phodav_virtual_dir_set_display_name;
+  iface->set_attribute = phodav_virtual_dir_set_attribute;
   iface->set_attributes_from_info = phodav_virtual_dir_set_attributes_from_info;
 }
 
@@ -546,6 +607,55 @@ phodav_virtual_dir_new_root (void)
 }
 
 /**
+ * phodav_virtual_dir_root_set_real:
+ * @root: #PhodavVirtualDir obtained from phodav_virtual_dir_new_root()
+ * @real_root_path: (nullable): path to a real directory
+ *
+ * If @real_root_path is not %NULL, @root lists all files added with
+ * phodav_virtual_dir_new_dir() and phodav_virtual_dir_attach_real_child()
+ * as well as all files under @real_root_path as its children.
+ *
+ * This enables you to keep the server path to files in @real_root_path unchanged
+ * while also using the virtual folders. (@real_root_path/fileA is still accessible as "/fileA",
+ * if you used phodav_virtual_dir_attach_real_child(),
+ * the path would change to "/real_root-basename/fileA")
+ *
+ * This does not check for any conflicts between the virtual directories and
+ * the real files - virtual directories take precedence (e.g. in g_file_get_child()).
+ **/
+void
+phodav_virtual_dir_root_set_real (PhodavVirtualDir *root,
+                                  const gchar      *real_root_path)
+{
+  g_return_if_fail (root != NULL);
+  g_return_if_fail (is_root(root));
+
+  g_clear_object (&root->real_root);
+  if (real_root_path)
+    root->real_root = g_file_new_for_path (real_root_path);
+  else
+    root->real_root = NULL;
+}
+
+/**
+ * phodav_virtual_dir_root_get_real:
+ * @root: #PhodavVirtualDir obtained from phodav_virtual_dir_new_root()
+ *
+ * Returns: (transfer full): the #GFile previously set by phodav_virtual_dir_root_set_real(),
+ * otherwise NULL.
+ **/
+GFile *
+phodav_virtual_dir_root_get_real (PhodavVirtualDir *root)
+{
+  g_return_val_if_fail (root != NULL, NULL);
+  g_return_val_if_fail (is_root(root), NULL);
+
+  if (root->real_root)
+    return g_object_ref (root->real_root);
+  return NULL;
+}
+
+/**
  * phodav_virtual_dir_new_dir:
  * @root: #PhodavVirtualDir returned by phodav_virtual_dir_new_root()
  * @path: path of the #PhodavVirtualDir that should be created
@@ -583,7 +693,7 @@ phodav_virtual_dir_new_dir (PhodavVirtualDir  *root,
       goto end;
     }
 
-  f = phodav_virtual_dir_find_child_recursive (root, dir);
+  f = phodav_virtual_dir_find_child_recursive (root, dir, NULL);
   if (!f)
     {
       g_set_error_literal (error,

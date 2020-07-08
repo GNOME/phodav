@@ -17,6 +17,8 @@ phodav_server_get_type
 <SECTION>
 <FILE>phodav-virtual-dir</FILE>
 phodav_virtual_dir_new_root
+phodav_virtual_dir_root_set_real
+phodav_virtual_dir_root_get_real
 phodav_virtual_dir_new_dir
 phodav_virtual_dir_attach_real_child
 

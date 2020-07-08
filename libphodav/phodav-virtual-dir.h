@@ -31,6 +31,10 @@ PhodavVirtualDir *    phodav_virtual_dir_new_dir              (PhodavVirtualDir 
                                                                GError          **error);
 gboolean              phodav_virtual_dir_attach_real_child    (PhodavVirtualDir *parent,
                                                                GFile            *child);
+void                  phodav_virtual_dir_root_set_real        (PhodavVirtualDir *root,
+                                                               const gchar      *real_root_path);
+
+GFile *               phodav_virtual_dir_root_get_real        (PhodavVirtualDir *root);
 
 #define PHODAV_TYPE_VIRTUAL_DIR_ENUMERATOR phodav_virtual_dir_enumerator_get_type ()
 G_DECLARE_FINAL_TYPE (PhodavVirtualDirEnumerator, phodav_virtual_dir_enumerator,

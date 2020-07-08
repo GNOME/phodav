@@ -18,6 +18,7 @@
 #include "phodav-priv.h"
 #include "phodav-multistatus.h"
 #include "phodav-utils.h"
+#include "phodav-virtual-dir.h"
 
 #include <sys/types.h>
 #ifdef HAVE_SYS_XATTR_H
@@ -50,6 +51,12 @@ set_attr (GFile *file, xmlNodePtr attrnode,
       g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
 
       /* https://gitlab.gnome.org/GNOME/glib/issues/1187 */
+      if (PHODAV_IS_VIRTUAL_DIR (file))
+        file = phodav_virtual_dir_root_get_real (PHODAV_VIRTUAL_DIR (file));
+      else
+        g_object_ref (file);
+      if (!file)
+        return SOUP_STATUS_FORBIDDEN;
       gchar *path = g_file_get_path (file);
 #ifdef HAVE_SYS_XATTR_H
       removexattr (path, attrname);
@@ -57,6 +64,7 @@ set_attr (GFile *file, xmlNodePtr attrnode,
       g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
 #endif
       g_free (path);
+      g_object_unref (file);
     }
   else
     {
