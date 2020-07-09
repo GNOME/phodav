@@ -39,9 +39,6 @@
 struct _PhodavServer
 {
   GObject       parent;
-  GMainContext *context;
-  GMainLoop    *loop;
-  GThread      *thread;
   SoupServer   *server;
   GCancellable *cancellable;
   gchar        *root;
@@ -144,8 +141,6 @@ static void
 phodav_server_init (PhodavServer *self)
 {
   self->cancellable = g_cancellable_new ();
-  self->context = g_main_context_new ();
-  self->loop = g_main_loop_new (self->context, FALSE);
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
@@ -161,7 +156,7 @@ update_root_handler (PhodavServer *self)
 
   handler = path_handler_new (self, g_file_new_for_path (self->root));
 
-  soup_server_add_handler (self->server, NULL,
+  soup_server_add_handler (self->server, "/",
                            server_callback,
                            handler,
                            (GDestroyNotify) path_handler_free);
@@ -191,9 +186,13 @@ phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
+  /* SoupServer could live longer than PhodavServer,
+   * this frees the PhodavHandler passed as user_data */
+  soup_server_remove_handler (self->server, "/");
+  g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+  g_clear_object (&self->server);
+  g_clear_object (&self->cancellable);
   g_clear_pointer (&self->root, g_free);
-  g_clear_pointer (&self->context, g_main_context_unref);
-  g_clear_pointer (&self->thread, g_thread_unref);
   g_clear_pointer (&self->paths, g_hash_table_unref);
 
   /* Chain up to the parent class */
