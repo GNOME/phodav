@@ -48,6 +48,7 @@ build:
     paths:
       - build/meson-logs/*.txt
       - dev
+      - build-no-avahi/tests/virtual-dir-server
     expire_in: 1 week
     when: always
 
@@ -84,5 +85,10 @@ litmus:
     - export LD_LIBRARY_PATH=$(pwd)/dev/lib64/
     - ./dev/bin/chezdav &
     # wait for the port to open
+    - while ! nc -z localhost 8080; do sleep 1s; done
+    - litmus --keep-going dav://localhost:8080/
+    - kill $!
+    # check that virtual root works as well
+    - ./build-no-avahi/tests/virtual-dir-server &
     - while ! nc -z localhost 8080; do sleep 1s; done
     - litmus dav://localhost:8080/
