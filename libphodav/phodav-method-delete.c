@@ -61,6 +61,12 @@ phodav_delete_file (const gchar *path, GFile *file,
       g_clear_object (&e);
     }
 
+  if (error)
+    {
+      g_warning ("DELETE: enumeration error: %s", error->message);
+      g_clear_error (&error);
+    }
+
   if (!g_file_delete (file, cancellable, &error) && mstatus)
     {
       status = error_to_status (error);
