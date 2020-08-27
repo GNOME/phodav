@@ -4,8 +4,16 @@ LIBPHODAV1_0.0 {
         phodav_server_get_soup_server;
         phodav_server_get_type;
         phodav_server_new;
+        phodav_server_new_for_root_file;
         phodav_server_quit;
         phodav_server_run;
+        phodav_virtual_dir_new_root;
+        phodav_virtual_dir_root_set_real;
+        phodav_virtual_dir_root_get_real;
+        phodav_virtual_dir_new_dir;
+        phodav_virtual_dir_attach_real_child;
+        phodav_virtual_dir_get_type;
+        phodav_virtual_dir_enumerator_get_type;
     local:
         *;
 };

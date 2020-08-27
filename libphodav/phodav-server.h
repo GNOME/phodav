@@ -32,10 +32,11 @@ G_BEGIN_DECLS
 typedef struct _PhodavServer PhodavServer;
 typedef struct _PhodavServerClass PhodavServerClass;
 
-GType           phodav_server_get_type        (void);
+GType           phodav_server_get_type          (void);
 
-PhodavServer *  phodav_server_new             (const gchar *root);
-SoupServer *    phodav_server_get_soup_server (PhodavServer *server);
+PhodavServer *  phodav_server_new               (const gchar *root);
+PhodavServer *  phodav_server_new_for_root_file (GFile *root);
+SoupServer *    phodav_server_get_soup_server   (PhodavServer *server);
 
 G_END_DECLS
 

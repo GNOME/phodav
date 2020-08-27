@@ -1,6 +1,7 @@
 <SECTION>
 <FILE>phodav-server</FILE>
 phodav_server_new
+phodav_server_new_for_root_file
 phodav_server_get_soup_server
 <SUBSECTION Standard>
 PHODAV_IS_SERVER
@@ -14,3 +15,17 @@ PhodavServerClass
 phodav_server_get_type
 </SECTION>
 
+<SECTION>
+<FILE>phodav-virtual-dir</FILE>
+phodav_virtual_dir_new_root
+phodav_virtual_dir_root_set_real
+phodav_virtual_dir_root_get_real
+phodav_virtual_dir_new_dir
+phodav_virtual_dir_attach_real_child
+
+<SUBSECTION Standard>
+PHODAV_TYPE_VIRTUAL_DIR
+PHODAV_TYPE_VIRTUAL_DIR_ENUMERATOR
+PhodavVirtualDir
+PhodavVirtualDirEnumerator
+</SECTION>

@@ -54,6 +54,7 @@ subdir('libphodav')
 subdir('bin')
 subdir('doc')
 subdir('data')
+subdir('tests')
 
 config = {
   'GETTEXT_PACKAGE' : proj_gettext,

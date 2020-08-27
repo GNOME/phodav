@@ -18,5 +18,6 @@
 #define __PHODAV_H__
 
 #include <libphodav/phodav-server.h>
+#include <libphodav/phodav-virtual-dir.h>
 
 #endif /* __PHODAV_H__ */

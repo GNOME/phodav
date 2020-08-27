@@ -18,6 +18,7 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 #include "phodav-lock.h"
+#include "phodav-virtual-dir.h"
 
 static gboolean
 do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags,
@@ -183,6 +184,13 @@ phodav_method_movecopy (PathHandler *handler, SoupMessage *msg,
   g_free (udest);
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
+
+  /* take the short path as g_file_copy seems to be rather complicated */
+  if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))
+    {
+      status = SOUP_STATUS_FORBIDDEN;
+      goto end;
+    }
   status = do_movecopy_file (msg, file, dest_file, dest,
                              cancellable, err);
 
