@@ -1,3 +1,10 @@
+v2.5
+====
+
+- !16 - add PhodavVirtualDir & related API (Jakub Janků)
+- various misc build and code fixes
+- CI improved (litmus check)
+
 v2.4
 ====
 

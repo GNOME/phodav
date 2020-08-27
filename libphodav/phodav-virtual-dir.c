@@ -59,7 +59,7 @@
  * is dropped, the whole structure is destroyed. Children that have other references (non-internal)
  * become dummies, otherwise they're freed.
  *
- * #PhodavVirtualDir is available since phodav 2.5
+ * #PhodavVirtualDir is available since phodav 2.5.
  */
 
 struct _PhodavVirtualDir {
@@ -594,6 +594,7 @@ phodav_virtual_dir_init (PhodavVirtualDir *self)
  * Creates a new root virtual directory that acts as the ancestor
  * of all further virtual directories.
  *
+ * Since: 2.5
  * Returns: (transfer full): a new #PhodavVirtualDir with the path `/`
  **/
 PhodavVirtualDir *
@@ -622,6 +623,8 @@ phodav_virtual_dir_new_root (void)
  *
  * This does not check for any conflicts between the virtual directories and
  * the real files - virtual directories take precedence (e.g. in g_file_get_child()).
+ *
+ * Since: 2.5
  **/
 void
 phodav_virtual_dir_root_set_real (PhodavVirtualDir *root,
@@ -641,6 +644,7 @@ phodav_virtual_dir_root_set_real (PhodavVirtualDir *root,
  * phodav_virtual_dir_root_get_real:
  * @root: #PhodavVirtualDir obtained from phodav_virtual_dir_new_root()
  *
+ * Since: 2.5
  * Returns: (transfer full): the #GFile previously set by phodav_virtual_dir_root_set_real(),
  * otherwise NULL.
  **/
@@ -669,6 +673,7 @@ phodav_virtual_dir_root_get_real (PhodavVirtualDir *root)
  * Note that this does not create parent directories.
  * You have to call this repeatedly yourself if the parent(s) don't exist yet.
  *
+ * Since: 2.5
  * Returns: (transfer full): a new #PhodavVirtualDir that corresponds to the @path
  **/
 PhodavVirtualDir *
@@ -750,6 +755,7 @@ end:
  *
  * If you want to add a #PhodavVirtualDir to @parent, use phodav_virtual_dir_new_dir() instead.
  *
+ * Since: 2.5
  * Returns: %TRUE on success, otherwise %FALSE
  **/
 gboolean
