@@ -1,0 +1,92 @@
+# Chinese (China) translation for phodav.
+# Copyright (C) 2020 phodav's COPYRIGHT HOLDER
+# This file is distributed under the same license as the phodav package.
+# Damned <damnedlies@163.com>, 2020.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: phodav master\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2020-08-27 11:53+0000\n"
+"PO-Revision-Date: 2020-09-09 19:57-0400\n"
+"Last-Translator: Boyuan Yang <073plan@gmail.com>\n"
+"Language-Team: Chinese (China) <i18n-zh@googlegroups.com>\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 2.4.1\n"
+
+#: bin/chezdav.c:115
+msgid "Print program version"
+msgstr "打印程序版本"
+
+#: bin/chezdav.c:116
+msgid "Be verbose"
+msgstr "显示详细信息"
+
+#: bin/chezdav.c:117
+msgid "Port to listen to"
+msgstr "要监听的端口"
+
+#: bin/chezdav.c:118
+msgid "Listen on loopback only"
+msgstr "仅监听回环接口"
+
+#: bin/chezdav.c:119
+msgid "Listen on all interfaces"
+msgstr "监听所有接口"
+
+#: bin/chezdav.c:120
+msgid "Path to export"
+msgstr "导出路径"
+
+#: bin/chezdav.c:121
+msgid "Path to htdigest file"
+msgstr "Htdigest 文件的路径"
+
+#: bin/chezdav.c:122
+msgid "Read-only access"
+msgstr "只读访问"
+
+#: bin/chezdav.c:133
+msgid "- simple WebDAV server"
+msgstr "- 简单的 WebDAV 服务器"
+
+#: bin/chezdav.c:134
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "向 <%s> 报告错误"
+
+#: bin/chezdav.c:141
+#, c-format
+msgid "Option parsing failed: %s\n"
+msgstr "无法解析选项：%s\n"
+
+#: bin/chezdav.c:145
+#, c-format
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr "不支持的额外参数：%s …\n"
+
+#: bin/chezdav.c:154
+msgid "--local and --public are mutually exclusive\n"
+msgstr "--local 和 --public 是互斥的\n"
+
+#: bin/chezdav.c:178
+#, c-format
+msgid "Failed to open htdigest: %s\n"
+msgstr "无法打开 htdigest：%s\n"
+
+#: bin/chezdav.c:196
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS 失败：%s\n"
+
+#: bin/chezdav.c:207
+msgid "Internal error, should not happen\n"
+msgstr "内部错误，不应发生\n"
+
+#: bin/chezdav.c:210
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "监听失败：%s\n"
