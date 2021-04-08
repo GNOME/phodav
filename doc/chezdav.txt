@@ -33,6 +33,13 @@ OPTIONS
 *-p, --port*=PORT::
     Port to listen from. By default, a port is allocated randomly.
 
+*--local::
+    Listen on loopback interface only.
+
+*--public::
+    Listen on all network interfaces.
+
+
 *-v, --verbose*::
     Verbosely print running information.
 
