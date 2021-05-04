@@ -6,13 +6,13 @@ option('avahi',
        type : 'feature',
        description : 'Build with avahi/mdns')
 
-option('systemd',
-       type : 'feature',
-       description : 'Install systemd units/configuration')
+option('systemdsystemunitdir',
+       type: 'string',
+       description: 'Directory for systemd system unit files')
 
-option('udev',
-       type : 'feature',
-       description : 'Install udev rules')
+option('udevrulesdir',
+       type : 'string',
+       description : 'Directory for udev rules')
 
 option('build-id',
        type : 'integer',
