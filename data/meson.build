@@ -1,16 +1,28 @@
-systemd = dependency('systemd', required : get_option('systemd'))
-if systemd.found()
+systemd_systemunitdir = get_option('systemdsystemunitdir')
+if systemd_systemunitdir == ''
+  systemd = dependency('systemd', required : false)
+  if systemd.found()
+    systemd_systemunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir')
+  endif
+endif
+if systemd_systemunitdir != ''
   install_data(
     'spice-webdavd.service',
-    install_dir : systemd.get_pkgconfig_variable('systemdsystemunitdir')
+    install_dir : systemd_systemunitdir
   )
 endif
 
-udev = dependency('udev', required : get_option('udev'))
-if udev.found()
+udev_rulesdir = get_option('udevrulesdir')
+if udev_rulesdir == ''
+  udev = dependency('udev', required : false)
+  if udev.found()
+    udev_rulesdir = '@0@/@1@'.format(udev.get_pkgconfig_variable('udevdir'), 'rules.d')
+  endif
+endif
+if udev_rulesdir != ''
   install_data(
     '70-spice-webdavd.rules',
-    install_dir : '@0@/@1@'.format(udev.get_pkgconfig_variable('udevdir'), 'rules.d'),
+    install_dir : udev_rulesdir
   )
 endif
 
