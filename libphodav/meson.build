@@ -30,7 +30,9 @@ if not dependency('glib-2.0', version : '>= 2.51.2', required: false).found()
 endif
 
 mapfile = 'libphodav.syms'
-vflag = '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile)
+vflag = compiler.get_supported_link_arguments([
+  '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile),
+])
 
 libphodav = library(
   'phodav-2.0',
