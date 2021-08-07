@@ -38,6 +38,10 @@ static gint port = 8080;
 static gint local = 0;
 static gint public = 0;
 
+#ifdef WITH_AVAHI
+static gint nomdns = 0;
+#endif
+
 G_GNUC_PRINTF (1, 2) static void
 my_error (const gchar *format, ...)
 {
@@ -120,6 +124,9 @@ main (int argc, char *argv[])
     { "path", 'P', 0, G_OPTION_ARG_FILENAME, &path, N_ ("Path to export"), NULL },
     { "htdigest", 'd', 0, G_OPTION_ARG_FILENAME, &htdigest, N_ ("Path to htdigest file"), NULL },
     { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
+#ifdef WITH_AVAHI
+    { "no-mdns", 0, 0, G_OPTION_ARG_NONE, &nomdns, N_ ("Skip mDNS service announcement"), NULL },
+#endif
     { NULL }
   };
 
@@ -192,7 +199,7 @@ main (int argc, char *argv[])
 
 #ifdef WITH_AVAHI
   gchar *name = get_realm ();
-  if (!avahi_client_start (name, port, local, &error))
+  if (!nomdns && !avahi_client_start (name, port, local, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
