@@ -57,6 +57,16 @@ delete_file_recursive (GFile *file)
   g_file_delete (file, NULL, NULL);
 }
 
+static gboolean
+stdin_watch (GIOChannel *source, GIOCondition condition, gpointer data)
+{
+  g_debug ("stdin condition %d, quitting", condition);
+  GMainLoop *loop = data;
+  g_main_loop_quit (loop);
+
+  return G_SOURCE_REMOVE;
+}
+
 /* This is basically a very stripped-down version of chezdav
  * for the purpose of testing PhodavVirtualDir.
  *
@@ -65,6 +75,11 @@ delete_file_recursive (GFile *file)
 int
 main (int argc, char *argv[])
 {
+  gboolean quit_on_stdin = FALSE;
+  if (argc >= 2 && !g_strcmp0 (argv[1], "--quit-on-stdin")) {
+    quit_on_stdin = TRUE;
+  }
+
   GFile *root_dir = g_file_new_for_path ("./phodav-virtual-root");
   GFile *real_dir = g_file_get_child (root_dir, "real");
 
@@ -99,6 +114,18 @@ main (int argc, char *argv[])
     }
 
   GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+
+  if (quit_on_stdin) {
+    GIOChannel *stdin_channel;
+#ifdef G_OS_WIN32
+    stdin_channel = g_io_channel_win32_new_fd (0);
+#else
+    stdin_channel = g_io_channel_unix_new (0);
+#endif
+    g_io_add_watch (stdin_channel, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_watch, loop);
+    g_io_channel_unref (stdin_channel);
+  }
+
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
   g_object_unref (phodav);

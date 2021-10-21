@@ -15,9 +15,6 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/prctl.h>
 #include <glib.h>
 
 #include "libphodav/phodav.h"
@@ -97,15 +94,17 @@ get_test_path (const TestCase *test)
 int
 main (int argc, char *argv[])
 {
-  pid_t child_pid = fork ();
-  g_assert_cmpint (child_pid, !=, -1);
-  if (child_pid == 0)
-    {
-      prctl(PR_SET_PDEATHSIG, SIGTERM);
-      execl ("tests/virtual-dir-server", "virtual-dir-server", NULL);
-      g_printerr ("Error launching virtual-dir-server\n");
-      return 1;
-    }
+  GError *error = NULL;
+  GSubprocess *server_subproc;
+  server_subproc = g_subprocess_new (
+    G_SUBPROCESS_FLAGS_STDIN_PIPE, &error,
+    "tests/virtual-dir-server", "--quit-on-stdin", NULL);
+
+  if (error) {
+    g_printerr ("Failed to launch virtual-dir-server: %s\n", error->message);
+    g_error_free (error);
+    return 1;
+  }
 
   g_test_init (&argc, &argv, NULL);
 
@@ -146,5 +145,6 @@ main (int argc, char *argv[])
 
   gint res = g_test_run ();
   g_object_unref (session);
+  g_object_unref (server_subproc);
   return res;
 }

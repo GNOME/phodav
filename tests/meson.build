@@ -1,8 +1,6 @@
-tests_sources = []
-
-if host_machine.system() != 'windows'
-  tests_sources += 'virtual-dir.c'
-endif
+tests_sources = [
+  'virtual-dir.c',
+]
 
 executable('virtual-dir-server',
            sources : 'virtual-dir-server.c',
