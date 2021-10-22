@@ -59,7 +59,11 @@ set_attr (GFile *file, xmlNodePtr attrnode,
         return SOUP_STATUS_FORBIDDEN;
       gchar *path = g_file_get_path (file);
 #ifdef HAVE_SYS_XATTR_H
+#ifdef __APPLE__
+      removexattr (path, attrname, 0);
+#else
       removexattr (path, attrname);
+#endif
 #else
       g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
 #endif

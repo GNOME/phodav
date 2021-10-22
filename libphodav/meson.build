@@ -40,7 +40,7 @@ libphodav = library(
   c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
   include_directories : incdir,
   version: '0.0.0',
-  link_args : [ '-Wl,--no-undefined', vflag ],
+  link_args : compiler.get_supported_link_arguments([ '-Wl,--no-undefined', vflag ]),
   link_depends : mapfile,
   dependencies : deps,
   install : true,
