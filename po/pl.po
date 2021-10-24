@@ -1,15 +1,15 @@
 # Polish translation for phodav.
-# Copyright © 2014-2017 the phodav authors.
+# Copyright © 2014-2021 the phodav authors.
 # This file is distributed under the same license as the phodav package.
-# Piotr Drąg <piotrdrag@gmail.com>, 2014-2017.
-# Aviary.pl <community-poland@mozilla.org>, 2014-2017.
+# Piotr Drąg <piotrdrag@gmail.com>, 2014-2021.
+# Aviary.pl <community-poland@mozilla.org>, 2014-2021.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
-"POT-Creation-Date: 2019-02-22 12:15+0100\n"
-"PO-Revision-Date: 2017-03-19 16:40+0100\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2021-10-21 08:55+0000\n"
+"PO-Revision-Date: 2021-10-24 12:07+0200\n"
 "Last-Translator: Piotr Drąg <piotrdrag@gmail.com>\n"
 "Language-Team: Polish <community-poland@mozilla.org>\n"
 "Language: pl\n"
@@ -19,76 +19,80 @@ msgstr ""
 "Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 "
 "|| n%100>=20) ? 1 : 2);\n"
 
-#: libphodav/chezdav.c:203
+#: bin/chezdav.c:119
 msgid "Print program version"
 msgstr "Wyświetla wersję programu"
 
-#: libphodav/chezdav.c:204
+#: bin/chezdav.c:120
 msgid "Be verbose"
 msgstr "Więcej komunikatów"
 
-#: libphodav/chezdav.c:205
+#: bin/chezdav.c:121
 msgid "Port to listen to"
 msgstr "Port, na którym nasłuchiwać"
 
-#: libphodav/chezdav.c:206
+#: bin/chezdav.c:122
 msgid "Listen on loopback only"
 msgstr "Nasłuchuje tylko na interfejsie zwrotnym"
 
-#: libphodav/chezdav.c:207
+#: bin/chezdav.c:123
 msgid "Listen on all interfaces"
 msgstr "Nasłuchuje na wszystkich interfejsach"
 
-#: libphodav/chezdav.c:208
+#: bin/chezdav.c:124
 msgid "Path to export"
 msgstr "Ścieżka do wyeksportowania"
 
-#: libphodav/chezdav.c:209
+#: bin/chezdav.c:125
 msgid "Path to htdigest file"
 msgstr "Ścieżka do pliku htdigest"
 
-#: libphodav/chezdav.c:210
+#: bin/chezdav.c:126
 msgid "Read-only access"
 msgstr "Dostęp tylko do odczytu"
 
-#: libphodav/chezdav.c:224
+#: bin/chezdav.c:128
+msgid "Skip mDNS service announcement"
+msgstr "Pomija ogłaszanie usługi mDNS"
+
+#: bin/chezdav.c:140
 msgid "- simple WebDAV server"
 msgstr "— prosty serwer WebDAV"
 
-#: libphodav/chezdav.c:225
+#: bin/chezdav.c:141
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Prosimy zgłaszać błędy w <%s> (w języku angielskim)"
 
-#: libphodav/chezdav.c:232
+#: bin/chezdav.c:148
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Przetworzenie opcji się nie powiodło: %s\n"
 
-#: libphodav/chezdav.c:236
+#: bin/chezdav.c:152
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nieobsługiwane dodatkowe parametry: %s…\n"
 
-#: libphodav/chezdav.c:245
+#: bin/chezdav.c:161
 msgid "--local and --public are mutually exclusive\n"
 msgstr "Opcje --local i --public wzajemnie się wykluczają\n"
 
-#: libphodav/chezdav.c:269
+#: bin/chezdav.c:185
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Otwarcie pliku htdigest się nie powiodło: %s\n"
 
-#: libphodav/chezdav.c:288
+#: bin/chezdav.c:203
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS się nie powiodło: %s\n"
 
-#: libphodav/chezdav.c:299
+#: bin/chezdav.c:214
 msgid "Internal error, should not happen\n"
 msgstr "Wewnętrzny błąd, nie powinien się wydarzyć\n"
 
-#: libphodav/chezdav.c:302
+#: bin/chezdav.c:217
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Nasłuchiwanie się nie powiodło: %s\n"
