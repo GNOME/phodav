@@ -24,9 +24,6 @@ but you may specifiy a different folder with the *-P* option.
 
 OPTIONS
 -------
-*-d, --htdigest*=PATH::
-    Path to a htdigest file, to protect server with DIGEST method.
-
 *-P, --path*=PATH::
     Path to export.
 
@@ -39,6 +36,14 @@ OPTIONS
 *--public::
     Listen on all network interfaces.
 
+*-d, --htdigest*=PATH::
+    Path to a htdigest file, to secure the server with DIGEST
+    authentication.
+
+*--realm*=REALM::
+    The DIGEST realm string (must be identical to the string used in
+    the htdigest file). The default value is "USER's public share"
+    (where USER is the owner's username of the current process).
 
 *-v, --verbose*::
     Verbosely print running information.
@@ -57,6 +62,12 @@ EXIT STATUS
     Failure (syntax or usage error; unexpected error).
 
 
+SEE ALSO
+--------
+
+*htdigest*(1)
+
+
 AUTHOR
 ------
 chezdav was originally written by Marc-André Lureau.
@@ -64,7 +75,7 @@ chezdav was originally written by Marc-André Lureau.
 
 RESOURCES
 ---------
-Main web site: <http://wiki.gnome.org/phodav>
+Main web site: <https://wiki.gnome.org/phodav>
 
 
 COPYING
