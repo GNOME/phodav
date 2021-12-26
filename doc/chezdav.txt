@@ -36,6 +36,10 @@ OPTIONS
 *--public::
     Listen on all network interfaces.
 
+*--no-mdns::
+    Don't broadcast the share on the local network. By default, shares
+    are broadcast with mDNS/DNS-SD (when compiled with Avahi).
+
 *-d, --htdigest*=PATH::
     Path to a htdigest file, to secure the server with DIGEST
     authentication.
