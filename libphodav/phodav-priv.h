@@ -76,6 +76,7 @@ typedef gboolean (* PathCb) (const gchar *key,
 GFile *                 handler_get_file                     (PathHandler *handler);
 GCancellable *          handler_get_cancellable              (PathHandler *handler);
 PhodavServer *          handler_get_server                   (PathHandler *handler);
+gboolean                handler_get_readonly                 (PathHandler *handler);
 
 gboolean                server_foreach_parent_path           (PhodavServer *server,
                                                               const gchar *path,

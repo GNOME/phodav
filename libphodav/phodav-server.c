@@ -120,6 +120,12 @@ handler_get_cancellable (PathHandler *handler)
   return handler->self->cancellable;
 }
 
+gboolean G_GNUC_PURE
+handler_get_readonly (PathHandler *handler)
+{
+  return handler->self->readonly;
+}
+
 static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
