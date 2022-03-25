@@ -1,93 +1,97 @@
 # Dutch translation for phodav.
 # Copyright (C) 2019 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Nathan Follens <nthn@unseen.is>, 2019.
+# Nathan Follens <nfollens@gnome.org>, 2019, 2022.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2019-02-27 16:59+0000\n"
-"PO-Revision-Date: 2019-03-04 16:20+0100\n"
+"POT-Creation-Date: 2021-10-21 08:55+0000\n"
+"PO-Revision-Date: 2022-03-25 20:07+0100\n"
+"Last-Translator: Nathan Follens <nfollens@gnome.org>\n"
 "Language-Team: Dutch <gnome-nl-list@gnome.org>\n"
 "Language: nl\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"Last-Translator: Nathan Follens <nthn@unseen.is>\n"
-"X-Generator: Poedit 2.2.1\n"
+"X-Generator: Poedit 3.0.1\n"
 
-#: libphodav/chezdav.c:203
+#: bin/chezdav.c:119
 msgid "Print program version"
 msgstr "Programmaversie tonen"
 
-#: libphodav/chezdav.c:204
+#: bin/chezdav.c:120
 msgid "Be verbose"
 msgstr "Uitgebreide uitvoer"
 
-#: libphodav/chezdav.c:205
+#: bin/chezdav.c:121
 msgid "Port to listen to"
 msgstr "Poort om op te luisteren"
 
-#: libphodav/chezdav.c:206
+#: bin/chezdav.c:122
 msgid "Listen on loopback only"
 msgstr "Enkel op loopback luisteren"
 
-#: libphodav/chezdav.c:207
+#: bin/chezdav.c:123
 msgid "Listen on all interfaces"
 msgstr "Op alle interfaces luisteren"
 
-#: libphodav/chezdav.c:208
+#: bin/chezdav.c:124
 msgid "Path to export"
 msgstr "Pad naar export"
 
-#: libphodav/chezdav.c:209
+#: bin/chezdav.c:125
 msgid "Path to htdigest file"
 msgstr "Pad naar htdigest-bestand"
 
-#: libphodav/chezdav.c:210
+#: bin/chezdav.c:126
 msgid "Read-only access"
 msgstr "Alleen-lezen-toegang"
 
-#: libphodav/chezdav.c:224
+#: bin/chezdav.c:128
+msgid "Skip mDNS service announcement"
+msgstr "mDNS-dienstaankondiging overslaan"
+
+#: bin/chezdav.c:140
 msgid "- simple WebDAV server"
 msgstr "- eenvoudige WebDAV-server"
 
-#: libphodav/chezdav.c:225
+#: bin/chezdav.c:141
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Rapporteer fouten aan <%s>"
 
-#: libphodav/chezdav.c:232
+#: bin/chezdav.c:148
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Ontleden van optie mislukt: %s\n"
 
-#: libphodav/chezdav.c:236
+#: bin/chezdav.c:152
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Niet-ondersteunde extra parameters: %s …\n"
 
-#: libphodav/chezdav.c:245
+#: bin/chezdav.c:161
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local en --public sluiten elkaar onderling uit\n"
 
-#: libphodav/chezdav.c:269
+#: bin/chezdav.c:185
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Openen van htdigest mislukt: %s\n"
 
-#: libphodav/chezdav.c:288
+#: bin/chezdav.c:203
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS mislukt: %s\n"
 
-#: libphodav/chezdav.c:299
+#: bin/chezdav.c:214
 msgid "Internal error, should not happen\n"
 msgstr "Interne fout, dit zou niet mogen gebeuren\n"
 
-#: libphodav/chezdav.c:302
+#: bin/chezdav.c:217
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Luisteren mislukt: %s\n"
