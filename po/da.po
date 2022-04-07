@@ -2,14 +2,14 @@
 # Copyright (C) 2017 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 # Nikolaj64 <nikolajholmquist@gmail.com>, 2014.
-# Alan Mortensen <alanmortensen.am@gmail.com>, 2017.
+# Alan Mortensen <alanmortensen.am@gmail.com>, 2017, 2022.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
-"POT-Creation-Date: 2019-02-22 12:15+0100\n"
-"PO-Revision-Date: 2017-03-25 19:08+0100\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2021-10-21 08:55+0000\n"
+"PO-Revision-Date: 2022-04-07 19:11+0200\n"
 "Last-Translator: Alan Mortensen <alanmortensen.am@gmail.com>\n"
 "Language-Team: Danish <dansk@dansk-gruppen.dk>\n"
 "Language: da\n"
@@ -17,78 +17,82 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 1.8.7.1\n"
+"X-Generator: Poedit 2.3\n"
 
-#: libphodav/chezdav.c:203
+#: bin/chezdav.c:119
 msgid "Print program version"
 msgstr "Vis programversion"
 
-#: libphodav/chezdav.c:204
+#: bin/chezdav.c:120
 msgid "Be verbose"
 msgstr "Vær detaljeret"
 
-#: libphodav/chezdav.c:205
+#: bin/chezdav.c:121
 msgid "Port to listen to"
 msgstr "Port, der skal lyttes på"
 
-#: libphodav/chezdav.c:206
+#: bin/chezdav.c:122
 msgid "Listen on loopback only"
 msgstr "Lyt kun på loopback"
 
-#: libphodav/chezdav.c:207
+#: bin/chezdav.c:123
 msgid "Listen on all interfaces"
 msgstr "Lyt på alle grænseflader"
 
-#: libphodav/chezdav.c:208
+#: bin/chezdav.c:124
 msgid "Path to export"
 msgstr "Sti, der skal eksporteres"
 
-#: libphodav/chezdav.c:209
+#: bin/chezdav.c:125
 msgid "Path to htdigest file"
 msgstr "Sti til htdigest-fil"
 
-#: libphodav/chezdav.c:210
+#: bin/chezdav.c:126
 msgid "Read-only access"
 msgstr "Skrivebeskyttet adgang"
 
-#: libphodav/chezdav.c:224
+#: bin/chezdav.c:128
+msgid "Skip mDNS service announcement"
+msgstr "Spring mDNS-tjenestemeddelse over"
+
+#: bin/chezdav.c:140
 msgid "- simple WebDAV server"
 msgstr "- simpel WebDAV-server"
 
-#: libphodav/chezdav.c:225
+#: bin/chezdav.c:141
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Rapportér fejl til <%s>"
 
-#: libphodav/chezdav.c:232
+#: bin/chezdav.c:148
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Tolkning af tilvalg mislykkedes: %s\n"
 
-#: libphodav/chezdav.c:236
+#: bin/chezdav.c:152
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Ikke-understøttede ekstra argumenter: %s …\n"
 
-#: libphodav/chezdav.c:245
+#: bin/chezdav.c:161
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local og --public er gensidigt udelukkende\n"
 
-#: libphodav/chezdav.c:269
+#: bin/chezdav.c:185
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Kunne ikke åbne htdigest: %s\n"
 
-#: libphodav/chezdav.c:288
+#: bin/chezdav.c:203
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS mislykkedes: %s\n"
 
-#: libphodav/chezdav.c:299
+#: bin/chezdav.c:214
 msgid "Internal error, should not happen\n"
 msgstr "Intern fejl, burde ikke ske\n"
 
-#: libphodav/chezdav.c:302
+#: bin/chezdav.c:217
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Lytning mislykkedes: %s\n"
