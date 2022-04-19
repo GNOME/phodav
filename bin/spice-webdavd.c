@@ -655,7 +655,11 @@ run_service (ServiceData *service_data)
 
   loop = g_main_loop_new (NULL, TRUE);
 #ifdef G_OS_UNIX
+#ifdef __APPLE__
+  open_mux_path ("/dev/tty.org.spice-space.webdav.0");
+#else
   open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
+#endif
 #else
   open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
 #endif
