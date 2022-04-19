@@ -97,6 +97,16 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
   GFileOutputStream *output = NULL;
   gint status;
 
+  g_debug ("%s %s HTTP/1.%d %s %s", msg->method, path, soup_message_get_http_version (msg),
+           soup_message_headers_get_one (msg->request_headers, "X-Litmus") ? : "",
+           soup_message_headers_get_one (msg->request_headers, "X-Litmus-Second") ? : "");
+
+  if (handler_get_readonly(handler))
+    {
+      status = SOUP_STATUS_FORBIDDEN;
+      goto end;
+    }
+
   status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
@@ -115,4 +125,5 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
 end:
   soup_message_set_status (msg, status);
   g_clear_object (&file);
+  g_debug ("  -> %d %s\n", msg->status_code, msg->reason_phrase);
 }
