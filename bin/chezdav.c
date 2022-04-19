@@ -112,6 +112,7 @@ main (int argc, char *argv[])
   GError *error = NULL;
   GOptionContext *context;
   const gchar *path = NULL;
+  const gchar *realm = NULL;
   GMainLoop *mainloop = NULL;
 
   int version = 0;
@@ -123,6 +124,7 @@ main (int argc, char *argv[])
     { "public", 0, 0, G_OPTION_ARG_NONE, &public, N_ ("Listen on all interfaces"), NULL },
     { "path", 'P', 0, G_OPTION_ARG_FILENAME, &path, N_ ("Path to export"), NULL },
     { "htdigest", 'd', 0, G_OPTION_ARG_FILENAME, &htdigest, N_ ("Path to htdigest file"), NULL },
+    { "realm", 0, 0, G_OPTION_ARG_STRING, &realm, N_ ("DIGEST realm"), NULL },
     { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
 #ifdef WITH_AVAHI
     { "no-mdns", 0, 0, G_OPTION_ARG_NONE, &nomdns, N_ ("Skip mDNS service announcement"), NULL },
@@ -166,6 +168,9 @@ main (int argc, char *argv[])
   if (!path)
       path = g_get_home_dir ();
 
+  if (!realm)
+      realm = get_realm ();
+
   mainloop = g_main_loop_new (NULL, FALSE);
 
 #ifdef G_OS_UNIX
@@ -178,20 +183,17 @@ main (int argc, char *argv[])
   if (htdigest)
     {
       SoupAuthDomain *auth;
-      gchar *realm;
       SoupServer *server;
 
       if (!g_file_get_contents (htdigest, &htdigest, NULL, &error))
         my_error (_ ("Failed to open htdigest: %s\n"), error->message);
 
-      realm = get_realm ();
       auth = soup_auth_domain_digest_new (SOUP_AUTH_DOMAIN_REALM, realm,
                                           SOUP_AUTH_DOMAIN_ADD_PATH, "/",
                                           SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK, digest_auth_callback,
                                           SOUP_AUTH_DOMAIN_DIGEST_AUTH_DATA, NULL,
                                           NULL);
       server = phodav_server_get_soup_server (dav);
-      g_free (realm);
       soup_server_add_auth_domain (server, auth);
       g_object_unref (auth);
   }
