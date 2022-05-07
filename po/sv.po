@@ -1,15 +1,15 @@
 # Swedish translation for phodav.
-# Copyright © 2015-2021 phodav's COPYRIGHT HOLDER
+# Copyright © 2015-2022 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Anders Jonsson <anders.jonsson@norsjovallen.se>, 2015, 2021.
+# Anders Jonsson <anders.jonsson@norsjovallen.se>, 2015, 2021, 2022.
 # Josef Andersson <l10nl18nsweja@gmail.com>, 2017.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2021-10-21 08:55+0000\n"
-"PO-Revision-Date: 2021-10-22 22:03+0200\n"
+"POT-Creation-Date: 2022-04-19 13:18+0000\n"
+"PO-Revision-Date: 2022-04-19 16:17+0200\n"
 "Last-Translator: Anders Jonsson <anders.jonsson@norsjovallen.se>\n"
 "Language-Team: Swedish <tp-sv@listor.tp-sv.se>\n"
 "Language: sv\n"
@@ -17,82 +17,86 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 3.0\n"
+"X-Generator: Poedit 3.0.1\n"
 
-#: bin/chezdav.c:119
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Skriv ut version på programmet"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Var informativ"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Port att lyssna på"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Lyssna endast på loopback"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Lyssna på alla gränssnitt"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Sökväg att exportera"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Sökväg till htdigest-fil"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "DIGEST-rike"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Skrivskyddad åtkomst"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:130
 msgid "Skip mDNS service announcement"
 msgstr "Hoppa över mDNS-tjänstmeddelande"
 
-#: bin/chezdav.c:140
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- enkel WebDAV-server"
 
-#: bin/chezdav.c:141
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Rapportera fel till <%s>"
 
-#: bin/chezdav.c:148
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Tolkande av flaggor misslyckades: %s\n"
 
-#: bin/chezdav.c:152
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Extra argument som ej stöds: %s …\n"
 
-#: bin/chezdav.c:161
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local and --public är ömsesidigt uteslutande\n"
 
-#: bin/chezdav.c:185
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Misslyckades med att öppna htdigest: %s\n"
 
-#: bin/chezdav.c:203
+#: bin/chezdav.c:205
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS misslyckades: %s\n"
 
-#: bin/chezdav.c:214
+#: bin/chezdav.c:216
 msgid "Internal error, should not happen\n"
 msgstr "Internt fel, bör inte inträffa\n"
 
-#: bin/chezdav.c:217
+#: bin/chezdav.c:219
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Misslyckades med att lyssna: %s\n"
