@@ -31,7 +31,7 @@ method_put_finished (SoupMessage *msg,
 
 static void
 method_put_got_chunk (SoupMessage *msg,
-                      SoupBuffer  *chunk,
+                      GBytes      *chunk,
                       gpointer     user_data)
 {
   GFileOutputStream *output = user_data;
@@ -43,7 +43,7 @@ method_put_got_chunk (SoupMessage *msg,
   g_debug ("PUT got chunk");
 
   if (!g_output_stream_write_all (G_OUTPUT_STREAM (output),
-                                  chunk->data, chunk->length,
+                                  g_bytes_get_data (chunk, g_bytes_get_size (chunk)), g_bytes_get_size (chunk),
                                   &bytes_written, cancellable, &err))
     goto end;
 
@@ -64,7 +64,7 @@ put_start (SoupMessage *msg, GFile *file,
   GFileOutputStream *s = NULL;
   gchar *etag = NULL;
   gboolean created = TRUE;
-  SoupMessageHeaders *headers = msg->request_headers;
+  SoupMessageHeaders *headers = soup_message_get_request_headers (msg);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
   if (g_file_query_exists (file, cancellable))
@@ -95,11 +95,12 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
   GFile *file = NULL;
   GList *submitted = NULL;
   GFileOutputStream *output = NULL;
+  SoupMessageHeaders *request_headers = soup_message_get_request_headers (msg);
   gint status;
 
-  g_debug ("%s %s HTTP/1.%d %s %s", msg->method, path, soup_message_get_http_version (msg),
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus-Second") ? : "");
+  g_debug ("%s %s HTTP/1.%d %s %s", soup_message_get_method (msg), path, soup_message_get_http_version (msg),
+           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
 
   if (handler_get_readonly(handler))
     {
@@ -125,5 +126,5 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
 end:
   soup_message_set_status (msg, status);
   g_clear_object (&file);
-  g_debug ("  -> %d %s\n", msg->status_code, msg->reason_phrase);
+  g_debug ("  -> %d %s\n", soup_message_get_status (msg), soup_message_get_reason_phrase (msg));
 }

@@ -79,14 +79,15 @@ do_movecopy_file (SoupMessage *msg, GFile *file,
   gboolean overwrite;
   DepthType depth;
   gint status = SOUP_STATUS_PRECONDITION_FAILED;
-  gboolean copy = msg->method == SOUP_METHOD_COPY;
+  gboolean copy = soup_message_get_method (msg) == SOUP_METHOD_COPY;
   GFileCopyFlags flags = G_FILE_COPY_ALL_METADATA;
+  SoupMessageHeaders *request_headers = soup_message_get_request_headers (msg);
   gboolean retry = FALSE;
   gboolean exists;
 
-  depth = depth_from_string (soup_message_headers_get_one (msg->request_headers, "Depth"));
+  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
   overwrite = !!g_strcmp0 (
-    soup_message_headers_get_one (msg->request_headers, "Overwrite"), "F");
+    soup_message_headers_get_one (request_headers, "Overwrite"), "F");
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
   exists = g_file_query_exists (dest, cancellable);
@@ -155,17 +156,17 @@ phodav_method_movecopy (PathHandler *handler, SoupMessage *msg,
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
-  SoupURI *dest_uri = NULL;
+  GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
   gchar *udest;
   GList *submitted = NULL;
 
-  dest = soup_message_headers_get_one (msg->request_headers, "Destination");
+  dest = soup_message_headers_get_one (soup_message_get_request_headers (msg), "Destination");
   if (!dest)
     goto end;
-  dest_uri = soup_uri_new (dest);
-  dest = soup_uri_get_path (dest_uri);
+  dest_uri = g_uri_parse (dest, SOUP_HTTP_URI_FLAGS, NULL);
+  dest = g_uri_get_path (dest_uri);
   if (!dest || !*dest)
     goto end;
 
@@ -196,7 +197,7 @@ phodav_method_movecopy (PathHandler *handler, SoupMessage *msg,
 
 end:
   if (dest_uri)
-    soup_uri_free (dest_uri);
+    g_uri_unref (dest_uri);
   g_clear_object (&file);
   g_clear_object (&dest_file);
   g_list_free_full (submitted, (GDestroyNotify) lock_submitted_free);

@@ -140,15 +140,15 @@ end:
 static void
 node_add_time (xmlNodePtr node, guint64 time, SoupDateFormat format)
 {
-  SoupDate *date;
+  GDateTime *date;
   gchar *text;
 
   g_warn_if_fail (time != 0);
-  date = soup_date_new_from_time_t (time);
-  text = soup_date_to_string (date, format);
+  date = g_date_time_new_from_unix_local (time);
+  text = soup_date_time_to_string (date, format);
   xmlAddChild (node, xmlNewText (BAD_CAST text));
   g_free (text);
-  soup_date_free (date);
+  g_date_time_unref (date);
 }
 
 static xmlNodePtr
@@ -197,7 +197,7 @@ prop_getlastmodified (PathHandler *handler, PropFind *pf,
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, SOUP_DATE_ISO8601);
+    node_add_time (node, time, SOUP_DATE_HTTP); // FIXME: what about SOUP_DATE_ISO8601?
 
 end:
   PROP_SET_STATUS (node, status);
@@ -694,7 +694,7 @@ phodav_method_propfind (PathHandler *handler, SoupMessage *msg,
   gint status = SOUP_STATUS_NOT_FOUND;
   xmlNsPtr ns = NULL;
 
-  depth = depth_from_string (soup_message_headers_get_one (msg->request_headers, "Depth"));
+  depth = depth_from_string (soup_message_headers_get_one (soup_message_get_request_headers (msg), "Depth"));
   if (!msg->request_body || !msg->request_body->length)
     {
       /* Win kludge: http://code.google.com/p/sabredav/wiki/Windows */

@@ -175,7 +175,7 @@ phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  self->server = soup_server_new (SOUP_SERVER_SERVER_HEADER, "PhodavServer ",
+  self->server = soup_server_new ("server-header", "PhodavServer ",
                                   NULL);
 
   update_root_handler (self);
@@ -448,11 +448,11 @@ got_headers (SoupMessage *msg,
              gpointer     user_data)
 {
   PhodavServer *self = user_data;
-  SoupURI *uri = soup_message_get_uri (msg);
-  const gchar *path = uri->path;
+  GUri *uri = soup_message_get_uri (msg);
+  const gchar *path = g_uri_get_path (uri);
   GError *err = NULL;
 
-  if (msg->method == SOUP_METHOD_PUT)
+  if (soup_message_get_method (msg) == SOUP_METHOD_PUT)
     phodav_method_put (self->root_handler, msg, path, &err);
 
   if (err)
@@ -481,19 +481,21 @@ server_callback (SoupServer *server, SoupMessage *msg,
   GError *err = NULL;
   PathHandler *handler = user_data;
   gint status = SOUP_STATUS_NOT_IMPLEMENTED;
-  SoupURI *uri = soup_message_get_uri (msg);
+  GUri *uri = soup_message_get_uri (msg);
+  const gchar *method = soup_message_get_method (msg);
+  SoupMessageHeaders *request_headers = soup_message_get_request_headers (msg);
   GHashTable *params;
 
-  g_debug ("%s %s HTTP/1.%d %s %s", msg->method, path, soup_message_get_http_version (msg),
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus-Second") ? : "");
+  g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_message_get_http_version (msg),
+           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
 
   if (!(path && *path == '/'))
     {
       g_debug ("path must begin with /");
       return;
     }
-  if (!(uri && uri->fragment == NULL))
+  if (!(uri && g_uri_get_fragment (uri) == NULL))
     {
       g_debug ("using fragments in query is not supported");
       return;
@@ -506,14 +508,14 @@ server_callback (SoupServer *server, SoupMessage *msg,
   g_hash_table_destroy (params);
 
   if (handler->self->readonly &&
-      (msg->method == SOUP_METHOD_PROPPATCH ||
-       msg->method == SOUP_METHOD_MKCOL ||
-       msg->method == SOUP_METHOD_DELETE ||
-       msg->method == SOUP_METHOD_MOVE ||
-       msg->method == SOUP_METHOD_COPY ||
-       msg->method == SOUP_METHOD_LOCK))
+      (method == SOUP_METHOD_PROPPATCH ||
+       method == SOUP_METHOD_MKCOL ||
+       method == SOUP_METHOD_DELETE ||
+       method == SOUP_METHOD_MOVE ||
+       method == SOUP_METHOD_COPY ||
+       method == SOUP_METHOD_LOCK))
       status = SOUP_STATUS_FORBIDDEN;
-  else if (msg->method == SOUP_METHOD_OPTIONS)
+  else if (method == SOUP_METHOD_OPTIONS)
     {
       soup_message_headers_append (msg->response_headers, "DAV", "1,2");
 
@@ -524,30 +526,30 @@ server_callback (SoupServer *server, SoupMessage *msg,
                                    "GET, HEAD, PUT, PROPFIND, PROPPATCH, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK");
       status = SOUP_STATUS_OK;
     }
-  else if (msg->method == SOUP_METHOD_GET ||
-           msg->method == SOUP_METHOD_HEAD)
+  else if (method == SOUP_METHOD_GET ||
+           method == SOUP_METHOD_HEAD)
     status = phodav_method_get (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_PROPFIND)
+  else if (method == SOUP_METHOD_PROPFIND)
     status = phodav_method_propfind (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_PROPPATCH)
+  else if (method == SOUP_METHOD_PROPPATCH)
     status = phodav_method_proppatch (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_MKCOL)
+  else if (method == SOUP_METHOD_MKCOL)
     status = phodav_method_mkcol (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_DELETE)
+  else if (method == SOUP_METHOD_DELETE)
     status = phodav_method_delete (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_MOVE ||
-           msg->method == SOUP_METHOD_COPY)
+  else if (method == SOUP_METHOD_MOVE ||
+           method == SOUP_METHOD_COPY)
     status = phodav_method_movecopy (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_LOCK)
+  else if (method == SOUP_METHOD_LOCK)
     status = phodav_method_lock (handler, msg, path, &err);
-  else if (msg->method == SOUP_METHOD_UNLOCK)
+  else if (method == SOUP_METHOD_UNLOCK)
     status = phodav_method_unlock (handler, msg, path, &err);
   else
     g_warn_if_reached ();
 
   soup_message_set_status (msg, status);
 
-  g_debug ("  -> %d %s\n", msg->status_code, msg->reason_phrase);
+  g_debug ("  -> %d %s\n", soup_message_get_status (msg), soup_message_get_reason_phrase (msg));
   if (err)
     {
       g_warning ("error: %s", err->message);

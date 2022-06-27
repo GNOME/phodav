@@ -232,17 +232,17 @@ eval_if_lists (PathHandler *handler, IfState *state)
 static gboolean
 eval_if_tag (PathHandler *handler, IfState *state)
 {
-  SoupURI *uri;
+  GUri *uri;
   const gchar *path;
   const gchar *ref = accept_ref (state);
 
   g_return_val_if_fail (ref != NULL, FALSE);
 
-  uri = soup_uri_new (ref);
-  path = soup_uri_get_path (uri);
+  uri = g_uri_parse (ref, SOUP_HTTP_URI_FLAGS, NULL);
+  path = g_uri_get_path (uri);
   g_free (state->path);
   state->path = g_strdup (path);
-  soup_uri_free (uri);
+  g_uri_unref (uri);
 
   return eval_if_lists (handler, state);
 }
@@ -270,9 +270,9 @@ phodav_check_if (PathHandler *handler, SoupMessage *msg, const gchar *path, GLis
   PhodavServer *server = handler_get_server (handler);
   gboolean success = TRUE;
   gint status;
-  gchar *str = g_strdup (soup_message_headers_get_one (msg->request_headers, "If"));
+  gchar *str = g_strdup (soup_message_headers_get_one (soup_message_get_request_headers (msg), "If"));
   IfState state = { .cur = str, .path = g_strdup (path) };
-  gboolean copy = msg->method == SOUP_METHOD_COPY;
+  gboolean copy = soup_message_get_method (msg) == SOUP_METHOD_COPY;
 
   if (!str)
     goto end;

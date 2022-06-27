@@ -111,14 +111,14 @@ set_response_multistatus (SoupMessage *msg,
   while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
     {
       xmlNodePtr response;
-      SoupURI *new_uri;
+      GUri *new_uri;
 
       response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-      new_uri = soup_uri_new_with_base (soup_message_get_uri (msg), path);
+      // FIXMEnew_uri = g_uri_build (G_URI_FLAGS_NONE, soup_message_get_uri (msg), path);
       text = soup_uri_to_string (new_uri, FALSE);
       xmlNewChild (response, ns, BAD_CAST "href", BAD_CAST text);
       g_free (text);
-      soup_uri_free (new_uri);
+      g_uri_unref (new_uri);
 
       if (resp->props)
         add_propstat (response, ns, msg, path, resp->props);

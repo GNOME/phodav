@@ -35,7 +35,7 @@ struct _DavDoc
   xmlDocPtr  doc;
   xmlNodePtr root;
 
-  SoupURI   *target;
+  GUri      *target;
   char      *path;
 };
 

@@ -43,7 +43,7 @@ test_generic (gconstpointer data)
   if (test->method == SOUP_METHOD_COPY)
     {
       gchar *dest_uri = g_build_path ("/", SERVER_URI, test->destination, NULL);
-      soup_message_headers_append (msg->request_headers, "Destination", dest_uri);
+      soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
       g_free (dest_uri);
     }
 
@@ -55,7 +55,7 @@ test_generic (gconstpointer data)
 
   GInputStream *in = soup_session_send (session, msg, NULL, NULL);
 
-  g_assert_cmpint (msg->status_code, ==, test->status_code);
+  g_assert_cmpint (soup_message_get_status (msg), ==, soup_message_get_status (test));
 
   g_object_unref (in);
   g_object_unref (msg);

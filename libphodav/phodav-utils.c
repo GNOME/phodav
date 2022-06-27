@@ -82,7 +82,7 @@ davdoc_parse (DavDoc *dd, SoupMessage *msg, SoupMessageBody *body,
 {
   xmlDocPtr doc;
   xmlNodePtr root;
-  SoupURI *uri;
+  GUri *uri;
 
   doc = parse_xml (body->data, body->length, &root, name);
   if (!doc)
@@ -93,7 +93,7 @@ davdoc_parse (DavDoc *dd, SoupMessage *msg, SoupMessageBody *body,
   dd->doc = doc;
   dd->root = root;
   dd->target = uri;
-  dd->path = g_uri_unescape_string (uri->path, "/");
+  dd->path = g_uri_unescape_string (g_uri_get_path (uri), "/");
 
   return TRUE;
 }

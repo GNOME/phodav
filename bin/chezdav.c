@@ -188,10 +188,10 @@ main (int argc, char *argv[])
       if (!g_file_get_contents (htdigest, &htdigest, NULL, &error))
         my_error (_ ("Failed to open htdigest: %s\n"), error->message);
 
-      auth = soup_auth_domain_digest_new (SOUP_AUTH_DOMAIN_REALM, realm,
-                                          SOUP_AUTH_DOMAIN_ADD_PATH, "/",
-                                          SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK, digest_auth_callback,
-                                          SOUP_AUTH_DOMAIN_DIGEST_AUTH_DATA, NULL,
+      auth = soup_auth_domain_digest_new ("realm", realm,
+                                          "add-path", "/",
+                                          "auth-callback", digest_auth_callback,
+                                          "auth-data", NULL,
                                           NULL);
       server = phodav_server_get_soup_server (dav);
       soup_server_add_auth_domain (server, auth);
