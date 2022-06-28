@@ -90,30 +90,30 @@ gboolean                server_path_has_other_locks          (PhodavServer *self
 Path *                  server_get_path                      (PhodavServer *self,
                                                               const gchar *_path);
 
-gint                    phodav_check_if                      (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_check_if                      (PathHandler *handler, SoupServerMessage *msg,
                                                               const gchar *path, GList **locks);
 
 gint                    phodav_delete_file                   (const gchar *path, GFile *file,
                                                               GHashTable *mstatus,
                                                               GCancellable *cancellable);
 
-gint                    phodav_method_get                    (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_get                    (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_propfind               (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_propfind               (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_proppatch              (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_proppatch              (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_mkcol                  (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_mkcol                  (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_delete                 (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_delete                 (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_movecopy               (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_movecopy               (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_lock                   (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_lock                   (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-gint                    phodav_method_unlock                 (PathHandler *handler, SoupMessage *msg,
+gint                    phodav_method_unlock                 (PathHandler *handler, SoupServerMessage *msg,
                                                               const char *path, GError **err);
-void                    phodav_method_put                    (PathHandler *handler, SoupMessage *msg,
+void                    phodav_method_put                    (PathHandler *handler, SoupServerMessage *msg,
                                                               const gchar *path, GError **err);
 
 G_END_DECLS

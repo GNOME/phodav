@@ -123,7 +123,7 @@ parse_locktype (xmlNodePtr rt)
 }
 
 gint
-phodav_method_lock (PathHandler *handler, SoupMessage *msg,
+phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
                     const char *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
@@ -141,16 +141,19 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean created;
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  SoupMessageBody *request_body;
 
-  depth = depth_from_string (soup_message_headers_get_one (msg->request_headers, "Depth"));
-  timeout = timeout_from_string (soup_message_headers_get_one (msg->request_headers, "Timeout"));
+  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
+  timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
 
   if (depth != DEPTH_ZERO && depth != DEPTH_INFINITY)
     goto end;
 
-  if (!msg->request_body->length)
+  request_body = soup_server_message_get_request_body (msg);
+  if (!request_body->length)
     {
-      const gchar *hif = soup_message_headers_get_one (msg->request_headers, "If");
+      const gchar *hif = soup_message_headers_get_one (request_headers, "If");
       gint len = strlen (hif);
 
       if (len <= 4 || hif[0] != '(' || hif[1] != '<' || hif[len - 2] != '>' || hif[len - 1] != ')')
@@ -169,7 +172,7 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
       goto body;
     }
 
-  if (!davdoc_parse (&doc, msg, msg->request_body, "lockinfo"))
+  if (!davdoc_parse (&doc, msg, request_body, "lockinfo"))
     goto end;
 
   node = doc.root;
@@ -205,7 +208,7 @@ phodav_method_lock (PathHandler *handler, SoupMessage *msg,
   uuid = g_uuid_string_random ();
   token = g_strdup_printf ("urn:uuid:%s", uuid);
   ltoken = g_strdup_printf ("<%s>", token);
-  soup_message_headers_append (msg->response_headers, "Lock-Token", ltoken);
+  soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
 
   lpath = server_get_path (handler_get_server (handler), path);
   lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
@@ -232,8 +235,8 @@ body:
   xmlAddChild (node, dav_lock_get_activelock_node (lock, ns));
 
   xml_node_to_string (root, &mem, &size);
-  soup_message_set_response (msg, "application/xml",
-                             SOUP_MEMORY_TAKE, (gchar *) mem, size);
+  soup_server_message_set_response (msg, "application/xml",
+                                    SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
   g_free (ltoken);

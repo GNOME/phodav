@@ -82,13 +82,15 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 }
 
 static gint
-method_get (SoupMessage *msg, GFile *file,
+method_get (SoupServerMessage *msg, GFile *file,
             GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   GFileInfo *info;
   const gchar *etag;
+  SoupMessageHeaders *response_headers;
+  const char *method;
 
   info = g_file_query_info (file, "standard::*,etag::*",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
@@ -100,9 +102,9 @@ method_get (SoupMessage *msg, GFile *file,
       GString *listing;
 
       listing = get_directory_listing (file, cancellable, err);
-      soup_message_set_response (msg, "text/html; charset=utf-8",
-                                 SOUP_MEMORY_TAKE,
-                                 listing->str, listing->len);
+      soup_server_message_set_response (msg, "text/html; charset=utf-8",
+                                        SOUP_MEMORY_TAKE,
+                                        listing->str, listing->len);
       g_string_free (listing, FALSE);
       status = SOUP_STATUS_OK;
       goto end;
@@ -111,20 +113,23 @@ method_get (SoupMessage *msg, GFile *file,
   etag = g_file_info_get_etag (info);
   g_warn_if_fail (etag != NULL);
 
+  response_headers = soup_server_message_get_response_headers (msg);
+
   if (etag)
     {
       gchar *tmp = g_strdup_printf ("\"%s\"", etag);
-      soup_message_headers_append (msg->response_headers, "ETag", tmp);
+      soup_message_headers_append (response_headers, "ETag", tmp);
       g_free (tmp);
     }
 
-  soup_message_headers_set_content_type (msg->response_headers,
+  soup_message_headers_set_content_type (response_headers,
                                          g_file_info_get_content_type (info), NULL);
 
-  if (msg->method == SOUP_METHOD_GET)
+  method = soup_server_message_get_method (msg);
+  if (method == SOUP_METHOD_GET)
     {
       GMappedFile *mapping;
-      SoupBuffer *buffer;
+      GBytes *buffer;
       gchar *path = g_file_get_path (file);
 
       mapping = g_mapped_file_new (path, FALSE, NULL);
@@ -135,14 +140,15 @@ method_get (SoupMessage *msg, GFile *file,
           goto end;
         }
 
-      buffer = soup_buffer_new_with_owner (g_mapped_file_get_contents (mapping),
+      buffer = g_bytes_new_with_free_func (g_mapped_file_get_contents (mapping),
                                            g_mapped_file_get_length (mapping),
-                                           mapping, (GDestroyNotify) g_mapped_file_unref);
-      soup_message_body_append_buffer (msg->response_body, buffer);
-      soup_buffer_free (buffer);
+                                           (GDestroyNotify) g_mapped_file_unref,
+                                           mapping);
+      soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
+      g_bytes_unref (buffer);
       status = SOUP_STATUS_OK;
     }
-  else if (msg->method == SOUP_METHOD_HEAD)
+  else if (method == SOUP_METHOD_HEAD)
     {
       gchar *length;
 
@@ -151,7 +157,7 @@ method_get (SoupMessage *msg, GFile *file,
        * But we'll optimize and avoid the extra I/O.
        */
       length = g_strdup_printf ("%" G_GUINT64_FORMAT, g_file_info_get_size (info));
-      soup_message_headers_append (msg->response_headers, "Content-Length", length);
+      soup_message_headers_append (response_headers, "Content-Length", length);
 
       g_free (length);
       status = SOUP_STATUS_OK;
@@ -176,7 +182,7 @@ end:
 }
 
 gint
-phodav_method_get (PathHandler *handler, SoupMessage *msg, const char *path, GError **err)
+phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const char *path, GError **err)
 {
   GFile *file;
   GCancellable *cancellable = handler_get_cancellable (handler);

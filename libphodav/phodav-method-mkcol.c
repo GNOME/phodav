@@ -18,7 +18,7 @@
 #include "phodav-priv.h"
 
 static gint
-do_mkcol_file (SoupMessage *msg, GFile *file,
+do_mkcol_file (SoupServerMessage *msg, GFile *file,
                GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
@@ -44,15 +44,16 @@ do_mkcol_file (SoupMessage *msg, GFile *file,
 }
 
 gint
-phodav_method_mkcol (PathHandler *handler, SoupMessage *msg,
+phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg,
                      const char *path, GError **err)
 {
   GFile *file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
   gint status;
   GList *submitted = NULL;
+  SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
 
-  if (msg->request_body && msg->request_body->length)
+  if (request_body && request_body->length)
     {
       status = SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE;
       goto end;

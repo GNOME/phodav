@@ -32,8 +32,8 @@ Response *     response_new                      (GList       *props,
                                                   gint         status);
 void           response_free                     (Response    *h);
 
-gint           set_response_multistatus          (SoupMessage *msg,
-                                                  GHashTable  *mstatus);
+gint           set_response_multistatus          (SoupServerMessage *msg,
+                                                  GHashTable        *mstatus);
 G_END_DECLS
 
 #endif /* __PHODAV_MULTISTATUS_H__ */

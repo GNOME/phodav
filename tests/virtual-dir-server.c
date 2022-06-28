@@ -126,6 +126,8 @@ main (int argc, char *argv[])
     g_io_channel_unref (stdin_channel);
   }
 
+  g_print ("OK\n");
+
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
   g_object_unref (phodav);

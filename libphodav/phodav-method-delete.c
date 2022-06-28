@@ -85,7 +85,7 @@ phodav_delete_file (const gchar *path, GFile *file,
 }
 
 gint
-phodav_method_delete (PathHandler *handler, SoupMessage *msg,
+phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
                       const char *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);

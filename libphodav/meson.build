@@ -52,5 +52,5 @@ pkgconfig.generate(
   filebase : 'libphodav-2.0',
   description : 'A WebDAV library based on libsoup',
   subdirs : 'libphodav-2.0',
-  requires : 'libsoup-2.4'
+  requires : 'libsoup-3.0'
 )

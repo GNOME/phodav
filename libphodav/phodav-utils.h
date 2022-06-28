@@ -35,11 +35,11 @@ struct _DavDoc
   xmlDocPtr  doc;
   xmlNodePtr root;
 
-  SoupURI   *target;
+  GUri      *target;
   char      *path;
 };
 
-gboolean         davdoc_parse                    (DavDoc *dd, SoupMessage *msg,
+gboolean         davdoc_parse                    (DavDoc *dd, SoupServerMessage *msg,
                                                   SoupMessageBody *body,
                                                   const gchar *name);
 void             davdoc_free                     (DavDoc *dd);

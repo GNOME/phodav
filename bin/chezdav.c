@@ -77,11 +77,11 @@ get_realm (void)
 
 gchar *htdigest = NULL;
 
-static gchar *
-digest_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
+static gboolean
+digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
                       const char *username, gpointer data)
 {
-  gchar *digest = NULL;;
+  gchar *digest = NULL;
   gchar *line = NULL;
   gchar *eol = NULL;
 
@@ -103,7 +103,7 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
         break;
     }
 
-  return digest;
+  return !!digest;
 }
 
 int
@@ -188,11 +188,10 @@ main (int argc, char *argv[])
       if (!g_file_get_contents (htdigest, &htdigest, NULL, &error))
         my_error (_ ("Failed to open htdigest: %s\n"), error->message);
 
-      auth = soup_auth_domain_digest_new (SOUP_AUTH_DOMAIN_REALM, realm,
-                                          SOUP_AUTH_DOMAIN_ADD_PATH, "/",
-                                          SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK, digest_auth_callback,
-                                          SOUP_AUTH_DOMAIN_DIGEST_AUTH_DATA, NULL,
-                                          NULL);
+      auth = soup_auth_domain_digest_new ("realm", realm, NULL);
+      soup_auth_domain_add_path (auth, "/");
+      soup_auth_domain_set_generic_auth_callback (auth, digest_auth_callback, NULL, NULL);
+
       server = phodav_server_get_soup_server (dav);
       soup_server_add_auth_domain (server, auth);
       g_object_unref (auth);
