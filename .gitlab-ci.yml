@@ -52,26 +52,29 @@ build:
     expire_in: 1 week
     when: always
 
-build_win:
-  stage: build
-  before_script:
-    - rm -f /etc/rpm/macros.image-language-conf
-    - dnf update -y --nogpgcheck
-    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
-  script:
-    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-    - pwd
-    - ls
-    - cd ..
-    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-  artifacts:
-    paths:
-      - w32/*.msi
-      - w64/*.msi
-      - w32/meson-logs/*.txt
-      - w64/meson-logs/*.txt
-    expire_in: 1 week
-    when: always
+# Temporarily disabled because libsoup 3 is not yet available:
+# https://gitlab.gnome.org/GNOME/phodav/-/merge_requests/27#note_1488522
+#
+#build_win:
+#  stage: build
+#  before_script:
+#    - rm -f /etc/rpm/macros.image-language-conf
+#    - dnf update -y --nogpgcheck
+#    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
+#  script:
+#    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
+#    - pwd
+#    - ls
+#    - cd ..
+#    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
+#  artifacts:
+#    paths:
+#      - w32/*.msi
+#      - w64/*.msi
+#      - w32/meson-logs/*.txt
+#      - w64/meson-logs/*.txt
+#    expire_in: 1 week
+#    when: always
 
 litmus:
   stage: test
