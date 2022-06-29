@@ -1,4 +1,4 @@
-image: fedora:34
+image: fedora:36
 
 stages:
   - build
@@ -12,7 +12,8 @@ variables:
     gcc-c++
     gettext
     git
-    libsoup-devel
+    libsoup3-devel
+    libxml2-devel
     meson
     systemd-devel
     systemd-units
@@ -81,7 +82,7 @@ litmus:
   dependencies:
     - build
   before_script:
-    - dnf install -y litmus libsoup nmap-ncat
+    - dnf install -y litmus libsoup3 nmap-ncat
   variables:
     TESTS: basic copymove props locks http
   script:
