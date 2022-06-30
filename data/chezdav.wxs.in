@@ -47,7 +47,7 @@
               <File Id='chezdav' Name='chezdav.exe' DiskId='1' Source='$(var.DESTDIR)/bin/chezdav.exe' KeyPath='yes'/>
             </Component>
             <Component Id="CLibPhoDAV" Guid="*">
-              <File Id='libphodav' Name='libphodav-2.0-0.dll' DiskId='1' Source='$(var.DESTDIR)/bin/libphodav-2.0-0.dll' KeyPath='yes'/>
+              <File Id='libphodav' Name='libphodav-3.0-0.dll' DiskId='1' Source='$(var.DESTDIR)/bin/libphodav-3.0-0.dll' KeyPath='yes'/>
             </Component>
           </Directory>
           <Component Id="CDepsTxt" Guid="*">

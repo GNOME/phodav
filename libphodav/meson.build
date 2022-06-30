@@ -4,7 +4,7 @@ headers = [
   'phodav-virtual-dir.h',
 ]
 
-install_headers(headers, subdir : 'libphodav-2.0/libphodav')
+install_headers(headers, subdir : 'libphodav-3.0/libphodav')
 
 sources = [
   'phodav-if.c',
@@ -35,7 +35,7 @@ vflag = compiler.get_supported_link_arguments([
 ])
 
 libphodav = library(
-  'phodav-2.0',
+  'phodav-3.0',
   sources,
   c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
   include_directories : incdir,
@@ -49,8 +49,8 @@ libphodav = library(
 pkgconfig = import('pkgconfig')
 pkgconfig.generate(
   libphodav,
-  filebase : 'libphodav-2.0',
+  filebase : 'libphodav-3.0',
   description : 'A WebDAV library based on libsoup',
-  subdirs : 'libphodav-2.0',
+  subdirs : 'libphodav-3.0',
   requires : 'libsoup-3.0'
 )
