@@ -1,3 +1,16 @@
+v3.0
+====
+
+- !27 - Port to libsoup3
+- !26 - forbid PUT method on a read-only shared folder
+- !25 - Add chezdav --realm runtime flag
+- !24 - Build on OSX/Darwin
+- !22 - Add chezdav --no-mdns runtime flag
+- !19 - Allow specifying systemd/udev directories
+- !18 - man pages updates
+- CI, tests and build fixes
+- translations updates
+
 v2.5
 ====
 
