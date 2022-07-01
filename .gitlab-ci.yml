@@ -1,4 +1,4 @@
-image: fedora:34
+image: fedora:36
 
 stages:
   - build
@@ -12,7 +12,8 @@ variables:
     gcc-c++
     gettext
     git
-    libsoup-devel
+    libsoup3-devel
+    libxml2-devel
     meson
     systemd-devel
     systemd-units
@@ -52,33 +53,36 @@ build:
     expire_in: 1 week
     when: always
 
-build_win:
-  stage: build
-  before_script:
-    - rm -f /etc/rpm/macros.image-language-conf
-    - dnf update -y --nogpgcheck
-    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
-  script:
-    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-    - pwd
-    - ls
-    - cd ..
-    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-  artifacts:
-    paths:
-      - w32/*.msi
-      - w64/*.msi
-      - w32/meson-logs/*.txt
-      - w64/meson-logs/*.txt
-    expire_in: 1 week
-    when: always
+# Temporarily disabled because libsoup 3 is not yet available:
+# https://gitlab.gnome.org/GNOME/phodav/-/merge_requests/27#note_1488522
+#
+#build_win:
+#  stage: build
+#  before_script:
+#    - rm -f /etc/rpm/macros.image-language-conf
+#    - dnf update -y --nogpgcheck
+#    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
+#  script:
+#    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
+#    - pwd
+#    - ls
+#    - cd ..
+#    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
+#  artifacts:
+#    paths:
+#      - w32/*.msi
+#      - w64/*.msi
+#      - w32/meson-logs/*.txt
+#      - w64/meson-logs/*.txt
+#    expire_in: 1 week
+#    when: always
 
 litmus:
   stage: test
   dependencies:
     - build
   before_script:
-    - dnf install -y litmus libsoup nmap-ncat
+    - dnf install -y litmus libsoup3 nmap-ncat
   variables:
     TESTS: basic copymove props locks http
   script:

@@ -13,7 +13,7 @@ meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'
 
 proj_version = meson.project_version()
 proj_name = meson.project_name()
-proj_gettext = 'phodav-2.0'
+proj_gettext = 'phodav-3.0'
 proj_bugurl = 'https://gitlab.gnome.org/GNOME/phodav/issues/new'
 
 gnome = import('gnome')
@@ -34,7 +34,7 @@ else
   deps += dependency('gio-unix-2.0', version : '>= 2.44')
 endif
 
-deps += dependency('libsoup-2.4', version : '>= 2.48.0')
+deps += dependency('libsoup-3.0', version : '>= 3.0.0')
 deps += dependency('libxml-2.0')
 
 d1 = dependency('avahi-gobject', required : get_option('avahi'))

@@ -19,8 +19,8 @@
 #include "phodav-utils.h"
 
 static void
-method_put_finished (SoupMessage *msg,
-                     gpointer     user_data)
+method_put_finished (SoupServerMessage *msg,
+                     gpointer           user_data)
 {
   GFileOutputStream *output = user_data;
 
@@ -30,20 +30,24 @@ method_put_finished (SoupMessage *msg,
 }
 
 static void
-method_put_got_chunk (SoupMessage *msg,
-                      SoupBuffer  *chunk,
-                      gpointer     user_data)
+method_put_got_chunk (SoupServerMessage *msg,
+                      GBytes            *chunk,
+                      gpointer           user_data)
 {
   GFileOutputStream *output = user_data;
   PathHandler *handler = g_object_get_data (user_data, "handler");
   GCancellable *cancellable = handler_get_cancellable (handler);
   GError *err = NULL;
   gsize bytes_written;
+  gconstpointer data;
+  gsize data_length;
 
   g_debug ("PUT got chunk");
 
+  data = g_bytes_get_data (chunk, &data_length);
+
   if (!g_output_stream_write_all (G_OUTPUT_STREAM (output),
-                                  chunk->data, chunk->length,
+                                  data, data_length,
                                   &bytes_written, cancellable, &err))
     goto end;
 
@@ -52,19 +56,19 @@ end:
     {
       g_warning ("error: %s", err->message);
       g_clear_error (&err);
-      soup_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+      soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
     }
 }
 
 static gint
-put_start (SoupMessage *msg, GFile *file,
+put_start (SoupServerMessage *msg, GFile *file,
            GFileOutputStream **output, GCancellable *cancellable,
            GError **err)
 {
   GFileOutputStream *s = NULL;
   gchar *etag = NULL;
   gboolean created = TRUE;
-  SoupMessageHeaders *headers = msg->request_headers;
+  SoupMessageHeaders *headers = soup_server_message_get_request_headers (msg);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
   if (g_file_query_exists (file, cancellable))
@@ -89,17 +93,18 @@ end:
 }
 
 void
-phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GError **err)
+phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
   GList *submitted = NULL;
   GFileOutputStream *output = NULL;
   gint status;
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
-  g_debug ("%s %s HTTP/1.%d %s %s", msg->method, path, soup_message_get_http_version (msg),
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (msg->request_headers, "X-Litmus-Second") ? : "");
+  g_debug ("%s %s HTTP/1.%d %s %s", soup_server_message_get_method (msg), path, soup_server_message_get_http_version (msg),
+           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
 
   if (handler_get_readonly(handler))
     {
@@ -117,13 +122,13 @@ phodav_method_put (PathHandler *handler, SoupMessage *msg, const gchar *path, GE
     goto end;
 
   g_debug ("PUT output %p", output);
-  soup_message_body_set_accumulate (msg->request_body, FALSE);
+  soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
   g_object_set_data (G_OBJECT (output), "handler", handler);
   g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), output);
   g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), output);
 
 end:
-  soup_message_set_status (msg, status);
+  soup_server_message_set_status (msg, status, NULL);
   g_clear_object (&file);
-  g_debug ("  -> %d %s\n", msg->status_code, msg->reason_phrase);
+  g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
 }

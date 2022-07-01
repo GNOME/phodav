@@ -61,7 +61,7 @@ status_node_new (xmlNsPtr ns, gint status)
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupMessage *msg,
+add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg,
               const gchar *path, GList *props)
 {
   xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
@@ -92,7 +92,7 @@ add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupMessage *msg,
 }
 
 gint
-set_response_multistatus (SoupMessage *msg,
+set_response_multistatus (SoupServerMessage *msg,
                           GHashTable  *mstatus)
 {
   xmlChar *mem = NULL;
@@ -111,14 +111,14 @@ set_response_multistatus (SoupMessage *msg,
   while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
     {
       xmlNodePtr response;
-      SoupURI *new_uri;
+      GUri *new_uri;
 
       response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-      new_uri = soup_uri_new_with_base (soup_message_get_uri (msg), path);
-      text = soup_uri_to_string (new_uri, FALSE);
+      new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), path, SOUP_HTTP_URI_FLAGS, NULL);
+      text = g_uri_to_string (new_uri);
       xmlNewChild (response, ns, BAD_CAST "href", BAD_CAST text);
       g_free (text);
-      soup_uri_free (new_uri);
+      g_uri_unref (new_uri);
 
       if (resp->props)
         add_propstat (response, ns, msg, path, resp->props);
@@ -127,8 +127,8 @@ set_response_multistatus (SoupMessage *msg,
     }
 
   xml_node_to_string (root, &mem, &size);
-  soup_message_set_response (msg, "application/xml",
-                             SOUP_MEMORY_TAKE, (gchar *) mem, size);
+  soup_server_message_set_response (msg, "application/xml",
+                                    SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
   return SOUP_STATUS_MULTI_STATUS;
 }

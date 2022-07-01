@@ -137,18 +137,31 @@ end:
   return node;
 }
 
+typedef enum {
+        NODE_DATE_FORMAT_HTTP,
+        NODE_DATE_FORMAT_ISO8601
+} NodeDateFormat;
+
 static void
-node_add_time (xmlNodePtr node, guint64 time, SoupDateFormat format)
+node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
 {
-  SoupDate *date;
+  GDateTime *date;
   gchar *text;
 
   g_warn_if_fail (time != 0);
-  date = soup_date_new_from_time_t (time);
-  text = soup_date_to_string (date, format);
+  date = g_date_time_new_from_unix_utc (time);
+  switch (format)
+    {
+    case NODE_DATE_FORMAT_HTTP:
+      text = soup_date_time_to_string (date, SOUP_DATE_HTTP);
+      break;
+    case NODE_DATE_FORMAT_ISO8601:
+      text = g_date_time_format_iso8601 (date);
+      break;
+    }
   xmlAddChild (node, xmlNewText (BAD_CAST text));
   g_free (text);
-  soup_date_free (date);
+  g_date_time_unref (date);
 }
 
 static xmlNodePtr
@@ -173,7 +186,7 @@ prop_creationdate (PathHandler *handler, PropFind *pf,
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, SOUP_DATE_HTTP);
+    node_add_time (node, time, NODE_DATE_FORMAT_HTTP);
 
 end:
   PROP_SET_STATUS (node, status);
@@ -197,7 +210,7 @@ prop_getlastmodified (PathHandler *handler, PropFind *pf,
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, SOUP_DATE_ISO8601);
+    node_add_time (node, time, NODE_DATE_FORMAT_ISO8601);
 
 end:
   PROP_SET_STATUS (node, status);
@@ -684,7 +697,7 @@ end:
 }
 
 gint
-phodav_method_propfind (PathHandler *handler, SoupMessage *msg,
+phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
                         const char *path, GError **err)
 {
   PropFind *pf = NULL;
@@ -693,9 +706,11 @@ phodav_method_propfind (PathHandler *handler, SoupMessage *msg,
   DavDoc doc = {0, };
   gint status = SOUP_STATUS_NOT_FOUND;
   xmlNsPtr ns = NULL;
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
 
-  depth = depth_from_string (soup_message_headers_get_one (msg->request_headers, "Depth"));
-  if (!msg->request_body || !msg->request_body->length)
+  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
+  if (!request_body || !request_body->length)
     {
       /* Win kludge: http://code.google.com/p/sabredav/wiki/Windows */
       pf = propfind_new ();
@@ -703,7 +718,7 @@ phodav_method_propfind (PathHandler *handler, SoupMessage *msg,
     }
   else
     {
-      if (!davdoc_parse (&doc, msg, msg->request_body, "propfind"))
+      if (!davdoc_parse (&doc, msg, request_body, "propfind"))
         {
           status = SOUP_STATUS_BAD_REQUEST;
           goto end;

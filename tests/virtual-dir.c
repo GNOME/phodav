@@ -43,19 +43,24 @@ test_generic (gconstpointer data)
   if (test->method == SOUP_METHOD_COPY)
     {
       gchar *dest_uri = g_build_path ("/", SERVER_URI, test->destination, NULL);
-      soup_message_headers_append (msg->request_headers, "Destination", dest_uri);
+      soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
       g_free (dest_uri);
     }
 
   if (test->method == SOUP_METHOD_PUT)
     {
-      soup_message_body_append (msg->request_body, SOUP_MEMORY_STATIC,
-                                test_put_data, strlen (test_put_data));
+      GBytes *bytes;
+
+      bytes = g_bytes_new_static (test_put_data, strlen (test_put_data));
+      soup_message_set_request_body_from_bytes (msg, NULL, bytes);
+      g_bytes_unref (bytes);
     }
 
-  GInputStream *in = soup_session_send (session, msg, NULL, NULL);
+  GError *error = NULL;
+  GInputStream *in = soup_session_send (session, msg, NULL, &error);
+  g_assert_no_error (error);
 
-  g_assert_cmpint (msg->status_code, ==, test->status_code);
+  g_assert_cmpint (soup_message_get_status (msg), ==, test->status_code);
 
   g_object_unref (in);
   g_object_unref (msg);
@@ -97,7 +102,7 @@ main (int argc, char *argv[])
   GError *error = NULL;
   GSubprocess *server_subproc;
   server_subproc = g_subprocess_new (
-    G_SUBPROCESS_FLAGS_STDIN_PIPE, &error,
+    G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
     "tests/virtual-dir-server", "--quit-on-stdin", NULL);
 
   if (error) {
@@ -105,6 +110,29 @@ main (int argc, char *argv[])
     g_error_free (error);
     return 1;
   }
+
+  /* wait for the server to start */
+  GDataInputStream *stream = g_data_input_stream_new (g_subprocess_get_stdout_pipe (server_subproc));
+  g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (stream), FALSE);
+  gboolean server_started = FALSE;
+  while (!server_started) {
+    char *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
+
+    if (error) {
+      g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);
+      g_error_free (error);
+      return 1;
+    }
+
+    if (line == NULL) {
+      g_printerr ("Failed to start virtual-dir-server\n");
+      return 1;
+    }
+
+    server_started = g_strcmp0 (line, "OK") == 0;
+    g_free (line);
+  }
+  g_object_unref (stream);
 
   g_test_init (&argc, &argv, NULL);
 

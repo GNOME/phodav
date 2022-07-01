@@ -25,8 +25,8 @@ private_headers = [
 ]
 
 gnome.gtkdoc(
-  'phodav-2.0',
-  main_sgml : 'phodav-2.0-docs.sgml',
+  'phodav-3.0',
+  main_sgml : 'phodav-3.0-docs.sgml',
   dependencies : declare_dependency(link_with : [libphodav]),
   src_dir : join_paths(meson.source_root(), 'libphodav'),
   gobject_typesfile: 'libphodav.types',
