@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2021-10-21 08:55+0000\n"
-"PO-Revision-Date: 2022-03-13 02:20+0100\n"
+"POT-Creation-Date: 2022-07-24 04:47+0000\n"
+"PO-Revision-Date: 2022-08-30 00:58+0200\n"
 "Last-Translator: Balázs Úr <ur.balazs at fsf dot hu>\n"
 "Language-Team: Hungarian <gnome-hu-list at gnome dot org>\n"
 "Language: hu\n"
@@ -18,80 +18,84 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Lokalize 19.12.3\n"
 
-#: bin/chezdav.c:119
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Programverzió kiírása"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Legyen részletes"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Figyelendő port"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Figyelés csak a visszacsatoláson"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Figyelés minden csatolón"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Exportálandó útvonal"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Útvonal a htdigest fájlhoz"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "DIGEST tartomány"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Csak olvasható hozzáférés"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:130
 msgid "Skip mDNS service announcement"
 msgstr "Az mDNS szolgáltatás bejelentésének kihagyása"
 
-#: bin/chezdav.c:140
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- egyszerű WebDAV kiszolgáló"
 
-#: bin/chezdav.c:141
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Hibák jelentése itt: <%s>"
 
-#: bin/chezdav.c:148
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Kapcsoló feldolgozás sikertelen: %s\n"
 
-#: bin/chezdav.c:152
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nem támogatott további argumentumok: %s …\n"
 
-#: bin/chezdav.c:161
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "a --local és a --public kölcsönösen kizárják egymást\n"
 
-#: bin/chezdav.c:185
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "A htdigest megnyitása sikertelen: %s\n"
 
-#: bin/chezdav.c:203
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS sikertelen: %s\n"
 
-#: bin/chezdav.c:214
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Belső hiba, ez nem történhetne meg\n"
 
-#: bin/chezdav.c:217
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Figyelés sikertelen: %s\n"
