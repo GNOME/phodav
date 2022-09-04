@@ -7,8 +7,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2021-10-21 08:55+0000\n"
-"PO-Revision-Date: 2022-03-04 11:42+0100\n"
+"POT-Creation-Date: 2022-07-24 04:47+0000\n"
+"PO-Revision-Date: 2022-09-04 16:19+0200\n"
 "Last-Translator: \n"
 "Language-Team: Croatian <hr@li.org>\n"
 "Language: hr\n"
@@ -17,82 +17,86 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
-"X-Generator: Poedit 3.0.1\n"
+"X-Generator: Poedit 3.1.1\n"
 
-#: bin/chezdav.c:119
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Prikaži inačicu programa"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Opširnije"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Ulaz za osluškivanje"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Osluškuj na loopback samo"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Osluškuj na svim sučeljima"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Putanja za izvoz"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Putanja do htdigest datoteke"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "DIGEST realm"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Pristup samo-za-čitanje"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:130
 msgid "Skip mDNS service announcement"
 msgstr "Preskoči najavu mDNS usluge"
 
-#: bin/chezdav.c:140
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- jednostavan WebDAV poslužitelj"
 
-#: bin/chezdav.c:141
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Prijavi greške na <%s>"
 
-#: bin/chezdav.c:148
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Neuspjela mogućnost obrade: %s\n"
 
-#: bin/chezdav.c:152
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Nepodržani dodatni argumenti: %s ...\n"
 
-#: bin/chezdav.c:161
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local i --public međusobno se isključuju\n"
 
-#: bin/chezdav.c:185
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Neuspjelo otvaranje htdigest: %s\n"
 
-#: bin/chezdav.c:203
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS neuspjelo: %s\n"
 
-#: bin/chezdav.c:214
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Unutrašnja greška, ne bi se trebala događati\n"
 
-#: bin/chezdav.c:217
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Neuspjelo osluškivanje %s\n"
