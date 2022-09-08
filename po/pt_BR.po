@@ -1,98 +1,102 @@
 # Brazilian Portuguese translation for phodav.
-# Copyright (C) 2014-2021 phodav's COPYRIGHT HOLDER
+# Copyright (C) 2014-2022 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Enrico Nicoletto <liverig@gmail.com>, 2014, 2015, 2021.
+# Enrico Nicoletto <hiko@duck.com>, 2014, 2015, 2021, 2022.
 # Rafael Fontenelle <rafaelff@gnome.org>, 2016, 2017.
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2021-10-21 08:55+0000\n"
-"PO-Revision-Date: 2021-10-28 15:05-0300\n"
-"Last-Translator: Enrico Nicoletto <liverig@gmail.com>\n"
+"POT-Creation-Date: 2022-07-24 04:47+0000\n"
+"PO-Revision-Date: 2022-09-07 21:32-0300\n"
+"Last-Translator: Enrico Nicoletto <hiko@duck.com>\n"
 "Language-Team: Brazilian Portuguese <gnome-pt_br-list@gnome.org>\n"
 "Language: pt_BR\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
-"X-Generator: Poedit 3.0\n"
+"X-Generator: Poedit 3.0.1\n"
 "X-Project-Style: gnome\n"
 
-#: bin/chezdav.c:119
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Exibe a versão do programa"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Detalhado"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Escuta a porta"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Ouve no loopback apenas"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Ouve em todas interfaces"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Caminho a exportar"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Caminho para o arquivo htdigest"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "Domínio DIGEST"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Acesso para somente leitura"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:130
 msgid "Skip mDNS service announcement"
 msgstr "Ignorar o anúncio do serviço mDNS"
 
-#: bin/chezdav.c:140
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- servidor WebDAV simples"
 
-#: bin/chezdav.c:141
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Informe erros para <%s>"
 
-#: bin/chezdav.c:148
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Análise da opção falhou: %s\n"
 
-#: bin/chezdav.c:152
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Argumentos extras sem suporte: %s ...\n"
 
-#: bin/chezdav.c:161
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local e --public são mutualmente exclusivos\n"
 
-#: bin/chezdav.c:185
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Falha ao abrir htdigest: %s\n"
 
-#: bin/chezdav.c:203
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS falhou: %s\n"
 
-#: bin/chezdav.c:214
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Erro interno, não deveria aconecer\n"
 
-#: bin/chezdav.c:217
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Escuta falhou: %s\n"
