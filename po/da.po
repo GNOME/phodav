@@ -8,8 +8,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2021-10-21 08:55+0000\n"
-"PO-Revision-Date: 2022-04-07 19:11+0200\n"
+"POT-Creation-Date: 2022-07-24 04:47+0000\n"
+"PO-Revision-Date: 2022-09-11 19:03+0200\n"
 "Last-Translator: Alan Mortensen <alanmortensen.am@gmail.com>\n"
 "Language-Team: Danish <dansk@dansk-gruppen.dk>\n"
 "Language: da\n"
@@ -17,82 +17,86 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 2.3\n"
+"X-Generator: Poedit 3.0.1\n"
 
-#: bin/chezdav.c:119
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Vis programversion"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Vær detaljeret"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Port, der skal lyttes på"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Lyt kun på loopback"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Lyt på alle grænseflader"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Sti, der skal eksporteres"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Sti til htdigest-fil"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "DIGEST-realm"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Skrivebeskyttet adgang"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:130
 msgid "Skip mDNS service announcement"
 msgstr "Spring mDNS-tjenestemeddelse over"
 
-#: bin/chezdav.c:140
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- simpel WebDAV-server"
 
-#: bin/chezdav.c:141
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Rapportér fejl til <%s>"
 
-#: bin/chezdav.c:148
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Tolkning af tilvalg mislykkedes: %s\n"
 
-#: bin/chezdav.c:152
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Ikke-understøttede ekstra argumenter: %s …\n"
 
-#: bin/chezdav.c:161
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local og --public er gensidigt udelukkende\n"
 
-#: bin/chezdav.c:185
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Kunne ikke åbne htdigest: %s\n"
 
-#: bin/chezdav.c:203
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS mislykkedes: %s\n"
 
-#: bin/chezdav.c:214
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Intern fejl, burde ikke ske\n"
 
-#: bin/chezdav.c:217
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Lytning mislykkedes: %s\n"
