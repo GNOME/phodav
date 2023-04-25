@@ -49,6 +49,9 @@ OPTIONS
     the htdigest file). The default value is "USER's public share"
     (where USER is the owner's username of the current process).
 
+*-r, --readonly*::
+    Read-only access.
+
 *-v, --verbose*::
     Verbosely print running information.
 
