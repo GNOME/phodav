@@ -2,7 +2,7 @@ systemd_systemunitdir = get_option('systemdsystemunitdir')
 if systemd_systemunitdir == ''
   systemd = dependency('systemd', required : false)
   if systemd.found()
-    systemd_systemunitdir = systemd.get_pkgconfig_variable('systemdsystemunitdir')
+    systemd_systemunitdir = systemd.get_variable(pkgconfig: 'systemdsystemunitdir')
   endif
 endif
 if systemd_systemunitdir != ''
@@ -16,7 +16,7 @@ udev_rulesdir = get_option('udevrulesdir')
 if udev_rulesdir == ''
   udev = dependency('udev', required : false)
   if udev.found()
-    udev_rulesdir = '@0@/@1@'.format(udev.get_pkgconfig_variable('udevdir'), 'rules.d')
+    udev_rulesdir = '@0@/@1@'.format(udev.get_variable(pkgconfig: 'udevdir'), 'rules.d')
   endif
 endif
 if udev_rulesdir != ''
@@ -58,7 +58,7 @@ if host_machine.system() == 'windows'
                         'VERSION' : proj_version,
                         'WINDOWS_PRODUCTVERSION' : win_version,
                         'WIXL_ARCH' : wixl_arch,
-                        'top_srcdir' : meson.source_root(),
+                        'top_srcdir' : meson.project_source_root(),
                         'prefix' : prefix,
                       }
     )

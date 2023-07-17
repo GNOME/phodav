@@ -10,7 +10,7 @@ configure_file(
   configuration: ent_conf
 )
 
-glib_prefix = dependency('glib-2.0').get_pkgconfig_variable('prefix')
+glib_prefix = dependency('glib-2.0').get_variable(pkgconfig: 'prefix')
 glib_docpath = join_paths(glib_prefix, 'share', 'gtk-doc', 'html')
 docpath = join_paths(datadir, 'gtk-doc', 'html')
 
@@ -28,7 +28,7 @@ gnome.gtkdoc(
   'phodav-3.0',
   main_sgml : 'phodav-3.0-docs.sgml',
   dependencies : declare_dependency(link_with : [libphodav]),
-  src_dir : join_paths(meson.source_root(), 'libphodav'),
+  src_dir : join_paths(meson.project_source_root(), 'libphodav'),
   gobject_typesfile: 'libphodav.types',
   scan_args: [
     '--rebuild-types',
