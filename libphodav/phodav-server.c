@@ -493,6 +493,12 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
       g_debug ("path must begin with /");
       return;
     }
+  if (g_path_is_absolute (path + 1))
+    {
+      g_debug ("path cannot be absolute");
+      return;
+    }
+
   if (!(uri && g_uri_get_fragment (uri) == NULL))
     {
       g_debug ("using fragments in query is not supported");
