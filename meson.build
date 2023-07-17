@@ -27,11 +27,13 @@ incdir = include_directories('.')
 compiler = meson.get_compiler('c')
 conf = configuration_data()
 
+glib_ver = '>= 2.76'
+
 deps = []
 if host_machine.system() == 'windows'
-  deps += dependency('gio-windows-2.0', version : '>= 2.44')
+  deps += dependency('gio-windows-2.0', version : glib_ver)
 else
-  deps += dependency('gio-unix-2.0', version : '>= 2.44')
+  deps += dependency('gio-unix-2.0', version : glib_ver)
 endif
 
 deps += dependency('libsoup-3.0', version : '>= 3.0.0')

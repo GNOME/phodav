@@ -100,12 +100,13 @@ method_get (SoupServerMessage *msg, GFile *file,
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
     {
       GString *listing;
+      gsize len;
 
       listing = get_directory_listing (file, cancellable, err);
+      len = listing->len;
       soup_server_message_set_response (msg, "text/html; charset=utf-8",
                                         SOUP_MEMORY_TAKE,
-                                        listing->str, listing->len);
-      g_string_free (listing, FALSE);
+                                        g_string_free_and_steal (listing), len);
       status = SOUP_STATUS_OK;
       goto end;
     }
