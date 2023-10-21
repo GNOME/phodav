@@ -6,10 +6,11 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/new\n"
-"POT-Creation-Date: 2019-02-22 12:15+0100\n"
-"PO-Revision-Date: 2018-04-08 18:13+0300\n"
-"Last-Translator: Florentina Mușat <florentina.musat.28@gmail.com>\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2022-07-24 04:47+0000\n"
+"PO-Revision-Date: 2023-10-21 16:02+0300\n"
+"Last-Translator: Florentina Mușat <florentina [dot] musat [dot] 28 [at] "
+"gmail [dot] com>\n"
 "Language-Team: Romanian <gnomero-list@lists.sourceforge.net>\n"
 "Language: ro\n"
 "MIME-Version: 1.0\n"
@@ -17,78 +18,86 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n==0 || (n%100 > 0 && n%100 < "
 "20)) ? 1 : 2);;\n"
-"X-Generator: Poedit 2.0.6\n"
+"X-Generator: Poedit 3.4\n"
 
-#: libphodav/chezdav.c:203
+#: bin/chezdav.c:120
 msgid "Print program version"
 msgstr "Tipărește versiunea programului"
 
-#: libphodav/chezdav.c:204
+#: bin/chezdav.c:121
 msgid "Be verbose"
 msgstr "Fii detaliat"
 
-#: libphodav/chezdav.c:205
+#: bin/chezdav.c:122
 msgid "Port to listen to"
 msgstr "Portul la care se ascultă"
 
-#: libphodav/chezdav.c:206
+#: bin/chezdav.c:123
 msgid "Listen on loopback only"
 msgstr "Ascultă doar pe loopback"
 
-#: libphodav/chezdav.c:207
+#: bin/chezdav.c:124
 msgid "Listen on all interfaces"
 msgstr "Ascultă pe toate interfețele"
 
-#: libphodav/chezdav.c:208
+#: bin/chezdav.c:125
 msgid "Path to export"
 msgstr "Cale de exportare"
 
-#: libphodav/chezdav.c:209
+#: bin/chezdav.c:126
 msgid "Path to htdigest file"
 msgstr "Cale la fișierul htdigest"
 
-#: libphodav/chezdav.c:210
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "Tărâm DIGEST"
+
+#: bin/chezdav.c:128
 msgid "Read-only access"
 msgstr "Acces doar citire"
 
-#: libphodav/chezdav.c:224
+#: bin/chezdav.c:130
+msgid "Skip mDNS service announcement"
+msgstr "Omite anunțul de serviciu mDNS"
+
+#: bin/chezdav.c:142
 msgid "- simple WebDAV server"
 msgstr "- server simplu WebDAV"
 
-#: libphodav/chezdav.c:225
+#: bin/chezdav.c:143
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Raportați defecțiunile la <%s>"
 
-#: libphodav/chezdav.c:232
+#: bin/chezdav.c:150
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Parsarea de opțiune a eșuat: %s\n"
 
-#: libphodav/chezdav.c:236
+#: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Argumente extra nesuportate: %s ...\n"
 
-#: libphodav/chezdav.c:245
+#: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local and --public se exclud reciproc\n"
 
-#: libphodav/chezdav.c:269
+#: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Nu s-a putut deschide htdigest: %s\n"
 
-#: libphodav/chezdav.c:288
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS a eșuat: %s\n"
 
-#: libphodav/chezdav.c:299
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Eroare internă, nu ar trebui să se întâmple\n"
 
-#: libphodav/chezdav.c:302
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Ascultarea a eșuat: %s\n"
