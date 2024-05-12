@@ -1,0 +1,102 @@
+# Hindi translation for phodav.
+# Copyright (C) 2024 phodav's COPYRIGHT HOLDER
+# This file is distributed under the same license as the phodav package.
+# Scrambled 777 <weblate.scrambled777@simplelogin.com>, 2024.
+# Scrambled777 <weblate.scrambled777@simplelogin.com>, 2024.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: phodav master\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
+"POT-Creation-Date: 2023-10-21 13:02+0000\n"
+"PO-Revision-Date: 2024-04-23 10:59+0530\n"
+"Last-Translator: Scrambled777 <weblate.scrambled777@simplelogin.com>\n"
+"Language-Team: Hindi\n"
+"Language: hi\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+"X-Generator: Gtranslator 46.0\n"
+
+#: bin/chezdav.c:120
+msgid "Print program version"
+msgstr "प्रोग्राम संस्करण प्रिंट करें"
+
+#: bin/chezdav.c:121
+msgid "Be verbose"
+msgstr "वाचाल रहे"
+
+#: bin/chezdav.c:122
+msgid "Port to listen to"
+msgstr "सुनने के लिए पोर्ट"
+
+#: bin/chezdav.c:123
+msgid "Listen on loopback only"
+msgstr "केवल लूपबैक पर सुनें"
+
+#: bin/chezdav.c:124
+msgid "Listen on all interfaces"
+msgstr "सभी इंटरफ़ेस पर सुनें"
+
+#: bin/chezdav.c:125
+msgid "Path to export"
+msgstr "निर्यात करने का पथ"
+
+#: bin/chezdav.c:126
+msgid "Path to htdigest file"
+msgstr "htdigest फाइल का पथ"
+
+#: bin/chezdav.c:127
+msgid "DIGEST realm"
+msgstr "DIGEST क्षेत्र"
+
+#: bin/chezdav.c:128
+msgid "Read-only access"
+msgstr "केवल-पढ़ने योग्य पहुंच"
+
+#: bin/chezdav.c:130
+msgid "Skip mDNS service announcement"
+msgstr "mDNS सेवा घोषणा को छोड़ें"
+
+#: bin/chezdav.c:142
+msgid "- simple WebDAV server"
+msgstr "- सरल WebDAV सर्वर"
+
+#: bin/chezdav.c:143
+#, c-format
+msgid "Report bugs to <%s>"
+msgstr "<%s> को बग की रिपोर्ट करें"
+
+#: bin/chezdav.c:150
+#, c-format
+msgid "Option parsing failed: %s\n"
+msgstr "विकल्प विश्लेषण विफल: %s\n"
+
+#: bin/chezdav.c:154
+#, c-format
+msgid "Unsupported extra arguments: %s ...\n"
+msgstr "असमर्थित अतिरिक्त तर्क: %s ...\n"
+
+#: bin/chezdav.c:163
+msgid "--local and --public are mutually exclusive\n"
+msgstr "--local और --public परस्पर अनन्य हैं\n"
+
+#: bin/chezdav.c:189
+#, c-format
+msgid "Failed to open htdigest: %s\n"
+msgstr "htdigest खोलने में विफल: %s\n"
+
+#: bin/chezdav.c:204
+#, c-format
+msgid "mDNS failed: %s\n"
+msgstr "mDNS विफल: %s\n"
+
+#: bin/chezdav.c:215
+msgid "Internal error, should not happen\n"
+msgstr "आंतरिक त्रुटि, नहीं होनी चाहिए\n"
+
+#: bin/chezdav.c:218
+#, c-format
+msgid "Listen failed: %s\n"
+msgstr "सुनना विफल: %s\n"
