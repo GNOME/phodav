@@ -18,7 +18,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <gio/gunixsocketaddress.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <libsoup/soup.h>
 
 #ifdef G_OS_UNIX
@@ -45,6 +47,8 @@ static pid_t server_pid;
  * so that they do not keep holding their ports */
 static pid_t tls_server_pids[4];
 static guint n_tls_servers;
+/* the server of the unix socket test */
+static pid_t unix_server_pid;
 #endif
 
 static const gchar test_put_data[] = "test_put: test data";
@@ -128,6 +132,9 @@ fatal_signal_cb (gint sig)
   /* the TLS test servers hold their own ports */
   for (guint i = 0; i < n_tls_servers; i++)
     kill (tls_server_pids[i], SIGKILL);
+
+  if (unix_server_pid > 0)
+    kill (unix_server_pid, SIGKILL);
 
   signal (sig, SIG_DFL);
   raise (sig);
@@ -399,6 +406,8 @@ test_cli (void)
     { { "--bogus", NULL }, "Option parsing failed" },
     { { "extra-arg", NULL }, "Unsupported extra arguments" },
     { { "--local", "--public", NULL }, "mutually exclusive" },
+    { { "--socket", "chezdav.sock", "--local", NULL }, "mutually exclusive" },
+    { { "--socket", "chezdav.sock", "--port", "0", NULL }, "mutually exclusive" },
     { { "--max-upload", "-1", NULL }, "must not be negative" },
     { { "--local", "--port", "8099", "--htdigest", "/nonexistent", NULL }, "Failed to open htdigest" },
     { { "--tls-key", "key.pem", NULL }, "requires --tls-cert" },
@@ -502,6 +511,106 @@ test_defaults (void)
 #endif
 
   delete_dir (home);
+}
+
+/* chezdav listens on a unix socket given with --socket, and removes the
+ * socket when it shuts down */
+static void
+test_unix_socket (void)
+{
+  const gchar *chezdav = g_getenv ("CHEZDAV");
+  g_autoptr(GPtrArray) args = NULL;
+  g_autoptr(GSubprocess) proc = NULL;
+  g_autoptr(GSocketClient) client = NULL;
+  g_autoptr(GSocketAddress) address = NULL;
+  g_autoptr(GSocketConnection) connection = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *socket_path = NULL;
+  g_autofree gchar *output = NULL;
+  guint i;
+
+  if (!chezdav)
+    chezdav = "bin/chezdav";
+
+  socket_path = g_build_filename (work_dir, "chezdav.sock", NULL);
+  /* remove a leftover from a previous failed run */
+  g_remove (socket_path);
+
+  args = g_ptr_array_new ();
+  g_ptr_array_add (args, (gchar *) chezdav);
+  g_ptr_array_add (args, (gchar *) "--socket");
+  g_ptr_array_add (args, socket_path);
+  g_ptr_array_add (args, (gchar *) "--path");
+  g_ptr_array_add (args, share_dir);
+  if (g_getenv ("CHEZDAV_TEST_NO_MDNS"))
+    g_ptr_array_add (args, (gchar *) "--no-mdns");
+  g_ptr_array_add (args, NULL);
+
+  proc = g_subprocess_newv ((const gchar *const *) args->pdata,
+                            G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE,
+                            &error);
+  g_assert_no_error (error);
+
+#ifdef G_OS_UNIX
+  unix_server_pid = (pid_t) g_ascii_strtoll (g_subprocess_get_identifier (proc), NULL, 10);
+#endif
+
+  client = g_socket_client_new ();
+  address = g_unix_socket_address_new (socket_path);
+  for (i = 0; i < 100; i++)
+    {
+      connection = g_socket_client_connect (client, G_SOCKET_CONNECTABLE (address), NULL, &error);
+      if (connection)
+        break;
+
+      g_clear_error (&error);
+      g_usleep (100 * 1000);
+    }
+
+  if (!connection)
+    {
+      g_subprocess_communicate_utf8 (proc, NULL, NULL, &output, NULL, NULL);
+      g_error ("chezdav did not listen on the unix socket: %s", output ? output : "");
+    }
+
+  /* a plain PROPFIND request is served over the socket */
+  {
+    const gchar request[] = "PROPFIND / HTTP/1.0\r\nHost: localhost\r\nDepth: 0\r\n\r\n";
+    GOutputStream *os = g_io_stream_get_output_stream (G_IO_STREAM (connection));
+    g_autoptr(GDataInputStream) is = g_data_input_stream_new (g_io_stream_get_input_stream (G_IO_STREAM (connection)));
+    g_autofree gchar *status_line = NULL;
+    gsize written;
+
+    g_assert_true (g_output_stream_write_all (os, request, strlen (request), &written, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_true (g_output_stream_flush (os, NULL, &error));
+    g_assert_no_error (error);
+
+    status_line = g_data_input_stream_read_line (is, NULL, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (status_line);
+    g_assert_true (g_str_has_prefix (status_line, "HTTP/1."));
+    g_assert_nonnull (strstr (status_line, " 207 "));
+  }
+  g_clear_object (&connection);
+
+#ifdef G_OS_UNIX
+  /* SIGTERM shuts the server down and removes the socket file */
+  g_subprocess_send_signal (proc, SIGTERM);
+#else
+  /* GSubprocess cannot deliver a graceful termination on Windows */
+  g_subprocess_force_exit (proc);
+#endif
+  g_subprocess_communicate_utf8 (proc, NULL, NULL, &output, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_true (g_subprocess_get_if_exited (proc));
+#ifdef G_OS_UNIX
+  g_assert_cmpint (g_subprocess_get_exit_status (proc), ==, 0);
+  unix_server_pid = 0;
+#else
+  g_remove (socket_path);
+#endif
+  g_assert_false (g_file_test (socket_path, G_FILE_TEST_EXISTS));
 }
 
 /* stop a chezdav process, printing the output it produced for
@@ -921,6 +1030,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/chezdav/cli", test_cli);
   g_test_add_func ("/chezdav/defaults", test_defaults);
+  g_test_add_func ("/chezdav/unix-socket", test_unix_socket);
   g_test_add_func ("/chezdav/tls", test_tls);
   g_test_add_func ("/chezdav/tls-combined", test_tls_combined);
 

@@ -23,6 +23,13 @@ different folder with the *-P* option.
 *-p*, *--port*=_PORT_
 	Port to listen from. The default is 8080.
 
+*-s*, *--socket*=_PATH_
+	Listen on the Unix socket at PATH instead of a TCP port. On Unix, the
+	socket is created with owner-only permissions. The socket is removed
+	when the server exits cleanly. This is mutually exclusive with
+	*--port*, *--local* and *--public*. On Windows, this requires Windows
+	10 version 1803 or later.
+
 *--local*
 	Listen on loopback interface only.
 

@@ -19,6 +19,7 @@ Security fixes:
 New features:
 
 - chezdav: serve the share over HTTPS with --tls-cert/--tls-key
+- chezdav: listen on a Unix socket with --socket, including on Windows 10
 - chezdav: optional upload size limit with --max-upload
 - chezdav: --verbose enables the debug messages
 - chezdav: MSI: bundle libsoup 3, the Windows installer works again

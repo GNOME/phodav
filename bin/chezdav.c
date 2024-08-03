@@ -10,14 +10,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <gio/gunixsocketaddress.h>
 #include <glib.h>
 #include <glib/gi18n.h>
-
-#include "libphodav/phodav.h"
+#include <glib/gstdio.h>
 
 #ifdef G_OS_UNIX
 #include <glib-unix.h>
 #endif
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+#endif
+
+#include "libphodav/phodav.h"
 
 #ifdef WITH_AVAHI
 #include "avahi-common.h"
@@ -48,6 +54,27 @@ sighup_received (gpointer user_data)
   g_main_loop_quit (mainloop);
 
   return G_SOURCE_CONTINUE;
+}
+#endif
+
+#ifdef G_OS_WIN32
+static GMainLoop *console_mainloop;
+
+static BOOL WINAPI
+console_ctrl_handler (DWORD event)
+{
+  switch (event)
+    {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+      if (console_mainloop)
+        g_main_loop_quit (console_mainloop);
+      return TRUE;
+
+    default:
+      return FALSE;
+    }
 }
 #endif
 
@@ -128,6 +155,7 @@ main (gint argc, gchar *argv[])
    * tls_key is only set when the private key is in a separate file */
   g_autofree gchar *tls_cert = NULL;
   g_autofree gchar *tls_key = NULL;
+  g_autofree gchar *socket = NULL;
   g_autoptr(GMainLoop) mainloop = NULL;
 
   gint version = 0;
@@ -141,7 +169,8 @@ main (gint argc, gchar *argv[])
 #ifdef WITH_AVAHI
   gboolean nomdns = FALSE;
 #endif
-  gint port = 8080;
+  /* -1 until the port is known, to tell --port 0 apart from the default */
+  gint port = -1;
   gint64 max_upload = 0;
 
   g_autoptr(PhodavServer) dav = NULL;
@@ -149,6 +178,7 @@ main (gint argc, gchar *argv[])
   GOptionEntry entries[] = {
     { "version", 0, 0, G_OPTION_ARG_NONE, &version, N_ ("Print program version"), NULL },
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, N_ ("Be verbose"), NULL },
+    { "socket", 's', 0, G_OPTION_ARG_FILENAME, &socket, N_ ("Unix socket to listen on"), NULL },
     { "port", 'p', 0, G_OPTION_ARG_INT, &port, N_ ("Port to listen to"), NULL },
     { "local", 0, 0, G_OPTION_ARG_NONE, &local, N_ ("Listen on loopback only"), NULL },
     { "public", 0, 0, G_OPTION_ARG_NONE, &public, N_ ("Listen on all interfaces"), NULL },
@@ -194,6 +224,12 @@ main (gint argc, gchar *argv[])
       return 0;
     }
 
+  if (socket && local)
+    my_error (_ ("--socket and --local are mutually exclusive\n"));
+  if (socket && public)
+    my_error (_ ("--socket and --public are mutually exclusive\n"));
+  if (socket && port != -1)
+    my_error (_ ("--socket and --port are mutually exclusive\n"));
   if (local && public)
     my_error (_ ("--local and --public are mutually exclusive\n"));
 
@@ -202,6 +238,9 @@ main (gint argc, gchar *argv[])
 
   if (tls_key && !tls_cert)
     my_error (_ ("--tls-key requires --tls-cert\n"));
+
+  if (port < 0)
+    port = 8080;
 
   if (!local && !public)
     public = TRUE; /* the default */
@@ -216,6 +255,10 @@ main (gint argc, gchar *argv[])
 
 #ifdef G_OS_UNIX
   g_unix_signal_add (SIGINT, sighup_received, mainloop);
+  g_unix_signal_add (SIGTERM, sighup_received, mainloop);
+#elif defined(G_OS_WIN32)
+  console_mainloop = mainloop;
+  SetConsoleCtrlHandler (console_ctrl_handler, TRUE);
 #endif
 
   if (tls_cert)
@@ -275,7 +318,7 @@ main (gint argc, gchar *argv[])
 
 #ifdef WITH_AVAHI
   g_autofree gchar *name = get_realm ();
-  if (!nomdns && !avahi_client_start (name, port, local, tls_cert != NULL, &error))
+  if (!socket && !nomdns && !avahi_client_start (name, port, local, tls_cert != NULL, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
@@ -288,7 +331,12 @@ main (gint argc, gchar *argv[])
     listen_options |= SOUP_SERVER_LISTEN_HTTPS;
 
   /* public is set by default when local is not given */
-  if (local)
+  if (socket)
+    {
+      g_autoptr(GSocketAddress) address = g_unix_socket_address_new (socket);
+      listening = soup_server_listen (server, address, listen_options, &error);
+    }
+  else if (local)
     listening = soup_server_listen_local (server, port, listen_options, &error);
   else
     listening = soup_server_listen_all (server, port, listen_options, &error);
@@ -296,11 +344,20 @@ main (gint argc, gchar *argv[])
   if (!listening)
     my_error (_ ("Listen failed: %s\n"), error->message);
 
+#ifdef G_OS_UNIX
+  /* the socket is a secret: other users must not be able to connect */
+  if (socket && g_chmod (socket, 0600) < 0)
+    g_warning ("Failed to restrict the permissions of %s", socket);
+#endif
+
   g_main_loop_run (mainloop);
 
 #ifdef WITH_AVAHI
   avahi_client_stop ();
 #endif
+
+  if (socket)
+    g_remove (socket);
 
   g_message ("Bye");
 
