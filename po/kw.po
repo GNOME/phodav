@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: phodav master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/\n"
 "POT-Creation-Date: 2022-06-29 10:06+0000\n"
-"PO-Revision-Date: 2026-01-29 14:14+0000\n"
+"PO-Revision-Date: 2026-01-29 14:22+0000\n"
 "Last-Translator: Flynn Peck <cirilla@tuta.io>\n"
 "Language-Team: kw\n"
 "Language: kw\n"
@@ -82,7 +82,7 @@ msgstr "Ow redya dewisyow fyllis: %s\n"
 #: bin/chezdav.c:154
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
-msgstr "Oberadoryon anskoodhys moy: %s ...\n"
+msgstr "Oberadowyow anskoodhys moy: %s ...\n"
 
 #: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
