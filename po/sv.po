@@ -1,15 +1,15 @@
 # Swedish translation for phodav.
-# Copyright © 2015-2022 phodav's COPYRIGHT HOLDER
+# Copyright © 2015-2026 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
-# Anders Jonsson <anders.jonsson@norsjovallen.se>, 2015, 2021, 2022.
+# Anders Jonsson <anders.jonsson@norsjovallen.se>, 2015, 2021, 2022, 2026.
 # Josef Andersson <l10nl18nsweja@gmail.com>, 2017.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2022-04-19 13:18+0000\n"
-"PO-Revision-Date: 2022-04-19 16:17+0200\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/\n"
+"POT-Creation-Date: 2022-06-29 10:06+0000\n"
+"PO-Revision-Date: 2026-09-17 20:29+0200\n"
 "Last-Translator: Anders Jonsson <anders.jonsson@norsjovallen.se>\n"
 "Language-Team: Swedish <tp-sv@listor.tp-sv.se>\n"
 "Language: sv\n"
@@ -17,7 +17,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 3.0.1\n"
+"X-Generator: Poedit 3.9\n"
 
 #: bin/chezdav.c:120
 msgid "Print program version"
@@ -80,23 +80,23 @@ msgstr "Extra argument som ej stöds: %s …\n"
 
 #: bin/chezdav.c:163
 msgid "--local and --public are mutually exclusive\n"
-msgstr "--local and --public är ömsesidigt uteslutande\n"
+msgstr "--local och --public är ömsesidigt uteslutande\n"
 
 #: bin/chezdav.c:189
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Misslyckades med att öppna htdigest: %s\n"
 
-#: bin/chezdav.c:205
+#: bin/chezdav.c:204
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS misslyckades: %s\n"
 
-#: bin/chezdav.c:216
+#: bin/chezdav.c:215
 msgid "Internal error, should not happen\n"
 msgstr "Internt fel, bör inte inträffa\n"
 
-#: bin/chezdav.c:219
+#: bin/chezdav.c:218
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Misslyckades med att lyssna: %s\n"
