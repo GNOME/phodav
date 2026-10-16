@@ -161,8 +161,8 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
-  gchar *udest = NULL;
-  GList *submitted = NULL;
+  g_autofree gchar *udest = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
 
   dest = soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Destination");
   if (!dest)
@@ -211,11 +211,9 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
                              cancellable, err);
 
 end:
-  g_free (udest);
   if (dest_uri)
     g_uri_unref (dest_uri);
   g_clear_object (&file);
   g_clear_object (&dest_file);
-  g_list_free_full (submitted, (GDestroyNotify) lock_submitted_free);
   return status;
 }

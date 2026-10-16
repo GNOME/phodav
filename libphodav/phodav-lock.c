@@ -117,11 +117,10 @@ dav_lock_get_activelock_node (const DAVLock *lock,
   xmlAddChild (node, xmlNewText (BAD_CAST lock->path->path));
   if (lock->timeout)
     {
-      gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -
-                                    g_get_monotonic_time () / G_USEC_PER_SEC);
+      g_autofree gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -
+                                               g_get_monotonic_time () / G_USEC_PER_SEC);
       node = xmlNewChild (active, ns, BAD_CAST "timeout", NULL);
       xmlAddChild (node, xmlNewText (BAD_CAST tmp));
-      g_free (tmp);
     }
 
   return active;

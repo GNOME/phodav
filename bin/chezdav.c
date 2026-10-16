@@ -84,8 +84,8 @@ static GHashTable *
 load_htdigest (const gchar *filename, const gchar *realm, GError **error)
 {
   GHashTable *users;
-  gchar *contents;
-  gchar **lines;
+  g_autofree gchar *contents = NULL;
+  g_auto(GStrv) lines = NULL;
   guint i;
 
   if (!g_file_get_contents (filename, &contents, NULL, error))
@@ -96,7 +96,7 @@ load_htdigest (const gchar *filename, const gchar *realm, GError **error)
   for (i = 0; lines[i]; i++)
     {
       gchar *line = g_strchomp (lines[i]);
-      gchar **strv;
+      g_auto(GStrv) strv = NULL;
 
       if (!*line)
         continue;
@@ -107,11 +107,7 @@ load_htdigest (const gchar *filename, const gchar *realm, GError **error)
         g_warning ("Invalid htdigest line %u", i + 1);
       else if (g_strcmp0 (strv[1], realm) == 0)
         g_hash_table_insert (users, g_strdup (strv[0]), g_strdup (strv[2]));
-      g_strfreev (strv);
     }
-
-  g_strfreev (lines);
-  g_free (contents);
 
   return users;
 }
@@ -130,10 +126,10 @@ gint
 main (gint argc, gchar *argv[])
 {
   g_autoptr(GError) error = NULL;
-  GOptionContext *context;
+  g_autoptr(GOptionContext) context = NULL;
   const gchar *path = NULL;
   const gchar *realm = NULL;
-  GMainLoop *mainloop = NULL;
+  g_autoptr(GMainLoop) mainloop = NULL;
 
   gint version = 0;
   GOptionEntry entries[] = {
@@ -160,15 +156,13 @@ main (gint argc, gchar *argv[])
   g_set_prgname ("chezdav");
 
   context = g_option_context_new (_ ("- simple WebDAV server"));
-  gchar *s = g_strdup_printf (_ ("Report bugs to <%s>"), PACKAGE_BUGREPORT);
+  g_autofree gchar *s = g_strdup_printf (_ ("Report bugs to <%s>"), PACKAGE_BUGREPORT);
   g_option_context_set_description (context, s);
-  g_free (s);
 
   g_option_context_add_main_entries (context, entries, GETTEXT_PACKAGE);
   g_option_context_set_translation_domain (context, GETTEXT_PACKAGE);
   if (!g_option_context_parse (context, &argc, &argv, &error))
     my_error (_ ("Option parsing failed: %s\n"), error->message);
-  g_option_context_free (context);
 
   if (argc != 1)
     my_error (_ ("Unsupported extra arguments: %s ...\n"), argv[1]);
@@ -202,7 +196,7 @@ main (gint argc, gchar *argv[])
 
   if (htdigest)
     {
-      SoupAuthDomain *auth;
+      g_autoptr(SoupAuthDomain) auth = NULL;
       SoupServer *server;
       GHashTable *users;
 
@@ -217,7 +211,6 @@ main (gint argc, gchar *argv[])
 
       server = phodav_server_get_soup_server (dav);
       soup_server_add_auth_domain (server, auth);
-      g_object_unref (auth);
   }
 
 
@@ -243,7 +236,6 @@ main (gint argc, gchar *argv[])
 
   g_main_loop_run (mainloop);
 
-  g_main_loop_unref (mainloop);
 #ifdef WITH_AVAHI
   avahi_client_stop ();
   g_free (name);

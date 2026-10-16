@@ -22,11 +22,9 @@
 static void
 create_test_file (const gchar *path)
 {
-  GFile *f = g_file_new_for_path (path);
-  GFileOutputStream *out = g_file_replace (f, NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL);
+  g_autoptr(GFile) f = g_file_new_for_path (path);
+  g_autoptr(GFileOutputStream) out = g_file_replace (f, NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL);
   g_output_stream_printf (G_OUTPUT_STREAM (out), NULL, NULL, NULL, "test data");
-  g_object_unref (out);
-  g_object_unref (f);
 }
 
 /* Taken from phodav-method-delete.c and simplified */
@@ -86,9 +84,9 @@ main (gint argc, gchar *argv[])
     quit_on_stdin = TRUE;
   }
 
-  GFile *root_dir = g_file_new_for_path ("./phodav-virtual-root");
-  GFile *real_dir = g_file_get_child (root_dir, "real");
-  GFile *protected_dir = g_file_get_child (root_dir, "protected");
+  g_autoptr(GFile) root_dir = g_file_new_for_path ("./phodav-virtual-root");
+  g_autoptr(GFile) real_dir = g_file_get_child (root_dir, "real");
+  g_autoptr(GFile) protected_dir = g_file_get_child (root_dir, "protected");
 
   /* clean-up after any previous tests */
   delete_file_recursive (root_dir);
@@ -100,58 +98,46 @@ main (gint argc, gchar *argv[])
   create_test_file ("./phodav-virtual-root/test.txt");
 
   /* setup virtual dir structure */
-  PhodavVirtualDir *root = phodav_virtual_dir_new_root ();
+  g_autoptr(PhodavVirtualDir) root = phodav_virtual_dir_new_root ();
   phodav_virtual_dir_root_set_real (root, "./phodav-virtual-root");
-  PhodavVirtualDir *virtual_dir = phodav_virtual_dir_new_dir (root, "/virtual", NULL);
+  g_autoptr(PhodavVirtualDir) virtual_dir = phodav_virtual_dir_new_dir (root, "/virtual", NULL);
   phodav_virtual_dir_attach_real_child (virtual_dir, real_dir);
 
-  PhodavServer *phodav = phodav_server_new_for_root_file (G_FILE(root));
-
-  g_object_unref (virtual_dir);
-  g_object_unref (real_dir);
-  g_object_unref (protected_dir);
-  g_object_unref (root_dir);
-  g_object_unref (root);
+  g_autoptr(PhodavServer) phodav = phodav_server_new_for_root_file (G_FILE(root));
 
   SoupServer *server = phodav_server_get_soup_server (phodav);
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
 
   /* nobody may access /protected */
-  SoupAuthDomain *auth = soup_auth_domain_basic_new ("realm", "test", NULL);
+  g_autoptr(SoupAuthDomain) auth = soup_auth_domain_basic_new ("realm", "test", NULL);
   soup_auth_domain_add_path (auth, "/protected");
   soup_auth_domain_basic_set_auth_callback (auth, reject_auth, NULL, NULL);
   soup_server_add_auth_domain (server, auth);
-  g_object_unref (auth);
 
   /* let the system pick a free port */
   if (!soup_server_listen_local (server, 0, SOUP_SERVER_LISTEN_IPV4_ONLY, &error))
     {
       g_printerr ("Failed to listen: %s\n", error->message);
-      g_error_free (error);
       return 1;
     }
 
-  GMainLoop *loop = g_main_loop_new (NULL, FALSE);
+  g_autoptr(GMainLoop) loop = g_main_loop_new (NULL, FALSE);
 
   if (quit_on_stdin) {
-    GIOChannel *stdin_channel;
+    g_autoptr(GIOChannel) stdin_channel = NULL;
 #ifdef G_OS_WIN32
     stdin_channel = g_io_channel_win32_new_fd (0);
 #else
     stdin_channel = g_io_channel_unix_new (0);
 #endif
     g_io_add_watch (stdin_channel, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_watch, loop);
-    g_io_channel_unref (stdin_channel);
   }
 
-  GSList *uris = soup_server_get_uris (server);
+  g_autoslist(GUri) uris = soup_server_get_uris (server);
   g_assert_nonnull (uris);
   g_print ("OK %d\n", g_uri_get_port (uris->data));
-  g_slist_free_full (uris, (GDestroyNotify) g_uri_unref);
 
   g_main_loop_run (loop);
-  g_main_loop_unref (loop);
-  g_object_unref (phodav);
 
   return 0;
 }

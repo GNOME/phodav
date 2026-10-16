@@ -81,7 +81,7 @@ accept_ref (IfState *state)
 static gchar*
 accept_etag (IfState *state)
 {
-  GString *str = NULL;
+  g_autoptr(GString) str = NULL;
   gboolean success = FALSE;
 
   str = g_string_sized_new (strlen (state->cur));
@@ -112,7 +112,10 @@ accept_etag (IfState *state)
   success = TRUE;
 
 end:
-  return g_string_free (str, !success);
+  if (!success)
+    return NULL;
+
+  return g_string_free_and_steal (g_steal_pointer (&str));
 }
 
 static gboolean
@@ -263,7 +266,7 @@ static gboolean
 eval_if_tag (PathHandler *handler, IfState *state)
 {
   GUri *uri;
-  gchar *path;
+  g_autofree gchar *path = NULL;
   const gchar *ref = accept_ref (state);
 
   /* the resource may be an absolute URI or a path */
@@ -279,13 +282,12 @@ eval_if_tag (PathHandler *handler, IfState *state)
   g_uri_unref (uri);
   if (!path || *path != '/' || path_has_dot_dot_segment (path))
     {
-      g_free (path);
       state->error = TRUE;
       return FALSE;
     }
 
   g_free (state->path);
-  state->path = path;
+  state->path = g_steal_pointer (&path);
 
   return eval_if_lists (handler, state);
 }
@@ -314,7 +316,7 @@ phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path
   gboolean success = TRUE;
   gint status;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
+  g_autofree gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
   IfState state = { .cur = str, .base = soup_server_message_get_uri (msg), .path = g_strdup (path) };
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
 
@@ -346,7 +348,6 @@ end:
     status = SOUP_STATUS_LOCKED;
 
 out:
-  g_free (str);
   g_free (state.path);
   return status;
 }

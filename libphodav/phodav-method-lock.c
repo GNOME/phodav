@@ -137,7 +137,9 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
   DAVLockType type;
   DepthType depth;
   guint timeout;
-  gchar *ltoken = NULL, *uuid = NULL, *token = NULL;
+  g_autofree gchar *ltoken = NULL;
+  g_autofree gchar *uuid = NULL;
+  g_autofree gchar *token = NULL;
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean created;
@@ -213,14 +215,19 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
   soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
 
   lpath = server_get_path (handler_get_server (handler), path);
-  lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
-  if (!try_add_lock (handler_get_server (handler), path, lock))
-    {
-      g_warning ("lock failed");
-      dav_lock_free (lock);
-      status = SOUP_STATUS_LOCKED;
-      goto end;
-    }
+  {
+    g_autoptr(DAVLock) new_lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
+
+    if (!try_add_lock (handler_get_server (handler), path, new_lock))
+      {
+        g_warning ("lock failed");
+        status = SOUP_STATUS_LOCKED;
+        goto end;
+      }
+
+    /* owned by the path now */
+    lock = g_steal_pointer (&new_lock);
+  }
 
   created = lock_ensure_file (handler, path, cancellable, err);
   if (*err)
@@ -241,9 +248,6 @@ body:
                                     SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
-  g_free (ltoken);
-  g_free (token);
-  g_free (uuid);
   davdoc_free (&doc);
 
   return status;

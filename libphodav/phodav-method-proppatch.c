@@ -141,7 +141,7 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg,
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
-  GHashTable *mstatus = NULL;   // path -> statlist
+  g_autoptr(GHashTable) mstatus = NULL;   // path -> statlist
   DavDoc doc = {0, };
   xmlNodePtr node = NULL, attr = NULL;
   GList *props = NULL, *submitted = NULL;
@@ -189,8 +189,6 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg,
 
 end:
   davdoc_free (&doc);
-  if (mstatus)
-    g_hash_table_unref (mstatus);
   g_clear_object (&file);
 
   return status;

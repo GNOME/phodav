@@ -53,12 +53,11 @@ static xmlNodePtr
 status_node_new (xmlNsPtr ns, gint status)
 {
   xmlNodePtr node;
-  gchar *text;
+  g_autofree gchar *text = NULL;
 
   text = status_to_string (status);
   node = xmlNewNode (ns, BAD_CAST "status");
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
 
   return node;
 }

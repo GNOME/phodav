@@ -325,7 +325,8 @@ phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
                                          gboolean         *common_segment)
 {
   GFile *current;
-  gchar **segments, **segment_ptr, *real;
+  g_auto(GStrv) segments = NULL;
+  gchar **segment_ptr, *real;
 
   g_return_val_if_fail (parent != NULL, NULL);
   g_return_val_if_fail (path != NULL, NULL);
@@ -351,7 +352,6 @@ phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
           real = g_build_pathv ("/", segment_ptr);
           current = g_file_get_child (current, real);
           g_free (real);
-          g_strfreev (segments);
           return current;
         }
       current = phodav_virtual_dir_find_direct_child (PHODAV_VIRTUAL_DIR (current), *segment_ptr);
@@ -366,7 +366,6 @@ phodav_virtual_dir_find_child_recursive (PhodavVirtualDir *parent,
         }
     }
 
-  g_strfreev (segments);
   if (current)
     g_object_ref (current);
   return current;

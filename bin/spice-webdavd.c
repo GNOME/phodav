@@ -157,14 +157,13 @@ mux_pushed_client_cb (GObject *source_object,
                       gpointer user_data)
 {
   Client *client = user_data;
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   g_output_stream_write_all_finish (G_OUTPUT_STREAM (source_object), res, NULL, &error);
 
   if (error)
     {
       g_warning ("error pushing to client %" G_GINT64_FORMAT ": %s",
         client->mux.id, error->message);
-      g_error_free (error);
       remove_client (client);
     }
   client_unref (client);
@@ -464,7 +463,7 @@ get_spice_folder_letter(void)
 {
   const guint32 max_mask = 1 << 25;
   gchar local_name[3] = "z:";
-  gchar *spice_folder_name;
+  g_autofree gchar *spice_folder_name = NULL;
   gchar spice_folder_letter = 0;
   guint32 drives;
   guint32 i;
@@ -489,8 +488,6 @@ get_spice_folder_letter(void)
             }
         }
     }
-
-  g_free(spice_folder_name);
 
   return spice_folder_letter;
 }
@@ -641,11 +638,10 @@ run_service (ServiceData *service_data)
 
   if (drive_letter == 0)
     {
-      GTask *map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
+      g_autoptr(GTask) map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
       g_task_set_source_tag (map_drive_task, run_service);
       g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
       g_task_run_in_thread (map_drive_task, map_drive_cb);
-      g_object_unref (map_drive_task);
     }
 #endif
 
@@ -795,7 +791,7 @@ gint
 main (gint argc, gchar *argv[])
 {
   ServiceData service_data;
-  GOptionContext *opts;
+  g_autoptr(GOptionContext) opts = NULL;
   GError *error = NULL;
 
   opts = g_option_context_new (NULL);
@@ -813,7 +809,6 @@ main (gint argc, gchar *argv[])
       g_printerr ("please specify a valid port\n");
       exit (1);
     }
-  g_option_context_free (opts);
 
 #ifdef G_OS_UNIX
   g_unix_signal_add (SIGINT, signal_handler, NULL);
@@ -825,9 +820,8 @@ main (gint argc, gchar *argv[])
      windows, and it can't accept new connections if cleanup and
      restart a new service */
   socket_service = g_socket_service_new ();
-  GInetAddress *iaddr = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
-  GSocketAddress *saddr = g_inet_socket_address_new (iaddr, port);
-  g_object_unref (iaddr);
+  g_autoptr(GInetAddress) iaddr = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
+  g_autoptr(GSocketAddress) saddr = g_inet_socket_address_new (iaddr, port);
 
   g_socket_listener_add_address (G_SOCKET_LISTENER (socket_service),
                                  saddr,
@@ -836,7 +830,6 @@ main (gint argc, gchar *argv[])
                                  NULL,
                                  NULL,
                                  &error);
-  g_object_unref (saddr);
   if (error)
     {
       g_printerr ("%s\n", error->message);

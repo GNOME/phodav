@@ -49,6 +49,8 @@ propfind_free (PropFind *pf)
   g_slice_free (PropFind, pf);
 }
 
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PropFind, propfind_free)
+
 #define PROP_SET_STATUS(Node, Status) G_STMT_START {    \
     (Node)->_private = GINT_TO_POINTER (Status);        \
   } G_STMT_END
@@ -146,8 +148,8 @@ typedef enum {
 static void
 node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
 {
-  GDateTime *date;
-  gchar *text;
+  g_autoptr(GDateTime) date = NULL;
+  g_autofree gchar *text = NULL;
 
   g_warn_if_fail (time != 0);
   date = g_date_time_new_from_unix_utc (time);
@@ -161,8 +163,6 @@ node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
       break;
     }
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
-  g_date_time_unref (date);
 }
 
 static xmlNodePtr
@@ -225,7 +225,7 @@ prop_getcontentlength (PathHandler *handler, PropFind *pf,
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getcontentlength");
   guint64 size;
-  gchar *text;
+  g_autofree gchar *text = NULL;
 
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
@@ -233,7 +233,6 @@ prop_getcontentlength (PathHandler *handler, PropFind *pf,
   size = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
   text = g_strdup_printf ("%" G_GUINT64_FORMAT, size);
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
 
 end:
   PROP_SET_STATUS (node, status);
@@ -298,9 +297,8 @@ prop_getetag (PathHandler *handler, PropFind *pf,
   etag = g_file_info_get_etag (info);
   if (etag)
     {
-      gchar *tmp = g_strdup_printf ("\"%s\"", etag);
+      g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
       xmlAddChild (node, xmlNewText (BAD_CAST tmp));
-      g_free (tmp);
     }
   else
     {
@@ -346,7 +344,7 @@ prop_quota_available (PathHandler *handler, PropFind *pf,
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
   GCancellable *cancellable = handler_get_cancellable(handler);
   g_autoptr(GError) error = NULL;
-  gchar *tmp = NULL;
+  g_autofree gchar *tmp = NULL;
   guint64 size;
 
   if (pf->type == PROPFIND_PROPNAME)
@@ -373,7 +371,6 @@ end:
   if (info)
     g_object_unref (info);
 
-  g_free (tmp);
   PROP_SET_STATUS (node, status);
   return node;
 }
@@ -388,7 +385,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
   guint64 disk_usage = 0;
   g_autoptr(GError) error = NULL;
-  gchar *tmp = NULL;
+  g_autofree gchar *tmp = NULL;
 
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
@@ -411,7 +408,6 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
 
 end:
   g_clear_object (&file);
-  g_free (tmp);
   PROP_SET_STATUS (node, status);
   return node;
 }
@@ -700,9 +696,9 @@ gint
 phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
                         const gchar *path, GError **err)
 {
-  PropFind *pf = NULL;
+  g_autoptr(PropFind) pf = NULL;
   DepthType depth;
-  GHashTable *mstatus = NULL;   // path -> statlist
+  g_autoptr(GHashTable) mstatus = NULL;   // path -> statlist
   DavDoc doc = {0, };
   gint status = SOUP_STATUS_NOT_FOUND;
   xmlNsPtr ns = NULL;
@@ -756,9 +752,8 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
 
 end:
   davdoc_free (&doc);
-  propfind_free (pf);
-  if (mstatus)
-    g_hash_table_unref (mstatus);
+  /* the responses use ns */
+  g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
     xmlFreeNs(ns);
   return status;

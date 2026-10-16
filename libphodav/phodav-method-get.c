@@ -32,7 +32,7 @@ static GString *
 get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 {
   GString *listing;
-  GPtrArray *entries;
+  g_autoptr(GPtrArray) entries = NULL;
   GFileEnumerator *e;
   gchar *escaped;
   gchar *name;
@@ -42,7 +42,7 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
                                  cancellable, err);
   g_return_val_if_fail (e != NULL, NULL);
 
-  entries = g_ptr_array_new ();
+  entries = g_ptr_array_new_with_free_func (g_free);
   while (1)
     {
       GFileInfo *info = g_file_enumerator_next_file (e, cancellable, err);
@@ -75,11 +75,9 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
       g_string_append_printf (listing, "<a href=\"%s\">%s</a><br/>\r\n",
                               (gchar *) entries->pdata[i],
                               (gchar *) entries->pdata[i]);
-      g_free (entries->pdata[i]);
     }
   g_string_append (listing, "</p></body>\r\n</html>\r\n");
 
-  g_ptr_array_free (entries, TRUE);
   return listing;
 }
 
@@ -120,9 +118,8 @@ method_get (SoupServerMessage *msg, GFile *file,
 
   if (etag)
     {
-      gchar *tmp = g_strdup_printf ("\"%s\"", etag);
+      g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
       soup_message_headers_append (response_headers, "ETag", tmp);
-      g_free (tmp);
     }
 
   soup_message_headers_set_content_type (response_headers,
@@ -132,7 +129,7 @@ method_get (SoupServerMessage *msg, GFile *file,
   if (method == SOUP_METHOD_GET)
     {
       GMappedFile *mapping;
-      GBytes *buffer;
+      g_autoptr(GBytes) buffer = NULL;
       gchar *path = g_file_get_path (file);
 
       mapping = g_mapped_file_new (path, FALSE, NULL);
@@ -148,12 +145,11 @@ method_get (SoupServerMessage *msg, GFile *file,
                                            (GDestroyNotify) g_mapped_file_unref,
                                            mapping);
       soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
-      g_bytes_unref (buffer);
       status = SOUP_STATUS_OK;
     }
   else if (method == SOUP_METHOD_HEAD)
     {
-      gchar *length;
+      g_autofree gchar *length = NULL;
 
       /* We could just use the same code for both GET and
        * HEAD (soup-message-server-io.c will fix things up).
@@ -162,7 +158,6 @@ method_get (SoupServerMessage *msg, GFile *file,
       length = g_strdup_printf ("%" G_GUINT64_FORMAT, g_file_info_get_size (info));
       soup_message_headers_append (response_headers, "Content-Length", length);
 
-      g_free (length);
       status = SOUP_STATUS_OK;
     }
   else

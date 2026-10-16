@@ -58,13 +58,10 @@ typedef struct _AuthCase {
 static void
 create_test_file (const gchar *dir, const gchar *name)
 {
-  gchar *path = g_build_filename (dir, name, NULL);
-  GFile *f = g_file_new_for_path (path);
-  GFileOutputStream *out = g_file_replace (f, NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL);
+  g_autofree gchar *path = g_build_filename (dir, name, NULL);
+  g_autoptr(GFile) f = g_file_new_for_path (path);
+  g_autoptr(GFileOutputStream) out = g_file_replace (f, NULL, FALSE, G_FILE_CREATE_NONE, NULL, NULL);
   g_output_stream_printf (G_OUTPUT_STREAM (out), NULL, NULL, NULL, "test data");
-  g_object_unref (out);
-  g_object_unref (f);
-  g_free (path);
 }
 
 /* Taken from tests/virtual-dir-server.c */
@@ -77,13 +74,11 @@ delete_file_recursive (GFile *file)
     {
       while (TRUE)
         {
-          GFileInfo *info = g_file_enumerator_next_file (e, NULL, NULL);
+          g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, NULL, NULL);
           if (!info)
             break;
-          GFile *del = g_file_get_child (file, g_file_info_get_name (info));
+          g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
           delete_file_recursive (del);
-          g_object_unref (del);
-          g_object_unref (info);
         }
 
       g_file_enumerator_close (e, NULL, NULL);
@@ -96,26 +91,20 @@ delete_file_recursive (GFile *file)
 static void
 delete_dir (const gchar *path)
 {
-  GFile *file = g_file_new_for_path (path);
+  g_autoptr(GFile) file = g_file_new_for_path (path);
   delete_file_recursive (file);
-  g_object_unref (file);
 }
 
 /* returns an htdigest line "user:realm:md5(user:realm:password)" */
 static gchar *
 htdigest_line (const gchar *user, const gchar *realm, const gchar *password)
 {
-  GChecksum *checksum = g_checksum_new (G_CHECKSUM_MD5);
-  gchar *entry, *line;
+  g_autoptr(GChecksum) checksum = g_checksum_new (G_CHECKSUM_MD5);
+  g_autofree gchar *entry = g_strdup_printf ("%s:%s:%s", user, realm, password);
 
-  entry = g_strdup_printf ("%s:%s:%s", user, realm, password);
   g_checksum_update (checksum, (const guchar *) entry, -1);
-  line = g_strdup_printf ("%s:%s:%s\n", user, realm, g_checksum_get_string (checksum));
 
-  g_checksum_free (checksum);
-  g_free (entry);
-
-  return line;
+  return g_strdup_printf ("%s:%s:%s\n", user, realm, g_checksum_get_string (checksum));
 }
 
 static void
@@ -156,8 +145,8 @@ static void
 launch_server (const gchar *htdigest)
 {
   const gchar *chezdav = g_getenv ("CHEZDAV");
-  GPtrArray *args;
-  GError *error = NULL;
+  g_autoptr(GPtrArray) args = NULL;
+  g_autoptr(GError) error = NULL;
 
   /* the binary is built in the build root, the current directory of the test */
   if (!chezdav)
@@ -185,7 +174,6 @@ launch_server (const gchar *htdigest)
   server = g_subprocess_newv ((const gchar * const *) args->pdata,
                               G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE,
                               &error);
-  g_ptr_array_unref (args);
 
   if (error)
     {
@@ -204,8 +192,8 @@ launch_server (const gchar *htdigest)
 static void
 stop_server (void)
 {
-  gchar *output = NULL;
-  GError *error = NULL;
+  g_autofree gchar *output = NULL;
+  g_autoptr(GError) error = NULL;
 
   if (!server_exited)
     {
@@ -222,26 +210,21 @@ stop_server (void)
     g_printerr ("Failed to wait for chezdav: %s\n", error->message);
   else if (output && *output)
     g_printerr ("chezdav output:\n%s", output);
-
-  g_free (output);
-  g_clear_error (&error);
 }
 
 static void
 wait_for_server (void)
 {
-  GSocketClient *client = g_socket_client_new ();
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
   guint i;
 
   for (i = 0; i < 100; i++)
     {
-      GSocketConnection *connection =
+      g_autoptr(GSocketConnection) connection =
         g_socket_client_connect_to_host (client, "127.0.0.1", PORT, NULL, NULL);
 
       if (connection)
         {
-          g_object_unref (connection);
-
           /* make sure the listener is our server, and not some leftover
            * process that our server failed to replace (port in use) */
           g_usleep (200 * 1000);
@@ -249,10 +232,7 @@ wait_for_server (void)
             g_main_context_iteration (NULL, FALSE);
 
           if (!server_exited)
-            {
-              g_object_unref (client);
-              return;
-            }
+            return;
 
           g_printerr ("chezdav exited early with status %d, is something else listening on port %d?\n",
                       g_subprocess_get_exit_status (server), PORT);
@@ -273,7 +253,6 @@ wait_for_server (void)
       g_usleep (100 * 1000);
     }
 
-  g_object_unref (client);
   g_printerr ("chezdav did not start listening\n");
   stop_server ();
   exit (1);
@@ -314,10 +293,9 @@ wait_for_file (const gchar *path)
 static void
 set_request_body (SoupMessage *msg)
 {
-  GBytes *bytes = g_bytes_new_static (test_put_data, strlen (test_put_data));
+  g_autoptr(GBytes) bytes = g_bytes_new_static (test_put_data, strlen (test_put_data));
 
   soup_message_set_request_body_from_bytes (msg, NULL, bytes);
-  g_bytes_unref (bytes);
 }
 
 static void
@@ -331,16 +309,15 @@ static void
 test_chezdav (gconstpointer data)
 {
   const AuthCase *test = data;
-  SoupSession *session;
-  SoupMessage *msg;
-  GInputStream *in;
-  GError *error = NULL;
+  g_autoptr(SoupSession) session = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GInputStream) in = NULL;
+  g_autoptr(GError) error = NULL;
   gchar buf[4096];
-  gchar *uri;
+  g_autofree gchar *uri = NULL;
 
   uri = g_build_path ("/", SERVER_URI, test->path, NULL);
   msg = soup_message_new (test->method, uri);
-  g_free (uri);
   g_assert_nonnull (msg);
 
   g_signal_connect (msg, "authenticate", G_CALLBACK (authenticate_cb), (gpointer) test);
@@ -364,31 +341,26 @@ test_chezdav (gconstpointer data)
   if (test->method == SOUP_METHOD_PUT)
     {
       /* the file must have been created if and only if the PUT succeeded */
-      gchar *local = g_build_filename (share_dir, "put.txt", NULL);
+      g_autofree gchar *local = g_build_filename (share_dir, "put.txt", NULL);
       if (test->status_code == SOUP_STATUS_CREATED)
         {
-          gchar *contents = NULL;
+          g_autofree gchar *contents = NULL;
 
           g_assert_true (wait_for_file (local));
           g_assert_true (g_file_get_contents (local, &contents, NULL, NULL));
           g_assert_cmpstr (contents, ==, test_put_data);
-          g_free (contents);
         }
       else
         g_assert_false (g_file_test (local, G_FILE_TEST_EXISTS));
-      g_free (local);
     }
-
-  g_object_unref (in);
-  g_object_unref (msg);
-  g_object_unref (session);
 }
 
 gint
 main (gint argc, gchar *argv[])
 {
-  gchar *htdigest, *contents, *line;
-  GError *error = NULL;
+  g_autofree gchar *htdigest = NULL;
+  gchar *contents, *line;
+  g_autoptr(GError) error = NULL;
 
   g_test_init (&argc, &argv, NULL);
 
@@ -446,12 +418,11 @@ main (gint argc, gchar *argv[])
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)
     {
-      gchar *test_path = g_strdup_printf ("/chezdav/%s-%s/%s%s",
+      g_autofree gchar *test_path = g_strdup_printf ("/chezdav/%s-%s/%s%s",
                                           tests[i].username ? tests[i].username : "anonymous",
                                           tests[i].password ? tests[i].password : "",
                                           tests[i].method, tests[i].path);
       g_test_add_data_func (test_path, &tests[i], test_chezdav);
-      g_free (test_path);
     }
 
   gint res = g_test_run ();
@@ -463,7 +434,6 @@ main (gint argc, gchar *argv[])
   delete_dir (work_dir);
   g_free (share_dir);
   g_free (work_dir);
-  g_free (htdigest);
 
   return res;
 }

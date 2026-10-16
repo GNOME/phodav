@@ -50,13 +50,11 @@ phodav_delete_file (const gchar *path, GFile *file,
           if (!info)
             break;
           GFile *del = g_file_get_child (file, g_file_info_get_name (info));
-          gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
-          gchar *del_path = g_build_path ("/", path, escape, NULL);
+          g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
+          g_autofree gchar *del_path = g_build_path ("/", path, escape, NULL);
           phodav_delete_file (del_path, del, mstatus, cancellable);
           g_object_unref (del);
           g_object_unref (info);
-          g_free (escape);
-          g_free (del_path);
         }
 
       g_file_enumerator_close (e, cancellable, NULL);
@@ -92,7 +90,7 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
-  GHashTable *mstatus = NULL;
+  g_autoptr(GHashTable) mstatus = NULL;
   gint status;
   GList *submitted = NULL;
 
@@ -113,8 +111,6 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
       status = set_response_multistatus (msg, mstatus);
 
 end:
-  if (mstatus)
-    g_hash_table_unref (mstatus);
   g_clear_object (&file);
 
   return status;

@@ -77,19 +77,15 @@ Path *
 server_get_path (PhodavServer *self, const gchar *_path)
 {
   Path *p;
-  gchar *path = g_strdup (_path);
+  g_autofree gchar *path = g_strdup (_path);
 
   remove_trailing (path, '/');
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
     {
       p = g_slice_new0 (Path);
-      p->path = path;
+      p->path = g_steal_pointer (&path);
       g_hash_table_insert (self->paths, p->path, path_ref (p));
-    }
-  else
-    {
-      g_free (path);
     }
 
   return p;
@@ -347,7 +343,8 @@ phodav_server_class_init (PhodavServerClass *klass)
 gboolean
 server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
-  gchar **pathv, *partial = g_strdup ("/");
+  g_auto(GStrv) pathv = NULL;
+  g_autofree gchar *partial = g_strdup ("/");
   gboolean ret = FALSE;
   gchar *key = NULL;
   Path *p;
@@ -375,9 +372,6 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
   ret = TRUE;
 
 end:
-  g_strfreev (pathv);
-  g_free (partial);
-
   return ret;
 }
 
@@ -497,7 +491,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
   const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageHeaders *response_headers;
-  GHashTable *params;
+  g_autoptr(GHashTable) params = NULL;
 
   g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_server_message_get_http_version (msg),
            soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
@@ -525,7 +519,6 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
   response_headers = soup_server_message_get_response_headers (msg);
   soup_message_headers_set_content_type (response_headers,
                                          "text/xml", params);
-  g_hash_table_destroy (params);
 
   if (handler->self->readonly &&
       (method == SOUP_METHOD_PROPPATCH ||

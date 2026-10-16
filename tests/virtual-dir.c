@@ -55,16 +55,14 @@ static void
 test_generic (gconstpointer data)
 {
   const TestCase *test = data;
-  gchar *uri = g_build_path ("/", server_uri, test->path, NULL);
-  SoupMessage *msg = soup_message_new (test->method, uri);
-  g_free (uri);
+  g_autofree gchar *uri = g_build_path ("/", server_uri, test->path, NULL);
+  g_autoptr(SoupMessage) msg = soup_message_new (test->method, uri);
 
   if (test->method == SOUP_METHOD_COPY ||
       test->method == SOUP_METHOD_MOVE)
     {
-      gchar *dest_uri = g_build_path ("/", server_uri, test->destination, NULL);
+      g_autofree gchar *dest_uri = g_build_path ("/", server_uri, test->destination, NULL);
       soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
-      g_free (dest_uri);
     }
 
   if (test->if_header)
@@ -72,11 +70,10 @@ test_generic (gconstpointer data)
 
   if (test->method == SOUP_METHOD_PUT)
     {
-      GBytes *bytes;
+      g_autoptr(GBytes) bytes = NULL;
 
       bytes = g_bytes_new_static (test_put_data, strlen (test_put_data));
       soup_message_set_request_body_from_bytes (msg, NULL, bytes);
-      g_bytes_unref (bytes);
     }
 
   GError *error = NULL;
@@ -87,7 +84,6 @@ test_generic (gconstpointer data)
   check_no_escape ();
 
   g_object_unref (in);
-  g_object_unref (msg);
 }
 
 static gchar *
@@ -124,20 +120,19 @@ get_test_path (const TestCase *test)
 gint
 main (gint argc, gchar *argv[])
 {
-  GError *error = NULL;
-  GSubprocess *server_subproc;
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GSubprocess) server_subproc = NULL;
   server_subproc = g_subprocess_new (
     G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
     "tests/virtual-dir-server", "--quit-on-stdin", NULL);
 
   if (error) {
     g_printerr ("Failed to launch virtual-dir-server: %s\n", error->message);
-    g_error_free (error);
     return 1;
   }
 
   /* wait for the server to start */
-  GDataInputStream *stream = g_data_input_stream_new (g_subprocess_get_stdout_pipe (server_subproc));
+  g_autoptr(GDataInputStream) stream = g_data_input_stream_new (g_subprocess_get_stdout_pipe (server_subproc));
   g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (stream), FALSE);
   gboolean server_started = FALSE;
   while (!server_started) {
@@ -145,7 +140,6 @@ main (gint argc, gchar *argv[])
 
     if (error) {
       g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);
-      g_error_free (error);
       return 1;
     }
 
@@ -162,7 +156,7 @@ main (gint argc, gchar *argv[])
       }
     g_free (line);
   }
-  g_object_unref (stream);
+  g_clear_object (&stream);
 
   g_test_init (&argc, &argv, NULL);
 
@@ -232,7 +226,6 @@ main (gint argc, gchar *argv[])
 
   gint res = g_test_run ();
   g_object_unref (session);
-  g_object_unref (server_subproc);
   g_free (server_uri);
   return res;
 }
