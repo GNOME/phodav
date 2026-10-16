@@ -23,6 +23,7 @@
 G_BEGIN_DECLS
 
 void             remove_trailing                 (gchar *str, gchar c);
+gboolean         path_has_dot_dot_segment        (const gchar *path);
 
 DepthType        depth_from_string               (const gchar *depth);
 const gchar *    depth_to_string                 (DepthType depth);

@@ -159,30 +159,43 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
-  gchar *udest;
+  gchar *udest = NULL;
   GList *submitted = NULL;
 
   dest = soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Destination");
   if (!dest)
     goto end;
   dest_uri = g_uri_parse (dest, SOUP_HTTP_URI_FLAGS, NULL);
+  if (!dest_uri)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
   dest = g_uri_get_path (dest_uri);
   if (!dest || !*dest)
     goto end;
+
+  /* like the request path, reject encoded slashes: they would survive
+   * dot-segment removal and allow escaping the root once decoded */
+  udest = g_uri_unescape_string (dest, "/");
+  if (!udest || *udest != '/' || path_has_dot_dot_segment (udest))
+    {
+      g_debug ("invalid destination path: %s", dest);
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
 
   status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  if (server_path_has_other_locks (handler_get_server (handler), dest, submitted))
+  if (server_path_has_other_locks (handler_get_server (handler), udest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
     }
 
-  udest = g_uri_unescape_string (dest + 1, NULL);
-  dest_file = g_file_get_child (handler_get_file (handler), udest);
-  g_free (udest);
+  dest_file = g_file_get_child (handler_get_file (handler), udest + 1);
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
 
@@ -192,10 +205,11 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, file, dest_file, dest,
+  status = do_movecopy_file (msg, file, dest_file, udest,
                              cancellable, err);
 
 end:
+  g_free (udest);
   if (dest_uri)
     g_uri_unref (dest_uri);
   g_clear_object (&file);

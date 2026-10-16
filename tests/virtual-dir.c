@@ -32,6 +32,21 @@ typedef struct _TestCase {
   const gchar *destination;
 } TestCase;
 
+/* the server root is ./phodav-virtual-root, nothing may be created next to it */
+static const gchar *escaped_files[] = {
+  "escaped-copy.txt",
+  "escaped-move.txt",
+  "escaped-put.txt",
+  "escaped-mkcol",
+};
+
+static void
+check_no_escape (void)
+{
+  for (guint i = 0; i < G_N_ELEMENTS (escaped_files); i++)
+    g_assert_false (g_file_test (escaped_files[i], G_FILE_TEST_EXISTS));
+}
+
 static void
 test_generic (gconstpointer data)
 {
@@ -40,7 +55,8 @@ test_generic (gconstpointer data)
   SoupMessage *msg = soup_message_new (test->method, uri);
   g_free (uri);
 
-  if (test->method == SOUP_METHOD_COPY)
+  if (test->method == SOUP_METHOD_COPY ||
+      test->method == SOUP_METHOD_MOVE)
     {
       gchar *dest_uri = g_build_path ("/", SERVER_URI, test->destination, NULL);
       soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
@@ -61,6 +77,7 @@ test_generic (gconstpointer data)
   g_assert_no_error (error);
 
   g_assert_cmpint (soup_message_get_status (msg), ==, test->status_code);
+  check_no_escape ();
 
   g_object_unref (in);
   g_object_unref (msg);
@@ -85,7 +102,8 @@ get_test_path (const TestCase *test)
   gchar *path = replace_char_dup (test->path, '/', '\\');
   gchar *test_path = g_build_path ("/", "/", test->method, path, NULL);
   g_free (path);
-  if (test->method == SOUP_METHOD_COPY)
+  if (test->method == SOUP_METHOD_COPY ||
+      test->method == SOUP_METHOD_MOVE)
     {
       gchar *dest = replace_char_dup (test->destination, '/', '\\');
       gchar *tmp = g_strconcat (test_path, "->", dest, NULL);
@@ -162,6 +180,15 @@ main (int argc, char *argv[])
     {SOUP_METHOD_DELETE, "/A", SOUP_STATUS_NO_CONTENT},
     {SOUP_METHOD_DELETE, "/virtual/real/B", SOUP_STATUS_NO_CONTENT},
     {SOUP_METHOD_DELETE, "/virtual", SOUP_STATUS_FORBIDDEN},
+
+    /* encoded slashes must not allow escaping the root */
+    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-copy.txt"},
+    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/..%2fescaped-copy.txt"},
+    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2F..%2F..%2Fescaped-copy.txt"},
+    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/%2e%2e/escaped-copy.txt"},
+    {SOUP_METHOD_MOVE, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-move.txt"},
+    {SOUP_METHOD_MKCOL, "/..%2fescaped-mkcol", SOUP_STATUS_BAD_REQUEST},
+    {SOUP_METHOD_GET, "/..%2fphodav-virtual-root%2ftest.txt", SOUP_STATUS_BAD_REQUEST},
   };
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)

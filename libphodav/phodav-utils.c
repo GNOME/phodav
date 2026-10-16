@@ -28,6 +28,27 @@ remove_trailing (gchar *str, gchar c)
   str[len] = '\0';
 }
 
+gboolean
+path_has_dot_dot_segment (const gchar *path)
+{
+  const gchar *p = path;
+
+  while (*p)
+    {
+      const gchar *end = p;
+
+      while (*end && !G_IS_DIR_SEPARATOR (*end))
+        end++;
+
+      if (end - p == 2 && p[0] == '.' && p[1] == '.')
+        return TRUE;
+
+      p = *end ? end + 1 : end;
+    }
+
+  return FALSE;
+}
+
 static xmlDocPtr
 parse_xml (const gchar  *data,
            const goffset len,
