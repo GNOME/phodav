@@ -14,8 +14,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef __PHODAV_UTILS_H__
-#define __PHODAV_UTILS_H__
+#pragma once
 
 #include <libsoup/soup.h>
 #include "phodav-priv.h"
@@ -55,5 +54,3 @@ void             xml_node_debug                  (xmlNodePtr node);
 gchar *          xml_node_get_xattr_name         (xmlNodePtr node, const gchar *prefix);
 
 G_END_DECLS
-
-#endif /* __PHODAV_UTILS_H__ */

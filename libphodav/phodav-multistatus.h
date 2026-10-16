@@ -14,8 +14,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef __PHODAV_MULTISTATUS_H__
-#define __PHODAV_MULTISTATUS_H__
+#pragma once
 
 #include <libsoup/soup.h>
 #include "phodav-priv.h"
@@ -35,5 +34,3 @@ void           response_free                     (Response    *h);
 gint           set_response_multistatus          (SoupServerMessage *msg,
                                                   GHashTable        *mstatus);
 G_END_DECLS
-
-#endif /* __PHODAV_MULTISTATUS_H__ */

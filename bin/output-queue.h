@@ -15,8 +15,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef __OUTPUT_QUEUE_H
-#define __OUTPUT_QUEUE_H
+#pragma once
 
 #include <gio/gio.h>
 #include <glib-object.h>
@@ -34,5 +33,3 @@ void output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
                         PushedCb pushed_cb, gpointer user_data);
 
 G_END_DECLS
-
-#endif

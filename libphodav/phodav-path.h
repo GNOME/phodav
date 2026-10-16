@@ -14,8 +14,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef __PHODAV_PATH_H__
-#define __PHODAV_PATH_H__
+#pragma once
 
 #include "phodav-priv.h"
 
@@ -34,5 +33,3 @@ void                    path_remove_lock            (Path *path, DAVLock *lock);
 void                    path_add_lock               (Path *path, DAVLock *lock);
 
 G_END_DECLS
-
-#endif /* __PHODAV_PATH_H__ */

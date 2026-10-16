@@ -14,8 +14,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef __PHODAV_PRIV_H__
-#define __PHODAV_PRIV_H__
+#pragma once
 
 #include "config.h"
 
@@ -117,5 +116,3 @@ void                    phodav_method_put                    (PathHandler *handl
                                                               const gchar *path, GError **err);
 
 G_END_DECLS
-
-#endif /* __PHODAV_PRIV_H__ */

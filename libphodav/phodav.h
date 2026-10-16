@@ -14,10 +14,7 @@
   You should have received a copy of the GNU Lesser General Public
   License along with this library; if not, see <http://www.gnu.org/licenses/>.
 */
-#ifndef __PHODAV_H__
-#define __PHODAV_H__
+#pragma once
 
 #include <libphodav/phodav-server.h>
 #include <libphodav/phodav-virtual-dir.h>
-
-#endif /* __PHODAV_H__ */
