@@ -465,8 +465,7 @@ prop_xattr (gchar *xattr)
     }
   else
     {
-      name = ns;
-      ns = NULL;
+      name = g_steal_pointer (&ns);
     }
 
   node = xmlNewNode (NULL, BAD_CAST name);
