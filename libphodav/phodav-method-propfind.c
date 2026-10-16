@@ -344,7 +344,7 @@ prop_quota_available (PathHandler *handler, PropFind *pf,
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
   GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gchar *tmp = NULL;
   guint64 size;
 
@@ -386,7 +386,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
   GCancellable *cancellable = handler_get_cancellable(handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
   guint64 disk_usage = 0;
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gchar *tmp = NULL;
 
   if (pf->type == PROPFIND_PROPNAME)

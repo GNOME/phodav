@@ -127,7 +127,7 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
 int
 main (int argc, char *argv[])
 {
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   GOptionContext *context;
   const gchar *path = NULL;
   const gchar *realm = NULL;
