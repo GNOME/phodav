@@ -32,12 +32,16 @@ typedef struct _TestCase {
   const gchar *destination;
 } TestCase;
 
-/* the server root is ./phodav-virtual-root, nothing may be created next to it */
+/* files that must never be created: the server root is ./phodav-virtual-root,
+ * nothing may escape it, and nothing may be written without authentication */
 static const gchar *escaped_files[] = {
   "escaped-copy.txt",
   "escaped-move.txt",
   "escaped-put.txt",
   "escaped-mkcol",
+  "phodav-virtual-root/..%2fescaped-put.txt",
+  "phodav-virtual-root/..%2Fescaped-put.txt",
+  "phodav-virtual-root/protected/test-put.txt",
 };
 
 static void
@@ -187,8 +191,13 @@ main (int argc, char *argv[])
     {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2F..%2F..%2Fescaped-copy.txt"},
     {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/%2e%2e/escaped-copy.txt"},
     {SOUP_METHOD_MOVE, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-move.txt"},
+    {SOUP_METHOD_PUT, "/..%2fescaped-put.txt", SOUP_STATUS_BAD_REQUEST},
     {SOUP_METHOD_MKCOL, "/..%2fescaped-mkcol", SOUP_STATUS_BAD_REQUEST},
     {SOUP_METHOD_GET, "/..%2fphodav-virtual-root%2ftest.txt", SOUP_STATUS_BAD_REQUEST},
+
+    /* libsoup authentication must be enforced */
+    {SOUP_METHOD_GET, "/protected", SOUP_STATUS_UNAUTHORIZED},
+    {SOUP_METHOD_PUT, "/protected/test-put.txt", SOUP_STATUS_UNAUTHORIZED},
   };
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)

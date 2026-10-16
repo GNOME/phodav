@@ -450,8 +450,22 @@ got_headers (SoupServerMessage *msg,
   const gchar *path = g_uri_get_path (uri);
   GError *err = NULL;
 
-  if (soup_server_message_get_method (msg) == SOUP_METHOD_PUT)
-    phodav_method_put (self->root_handler, msg, path, &err);
+  if (soup_server_message_get_method (msg) != SOUP_METHOD_PUT)
+    return;
+
+  /* libsoup handlers ran first, the request may have been rejected
+   * already (invalid path, authentication...) */
+  if (soup_server_message_get_status (msg) != 0)
+    return;
+
+  if (!(path && *path == '/') || g_path_is_absolute (path + 1))
+    {
+      g_debug ("invalid PUT path: %s", path);
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+      return;
+    }
+
+  phodav_method_put (self->root_handler, msg, path, &err);
 
   if (err)
     {

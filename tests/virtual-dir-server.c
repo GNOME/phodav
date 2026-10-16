@@ -58,6 +58,13 @@ delete_file_recursive (GFile *file)
 }
 
 static gboolean
+reject_auth (SoupAuthDomain *domain, SoupServerMessage *msg,
+             const char *username, const char *password, gpointer data)
+{
+  return FALSE;
+}
+
+static gboolean
 stdin_watch (GIOChannel *source, GIOCondition condition, gpointer data)
 {
   g_debug ("stdin condition %d, quitting", condition);
@@ -71,7 +78,8 @@ stdin_watch (GIOChannel *source, GIOCondition condition, gpointer data)
  * for the purpose of testing PhodavVirtualDir.
  *
  * It creates a folder that acts as the "real" root and one virtual dir "/virtual"
- * inside it - so the setup is similar to the one used by spice-gtk */
+ * inside it - so the setup is similar to the one used by spice-gtk.
+ * The "/protected" folder requires authentication that always fails. */
 int
 main (int argc, char *argv[])
 {
@@ -82,6 +90,7 @@ main (int argc, char *argv[])
 
   GFile *root_dir = g_file_new_for_path ("./phodav-virtual-root");
   GFile *real_dir = g_file_get_child (root_dir, "real");
+  GFile *protected_dir = g_file_get_child (root_dir, "protected");
 
   /* clean-up after any previous tests */
   delete_file_recursive (root_dir);
@@ -89,6 +98,7 @@ main (int argc, char *argv[])
   /* setup local dir structure */
   g_assert_true (g_file_make_directory (root_dir, NULL, NULL));
   g_assert_true (g_file_make_directory (real_dir, NULL, NULL));
+  g_assert_true (g_file_make_directory (protected_dir, NULL, NULL));
   create_test_file ("./phodav-virtual-root/test.txt");
 
   /* setup virtual dir structure */
@@ -101,11 +111,19 @@ main (int argc, char *argv[])
 
   g_object_unref (virtual_dir);
   g_object_unref (real_dir);
+  g_object_unref (protected_dir);
   g_object_unref (root_dir);
   g_object_unref (root);
 
   SoupServer *server = phodav_server_get_soup_server (phodav);
   GError *error = NULL;
+
+  /* nobody may access /protected */
+  SoupAuthDomain *auth = soup_auth_domain_basic_new ("realm", "test", NULL);
+  soup_auth_domain_add_path (auth, "/protected");
+  soup_auth_domain_basic_set_auth_callback (auth, reject_auth, NULL, NULL);
+  soup_server_add_auth_domain (server, auth);
+  g_object_unref (auth);
   if (!soup_server_listen_all (server, PORT, 0, &error))
     {
       g_printerr ("Failed to listen on port %d: %s\n", PORT, error->message);
