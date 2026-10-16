@@ -17,10 +17,12 @@
 
 #include "phodav-priv.h"
 #include "phodav-lock.h"
+#include "phodav-utils.h"
 
 typedef struct _IfState
 {
   gchar   *cur;
+  GUri    *base;
   gchar   *path;
   GList   *locks;
   gboolean error;
@@ -60,7 +62,7 @@ accept_ref (IfState *state)
   gchar *url, *end;
 
   if (!accept_token (state, "<"))
-    return FALSE;
+    return NULL;
 
   url = state->cur;
   end = strchr (state->cur, '>');
@@ -168,8 +170,15 @@ eval_if_condition (PathHandler *handler, IfState *state)
   if (next_token (state, "<"))
     {
       const gchar *token = accept_ref (state);
-      LockSubmitted *l = lock_submitted_new (state->path, token);
+      LockSubmitted *l;
 
+      if (!token)
+        {
+          state->error = TRUE;
+          return FALSE;
+        }
+
+      l = lock_submitted_new (state->path, token);
       state->locks = g_list_append (state->locks, l);
 
       success = check_token (handler, state->path, token);
@@ -178,11 +187,17 @@ eval_if_condition (PathHandler *handler, IfState *state)
     {
       gchar *etag = accept_etag (state);
 
+      if (!etag)
+        {
+          state->error = TRUE;
+          return FALSE;
+        }
+
       success = check_etag (handler, state->path, etag);
       g_free (etag);
     }
   else
-    g_warn_if_reached ();
+    state->error = TRUE;
 
   return success;
 }
@@ -206,12 +221,21 @@ eval_if_list (PathHandler *handler, IfState *state)
 {
   gboolean success;
 
-  g_return_val_if_fail (accept_token (state, "("), FALSE);
+  if (!accept_token (state, "("))
+    {
+      state->error = TRUE;
+      return FALSE;
+    }
 
   success = eval_if_not_condition (handler, state);
 
-  while (!accept_token (state, ")"))
-    success &= eval_if_not_condition (handler, state);
+  while (!state->error && !accept_token (state, ")"))
+    {
+      if (eat_whitespaces (state))
+        state->error = TRUE;
+      else
+        success &= eval_if_not_condition (handler, state);
+    }
 
   return success;
 }
@@ -221,9 +245,13 @@ eval_if_lists (PathHandler *handler, IfState *state)
 {
   gboolean success = FALSE;
 
-  g_return_val_if_fail (next_token (state, "("), FALSE);
+  if (!next_token (state, "("))
+    {
+      state->error = TRUE;
+      return FALSE;
+    }
 
-  while (next_token (state, "("))
+  while (!state->error && next_token (state, "("))
     success |= eval_if_list (handler, state);
 
   return success;
@@ -233,16 +261,29 @@ static gboolean
 eval_if_tag (PathHandler *handler, IfState *state)
 {
   GUri *uri;
-  const gchar *path;
+  gchar *path;
   const gchar *ref = accept_ref (state);
 
-  g_return_val_if_fail (ref != NULL, FALSE);
+  /* the resource may be an absolute URI or a path */
+  uri = ref ? g_uri_parse_relative (state->base, ref, G_URI_FLAGS_ENCODED_PATH, NULL) : NULL;
+  if (!uri)
+    {
+      state->error = TRUE;
+      return FALSE;
+    }
 
-  uri = g_uri_parse (ref, G_URI_FLAGS_ENCODED_PATH, NULL);
-  path = g_uri_get_path (uri);
-  g_free (state->path);
-  state->path = g_strdup (path);
+  /* like the request path, it may not contain encoded slashes */
+  path = g_uri_unescape_string (g_uri_get_path (uri), "/");
   g_uri_unref (uri);
+  if (!path || *path != '/' || path_has_dot_dot_segment (path))
+    {
+      g_free (path);
+      state->error = TRUE;
+      return FALSE;
+    }
+
+  g_free (state->path);
+  state->path = path;
 
   return eval_if_lists (handler, state);
 }
@@ -254,10 +295,10 @@ eval_if (PathHandler *handler, IfState *state)
   gboolean success = FALSE;
 
   if (next_token (state, "<")) {
-    while (!eat_whitespaces (state))
+    while (!state->error && !eat_whitespaces (state))
       success |= eval_if_tag (handler, state);
   } else {
-    while (!eat_whitespaces (state))
+    while (!state->error && !eat_whitespaces (state))
       success |= eval_if_lists (handler, state);
   }
 
@@ -272,13 +313,13 @@ phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path
   gint status;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
-  IfState state = { .cur = str, .path = g_strdup (path) };
+  IfState state = { .cur = str, .base = soup_server_message_get_uri (msg), .path = g_strdup (path) };
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
 
   if (!str)
     goto end;
 
-  if (eval_if (handler, &state))
+  if (eval_if (handler, &state) && !state.error)
     {
       *locks = state.locks;
     }
@@ -288,6 +329,13 @@ phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path
       success = FALSE;
     }
 
+  if (state.error)
+    {
+      g_debug ("invalid If header: %s", soup_message_headers_get_one (request_headers, "If"));
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto out;
+    }
+
 end:
   status = success ? SOUP_STATUS_OK
            : str ? SOUP_STATUS_PRECONDITION_FAILED : SOUP_STATUS_LOCKED;
@@ -295,6 +343,7 @@ end:
   if (success && !copy && server_path_has_other_locks (server, path, *locks))
     status = SOUP_STATUS_LOCKED;
 
+out:
   g_free (str);
   g_free (state.path);
   return status;
