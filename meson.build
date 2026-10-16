@@ -6,22 +6,22 @@ project(
     check : true
   ).stdout().strip(),
   license : 'LGPLv2.1',
-  meson_version : '>= 0.56',
+  meson_version : '>= 1.0',
 )
 
-meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'.format(meson.project_version()))
-
 proj_version = meson.project_version()
+meson.add_dist_script('sh', '-c', f'echo @proj_version@>"$MESON_DIST_ROOT/.tarball-version"')
+
 proj_name = meson.project_name()
 proj_gettext = 'phodav-3.0'
 proj_bugurl = 'https://gitlab.gnome.org/GNOME/phodav/issues/new'
 
 gnome = import('gnome')
 prefix = get_option('prefix')
-sbindir = join_paths(prefix, get_option('sbindir'))
-datadir = join_paths(prefix, get_option('datadir'))
-mandir = join_paths(prefix, get_option('mandir'))
-localedir = join_paths(datadir, 'locale')
+sbindir = prefix / get_option('sbindir')
+datadir = prefix / get_option('datadir')
+mandir = prefix / get_option('mandir')
+localedir = datadir / 'locale'
 incdir = include_directories('.')
 
 compiler = meson.get_compiler('c')
@@ -63,7 +63,7 @@ config = {
   'LOCALEDIR' : localedir,
   'PACKAGE_BUGREPORT' : proj_bugurl,
   'PACKAGE_NAME' : proj_name,
-  'PACKAGE_STRING' : '@0@ @1@'.format(proj_name, proj_version),
+  'PACKAGE_STRING' : f'@proj_name@ @proj_version@',
   'PACKAGE_VERSION' : proj_version,
   'VERSION' : proj_version,
 }
@@ -76,3 +76,12 @@ configure_file(
   install : false,
   configuration : conf
 )
+
+summary({
+  'mDNS / Avahi support' : d1.found() and d2.found(),
+  'xattr support' : conf.has('HAVE_SYS_XATTR_H'),
+  'API reference (gtk-doc)' : build_gtk_doc,
+  'Manual pages' : build_man,
+  'systemd unit directory' : systemd_systemunitdir,
+  'udev rules directory' : udev_rulesdir,
+}, section : 'Configuration')

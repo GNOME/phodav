@@ -11,8 +11,8 @@ configure_file(
 )
 
 glib_prefix = dependency('glib-2.0').get_variable(pkgconfig: 'prefix')
-glib_docpath = join_paths(glib_prefix, 'share', 'gtk-doc', 'html')
-docpath = join_paths(datadir, 'gtk-doc', 'html')
+glib_docpath = glib_prefix / 'share' / 'gtk-doc' / 'html'
+docpath = datadir / 'gtk-doc' / 'html'
 
 private_headers = [
   'config.h',
@@ -27,17 +27,17 @@ gnome.gtkdoc(
   'phodav-3.0',
   main_sgml : 'phodav-3.0-docs.sgml',
   dependencies : declare_dependency(link_with : [libphodav]),
-  src_dir : join_paths(meson.project_source_root(), 'libphodav'),
+  src_dir : meson.project_source_root() / 'libphodav',
   gobject_typesfile: 'libphodav.types',
   scan_args: [
     '--rebuild-types',
     '--ignore-headers=' + ' '.join(private_headers),
   ],
   fixxref_args: [
-    '--html-dir=@0@'.format(docpath),
-    '--extra-dir=@0@'.format(join_paths(glib_docpath, 'glib')),
-    '--extra-dir=@0@'.format(join_paths(glib_docpath, 'gobject')),
-    '--extra-dir=@0@'.format(join_paths(glib_docpath, 'gio')),
+    f'--html-dir=@docpath@',
+    f'--extra-dir=@glib_docpath@/glib',
+    f'--extra-dir=@glib_docpath@/gobject',
+    f'--extra-dir=@glib_docpath@/gio',
   ],
  install : true,
 )

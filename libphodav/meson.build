@@ -25,19 +25,22 @@ sources = [
   'phodav-virtual-dir.c'
 ]
 
-mapfile = 'libphodav.syms'
-vflag = compiler.get_supported_link_arguments([
-  '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile),
-])
+symbol_map = 'libphodav.syms'
+version_script = meson.current_source_dir() / symbol_map
 
 libphodav = library(
   'phodav-3.0',
   sources,
   c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
   include_directories : incdir,
-  version: '0.0.0',
-  link_args : compiler.get_supported_link_arguments([ '-Wl,--no-undefined', vflag ]),
-  link_depends : mapfile,
+  # libtool-style ABI version current.revision.age: bump current and age
+  # when adding symbols, revision otherwise; soversion (current - age)
+  # must only change on incompatible ABI changes
+  soversion : 0,
+  version : '0.0.0',
+  link_args : compiler.get_supported_link_arguments(
+    [ '-Wl,--no-undefined', f'-Wl,--version-script,@version_script@' ]),
+  link_depends : symbol_map,
   dependencies : deps,
   install : true,
 )

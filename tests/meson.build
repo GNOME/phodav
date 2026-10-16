@@ -9,14 +9,14 @@ server = executable('virtual-dir-server',
                     dependencies : deps)
 
 foreach src : tests_sources
-  name = 'test-@0@'.format(src).split('.')[0]
-  exe = executable(name,
+  name = src.split('.')[0]
+  exe = executable(f'test-@name@',
                    sources : src,
                    include_directories: incdir,
                    link_with : libphodav,
                    dependencies : deps)
   # the tests spawn the server, make sure it is rebuilt too
-  test(name, exe, depends : server)
+  test(f'test-@name@', exe, depends : server)
 endforeach
 
 chezdav_env = ['CHEZDAV=' + chezdav.full_path()]
