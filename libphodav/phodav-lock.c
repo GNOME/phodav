@@ -158,8 +158,8 @@ locks_submitted_has (GList *locks, DAVLock *lock)
   for (l = locks; l != NULL; l = l->next)
   {
     LockSubmitted *sub = l->data;
-    if (!g_strcmp0 (sub->path, lock->path->path) &&
-        !g_strcmp0 (sub->token, lock->token))
+    if (g_strcmp0 (sub->path, lock->path->path) == 0 &&
+        g_strcmp0 (sub->token, lock->token) == 0)
       return TRUE;
   }
 

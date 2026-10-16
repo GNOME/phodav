@@ -87,7 +87,7 @@ parse_xml (const gchar  *data,
       return NULL;
     }
 
-  if (g_strcmp0 ((char *) (*root)->name, name))
+  if (g_strcmp0 ((char *) (*root)->name, name) != 0)
     {
       g_debug ("Unexpected request");
       xmlFreeDoc (doc);
@@ -132,11 +132,11 @@ depth_from_string (const gchar *depth)
 {
   if (!depth)
     return DEPTH_INFINITY;
-  else if (!g_strcmp0 (depth, "0"))
+  else if (g_strcmp0 (depth, "0") == 0)
     return DEPTH_ZERO;
-  else if (!g_strcmp0 (depth, "1"))
+  else if (g_strcmp0 (depth, "1") == 0)
     return DEPTH_ONE;
-  else if (!g_strcmp0 (depth, "infinity"))
+  else if (g_strcmp0 (depth, "infinity") == 0)
     return DEPTH_INFINITY;
 
   g_warning ("Invalid depth: %s", depth);
@@ -147,10 +147,10 @@ guint
 timeout_from_string (const gchar *timeout)
 {
   if (!timeout ||
-      !g_strcmp0 (timeout, "Infinite"))
+      g_strcmp0 (timeout, "Infinite") == 0)
     return 0;
 
-  if (!g_ascii_strncasecmp (timeout, "Second-", 7))
+  if (g_ascii_strncasecmp (timeout, "Second-", 7) == 0)
     return g_ascii_strtoull (timeout + 7, NULL, 10);
 
   g_return_val_if_reached (0);

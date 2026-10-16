@@ -82,7 +82,7 @@ int
 main (int argc, char *argv[])
 {
   gboolean quit_on_stdin = FALSE;
-  if (argc >= 2 && !g_strcmp0 (argv[1], "--quit-on-stdin")) {
+  if (argc >= 2 && g_strcmp0 (argv[1], "--quit-on-stdin") == 0) {
     quit_on_stdin = TRUE;
   }
 

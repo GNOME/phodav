@@ -120,7 +120,7 @@ check_token (PathHandler *handler, const gchar *path, const gchar *token)
 
   g_debug ("check %s for %s", token, path);
 
-  if (!g_strcmp0 (token, "DAV:no-lock"))
+  if (g_strcmp0 (token, "DAV:no-lock") == 0)
     return FALSE;
 
   return !!server_path_get_lock (server, path, token);

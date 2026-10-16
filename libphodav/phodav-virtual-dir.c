@@ -301,7 +301,7 @@ phodav_virtual_dir_find_direct_child (PhodavVirtualDir *parent,
     {
       child = G_FILE (l->data);
       base = g_file_get_basename (child);
-      if (!g_strcmp0 (name, base))
+      if (g_strcmp0 (name, base) == 0)
         {
           g_free (base);
           return child;
@@ -687,7 +687,7 @@ phodav_virtual_dir_new_dir (PhodavVirtualDir  *root,
   g_return_val_if_fail (path != NULL, NULL);
 
   dir = g_path_get_dirname (path);
-  if (!dir || !g_strcmp0 (dir, "."))
+  if (!dir || g_strcmp0 (dir, ".") == 0)
     {
       g_set_error_literal (error,
                            G_IO_ERROR,

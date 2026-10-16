@@ -396,7 +396,7 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
     {
       DAVLock *lock = l->data;
 
-      if (!g_strcmp0 (lock->token, d->token))
+      if (g_strcmp0 (lock->token, d->token) == 0)
         {
           d->lock = lock;
           return FALSE;

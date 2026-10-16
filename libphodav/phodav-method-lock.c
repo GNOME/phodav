@@ -95,9 +95,9 @@ parse_lockscope (xmlNodePtr rt)
   if (node == NULL)
     return DAV_LOCK_SCOPE_NONE;
 
-  if (!g_strcmp0 ((char *) node->name, "exclusive"))
+  if (g_strcmp0 ((char *) node->name, "exclusive") == 0)
     return DAV_LOCK_SCOPE_EXCLUSIVE;
-  else if (!g_strcmp0 ((char *) node->name, "shared"))
+  else if (g_strcmp0 ((char *) node->name, "shared") == 0)
     return DAV_LOCK_SCOPE_SHARED;
   else
     return DAV_LOCK_SCOPE_NONE;
@@ -115,7 +115,7 @@ parse_locktype (xmlNodePtr rt)
   if (node == NULL)
     return DAV_LOCK_NONE;
 
-  if (!g_strcmp0 ((char *) node->name, "write"))
+  if (g_strcmp0 ((char *) node->name, "write") == 0)
     return DAV_LOCK_WRITE;
   else
     return DAV_LOCK_NONE;
