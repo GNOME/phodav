@@ -76,9 +76,9 @@ struct _PhodavVirtualDir {
 
 static void phodav_virtual_dir_file_interface_init (GFileIface *iface);
 
-G_DEFINE_TYPE_WITH_CODE (PhodavVirtualDir, phodav_virtual_dir, G_TYPE_OBJECT,
-                         G_IMPLEMENT_INTERFACE (G_TYPE_FILE,
-                                                phodav_virtual_dir_file_interface_init))
+G_DEFINE_FINAL_TYPE_WITH_CODE (PhodavVirtualDir, phodav_virtual_dir, G_TYPE_OBJECT,
+                               G_IMPLEMENT_INTERFACE (G_TYPE_FILE,
+                                                      phodav_virtual_dir_file_interface_init))
 
 struct _PhodavVirtualDirEnumerator {
   GFileEnumerator      parent_instance;
@@ -89,7 +89,7 @@ struct _PhodavVirtualDirEnumerator {
   GFileEnumerator     *real_root_enumerator;
 };
 
-G_DEFINE_TYPE (PhodavVirtualDirEnumerator, phodav_virtual_dir_enumerator, G_TYPE_FILE_ENUMERATOR)
+G_DEFINE_FINAL_TYPE (PhodavVirtualDirEnumerator, phodav_virtual_dir_enumerator, G_TYPE_FILE_ENUMERATOR)
 
 static GFileInfo *
 phodav_virtual_dir_enumerator_next_file (GFileEnumerator *enumerator,

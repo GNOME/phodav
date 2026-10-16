@@ -35,7 +35,7 @@ struct _OutputQueue
   GCancellable  *cancel;
 };
 
-G_DEFINE_TYPE (OutputQueue, output_queue, G_TYPE_OBJECT);
+G_DEFINE_FINAL_TYPE (OutputQueue, output_queue, G_TYPE_OBJECT);
 
 static void output_queue_kick (OutputQueue *q);
 
