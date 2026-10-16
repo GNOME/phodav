@@ -15,12 +15,14 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "phodav-priv.h"
-#include "phodav-multistatus.h"
-#include "phodav-utils.h"
-#include "phodav-virtual-dir.h"
+#include "config.h"
 
 #include <sys/types.h>
+
+#include "phodav-multistatus.h"
+#include "phodav-priv.h"
+#include "phodav-utils.h"
+#include "phodav-virtual-dir.h"
 #ifdef HAVE_SYS_XATTR_H
 #include <sys/xattr.h>
 #endif

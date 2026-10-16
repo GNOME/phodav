@@ -16,15 +16,16 @@
  */
 
 #include "config.h"
+
 #include "avahi-common.h"
+
+#include <errno.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
 #include <avahi-gobject/ga-client.h>
 #include <avahi-gobject/ga-entry-group.h>
-
 #include <ifaddrs.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <errno.h>
 
 static GaClient *mdns_client;
 static GaEntryGroup *mdns_group;

@@ -18,14 +18,14 @@
 
 #include "config.h"
 
-#include <glib/gi18n.h>
-#include <glib-object.h>
 #include <gio/gio.h>
-
+#include <glib-object.h>
+#include <glib/gi18n.h>
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+
 #include "phodav-server.h"
 
 G_BEGIN_DECLS

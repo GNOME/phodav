@@ -18,9 +18,10 @@
 #include "config.h"
 
 #include "phodav-server.h"
+
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
-#include "phodav-lock.h"
 #include "phodav-utils.h"
 
 /**

@@ -20,12 +20,13 @@
 #include <gio/gio.h>
 
 #ifdef G_OS_UNIX
+#include <errno.h>
+#include <fcntl.h>
+
 #include <gio/gunixinputstream.h>
 #include <gio/gunixoutputstream.h>
-#include <fcntl.h>
-#include <glib/gstdio.h>
 #include <glib-unix.h>
-#include <errno.h>
+#include <glib/gstdio.h>
 #endif
 
 #ifdef G_OS_WIN32

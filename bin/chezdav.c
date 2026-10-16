@@ -16,11 +16,15 @@
  */
 #include "config.h"
 
-#include <stdlib.h>
 #include <locale.h>
-#include <glib/gi18n.h>
+#include <stdlib.h>
+
 #include <glib.h>
+#include <glib/gi18n.h>
 #include <glib/gprintf.h>
+
+#include "libphodav/phodav.h"
+
 #ifdef G_OS_UNIX
 #include <glib-unix.h>
 #endif
@@ -28,8 +32,6 @@
 #ifdef WITH_AVAHI
 #include "avahi-common.h"
 #endif
-
-#include "libphodav/phodav.h"
 
 static PhodavServer *dav;
 static gint verbose;

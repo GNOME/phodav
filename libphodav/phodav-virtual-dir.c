@@ -17,9 +17,9 @@
 
 #include "config.h"
 
-#include <gio/gio.h>
-
 #include "phodav-virtual-dir.h"
+
+#include <gio/gio.h>
 
 /**
  * SECTION:phodav-virtual-dir
