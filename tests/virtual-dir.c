@@ -19,9 +19,8 @@
 
 #include "libphodav/phodav.h"
 
-#define SERVER_URI "dav://localhost:8080/"
-
 static SoupSession *session;
+static gchar *server_uri;
 
 static const gchar test_put_data[] = "test_put: test data";
 
@@ -55,14 +54,14 @@ static void
 test_generic (gconstpointer data)
 {
   const TestCase *test = data;
-  gchar *uri = g_build_path ("/", SERVER_URI, test->path, NULL);
+  gchar *uri = g_build_path ("/", server_uri, test->path, NULL);
   SoupMessage *msg = soup_message_new (test->method, uri);
   g_free (uri);
 
   if (test->method == SOUP_METHOD_COPY ||
       test->method == SOUP_METHOD_MOVE)
     {
-      gchar *dest_uri = g_build_path ("/", SERVER_URI, test->destination, NULL);
+      gchar *dest_uri = g_build_path ("/", server_uri, test->destination, NULL);
       soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
       g_free (dest_uri);
     }
@@ -151,7 +150,12 @@ main (int argc, char *argv[])
       return 1;
     }
 
-    server_started = g_strcmp0 (line, "OK") == 0;
+    /* the server prints "OK <port>" once it listens */
+    if (g_str_has_prefix (line, "OK "))
+      {
+        server_uri = g_strdup_printf ("dav://127.0.0.1:%s/", line + 3);
+        server_started = TRUE;
+      }
     g_free (line);
   }
   g_object_unref (stream);
@@ -210,5 +214,6 @@ main (int argc, char *argv[])
   gint res = g_test_run ();
   g_object_unref (session);
   g_object_unref (server_subproc);
+  g_free (server_uri);
   return res;
 }

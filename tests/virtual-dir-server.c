@@ -19,8 +19,6 @@
 
 #include "libphodav/phodav.h"
 
-#define PORT 8080
-
 static void
 create_test_file (const gchar *path)
 {
@@ -124,9 +122,11 @@ main (int argc, char *argv[])
   soup_auth_domain_basic_set_auth_callback (auth, reject_auth, NULL, NULL);
   soup_server_add_auth_domain (server, auth);
   g_object_unref (auth);
-  if (!soup_server_listen_all (server, PORT, 0, &error))
+
+  /* let the system pick a free port */
+  if (!soup_server_listen_local (server, 0, SOUP_SERVER_LISTEN_IPV4_ONLY, &error))
     {
-      g_printerr ("Failed to listen on port %d: %s\n", PORT, error->message);
+      g_printerr ("Failed to listen: %s\n", error->message);
       g_error_free (error);
       return 1;
     }
@@ -144,7 +144,10 @@ main (int argc, char *argv[])
     g_io_channel_unref (stdin_channel);
   }
 
-  g_print ("OK\n");
+  GSList *uris = soup_server_get_uris (server);
+  g_assert_nonnull (uris);
+  g_print ("OK %d\n", g_uri_get_port (uris->data));
+  g_slist_free_full (uris, (GDestroyNotify) g_uri_unref);
 
   g_main_loop_run (loop);
   g_main_loop_unref (loop);
