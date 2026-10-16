@@ -77,33 +77,51 @@ get_realm (void)
 
 gchar *htdigest = NULL;
 
-static gboolean
+/* returns a table of user -> digest for the given realm */
+static GHashTable *
+load_htdigest (const gchar *filename, const gchar *realm, GError **error)
+{
+  GHashTable *users;
+  gchar *contents;
+  gchar **lines;
+  guint i;
+
+  if (!g_file_get_contents (filename, &contents, NULL, error))
+    return NULL;
+
+  users = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+  lines = g_strsplit (contents, "\n", -1);
+  for (i = 0; lines[i]; i++)
+    {
+      gchar *line = g_strchomp (lines[i]);
+      gchar **strv;
+
+      if (!*line)
+        continue;
+
+      /* user:realm:md5(user:realm:password) */
+      strv = g_strsplit (line, ":", 3);
+      if (!(strv[0] && strv[1] && strv[2]))
+        g_warning ("Invalid htdigest line %u", i + 1);
+      else if (g_strcmp0 (strv[1], realm) == 0)
+        g_hash_table_insert (users, g_strdup (strv[0]), g_strdup (strv[2]));
+      g_strfreev (strv);
+    }
+
+  g_strfreev (lines);
+  g_free (contents);
+
+  return users;
+}
+
+static gchar *
 digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
                       const char *username, gpointer data)
 {
-  gchar *digest = NULL;
-  gchar *line = NULL;
-  gchar *eol = NULL;
+  GHashTable *users = data;
 
-  for (line = htdigest; line && *line; line = eol ? eol + 1 : NULL)
-    {
-      gchar **strv = g_strsplit (line, ":", -1);
-      eol = strchr (line, '\n');
-      if (eol)
-        *eol = '\0';
-
-      if (!(strv[0] && strv[1] && strv[2])) {
-        g_warn_if_reached ();
-      } else if (g_strcmp0 (strv[0], username) == 0)
-        digest = g_strdup (strv[2]);
-
-      g_strfreev (strv);
-
-      if (digest)
-        break;
-    }
-
-  return !!digest;
+  /* libsoup checks the client response against it */
+  return g_strdup (g_hash_table_lookup (users, username));
 }
 
 int
@@ -184,13 +202,16 @@ main (int argc, char *argv[])
     {
       SoupAuthDomain *auth;
       SoupServer *server;
+      GHashTable *users;
 
-      if (!g_file_get_contents (htdigest, &htdigest, NULL, &error))
+      users = load_htdigest (htdigest, realm, &error);
+      if (!users)
         my_error (_ ("Failed to open htdigest: %s\n"), error->message);
 
       auth = soup_auth_domain_digest_new ("realm", realm, NULL);
       soup_auth_domain_add_path (auth, "/");
-      soup_auth_domain_set_generic_auth_callback (auth, digest_auth_callback, NULL, NULL);
+      soup_auth_domain_digest_set_auth_callback (auth, digest_auth_callback,
+                                                 users, (GDestroyNotify) g_hash_table_unref);
 
       server = phodav_server_get_soup_server (dav);
       soup_server_add_auth_domain (server, auth);

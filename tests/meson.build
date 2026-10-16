@@ -17,3 +17,15 @@ foreach src : tests_sources
                    dependencies : deps)
   test(name, exe)
 endforeach
+
+chezdav_env = []
+if conf.has('WITH_AVAHI')
+  # chezdav exits when there is no avahi daemon to announce to
+  chezdav_env += 'CHEZDAV_TEST_NO_MDNS=1'
+endif
+
+test('chezdav',
+     executable('test-chezdav',
+                sources : 'chezdav.c',
+                dependencies : deps),
+     env : chezdav_env)
