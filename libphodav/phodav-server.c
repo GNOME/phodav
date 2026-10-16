@@ -231,10 +231,6 @@ phodav_server_get_property (GObject    *gobject,
     case PROP_READONLY:
       g_value_set_boolean (value, self->readonly);
       break;
-
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
-      break;
     }
 }
 
@@ -272,8 +268,8 @@ phodav_server_set_property (GObject      *gobject,
       self->readonly = g_value_get_boolean (value);
       break;
 
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
+    case PROP_SERVER:
+      g_assert_not_reached ();
       break;
     }
 }
