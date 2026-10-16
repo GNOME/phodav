@@ -60,7 +60,10 @@ enum {
   PROP_ROOT_FILE,
   PROP_SERVER,
   PROP_READONLY,
+  N_PROPS
 };
+
+static GParamSpec *properties[N_PROPS];
 
 static void server_callback (SoupServer        *server,
                              SoupServerMessage *msg,
@@ -296,14 +299,13 @@ phodav_server_class_init (PhodavServerClass *klass)
    * You can use either of them or none to construct a new #PhodavServer,
    * you should not use both.
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_ROOT,
+  properties[PROP_ROOT] =
     g_param_spec_string ("root",
                          NULL, NULL,
                          NULL,
                          G_PARAM_CONSTRUCT |
                          G_PARAM_READWRITE |
-                         G_PARAM_STATIC_STRINGS));
+                         G_PARAM_STATIC_STRINGS);
 
 /**
    * PhodavServer:root-file:
@@ -313,40 +315,39 @@ phodav_server_class_init (PhodavServerClass *klass)
    *
    * Since: 2.5
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_ROOT_FILE,
-     g_param_spec_object ("root-file",
-                          NULL, NULL,
-                          G_TYPE_FILE,
-                          G_PARAM_CONSTRUCT |
-                          G_PARAM_READWRITE |
-                          G_PARAM_STATIC_STRINGS));
+  properties[PROP_ROOT_FILE] =
+    g_param_spec_object ("root-file",
+                         NULL, NULL,
+                         G_TYPE_FILE,
+                         G_PARAM_CONSTRUCT |
+                         G_PARAM_READWRITE |
+                         G_PARAM_STATIC_STRINGS);
 
   /**
    * PhodavServer:server:
    *
    * The underlying #SoupServer.
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_SERVER,
-     g_param_spec_object ("server",
-                          NULL, NULL,
-                          SOUP_TYPE_SERVER,
-                          G_PARAM_READABLE |
-                          G_PARAM_STATIC_STRINGS));
+  properties[PROP_SERVER] =
+    g_param_spec_object ("server",
+                         NULL, NULL,
+                         SOUP_TYPE_SERVER,
+                         G_PARAM_READABLE |
+                         G_PARAM_STATIC_STRINGS);
 
   /**
    * PhodavServer:read-only:
    *
    * Whether the shared folder is read-only.
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_READONLY,
-     g_param_spec_boolean ("read-only",
-                           NULL, NULL,
-                           FALSE,
-                           G_PARAM_READWRITE |
-                           G_PARAM_STATIC_STRINGS));
+  properties[PROP_READONLY] =
+    g_param_spec_boolean ("read-only",
+                          NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE |
+                          G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (gobject_class, N_PROPS, properties);
 }
 
 gboolean
