@@ -54,16 +54,14 @@ struct _PhodavServerClass
 G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
 /* Properties */
-enum {
-  PROP_0,
-  PROP_ROOT,
+typedef enum {
+  PROP_ROOT = 1,
   PROP_ROOT_FILE,
   PROP_SERVER,
   PROP_READONLY,
-  N_PROPS
-};
+} PhodavServerProps;
 
-static GParamSpec *properties[N_PROPS];
+static GParamSpec *properties[PROP_READONLY + 1];
 
 static void server_callback (SoupServer        *server,
                              SoupServerMessage *msg,
@@ -215,7 +213,7 @@ phodav_server_get_property (GObject    *gobject,
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  switch (prop_id)
+  switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
       g_value_take_string (value, self->root_file ?
@@ -254,7 +252,7 @@ phodav_server_set_property (GObject      *gobject,
   if (!self->server && self->root_file)
     return;
 
-  switch (prop_id)
+  switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
       root = g_value_get_string (value);
@@ -347,7 +345,7 @@ phodav_server_class_init (PhodavServerClass *klass)
                           G_PARAM_READWRITE |
                           G_PARAM_STATIC_STRINGS);
 
-  g_object_class_install_properties (gobject_class, N_PROPS, properties);
+  g_object_class_install_properties (gobject_class, G_N_ELEMENTS (properties), properties);
 }
 
 gboolean
