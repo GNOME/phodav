@@ -38,6 +38,8 @@ PhodavServer *  phodav_server_new               (const gchar *root);
 PhodavServer *  phodav_server_new_for_root_file (GFile *root);
 SoupServer *    phodav_server_get_soup_server   (PhodavServer *server);
 
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavServer, g_object_unref)
+
 G_END_DECLS
 
 #endif /* __PHODAV_SERVER_H__ */
