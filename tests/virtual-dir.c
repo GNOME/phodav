@@ -29,6 +29,7 @@ typedef struct _TestCase {
   const gchar *path;
   guint        status_code;
   const gchar *destination;
+  const gchar *if_header;
 } TestCase;
 
 /* files that must never be created: the server root is ./phodav-virtual-root,
@@ -65,6 +66,9 @@ test_generic (gconstpointer data)
       soup_message_headers_append (soup_message_get_request_headers (msg), "Destination", dest_uri);
       g_free (dest_uri);
     }
+
+  if (test->if_header)
+    soup_message_headers_append (soup_message_get_request_headers (msg), "If", test->if_header);
 
   if (test->method == SOUP_METHOD_PUT)
     {
@@ -162,7 +166,8 @@ main (int argc, char *argv[])
 
   g_test_init (&argc, &argv, NULL);
 
-  session = soup_session_new ();
+  /* fail rather than hang if the server stops responding */
+  session = soup_session_new_with_options ("timeout", 10, NULL);
 
   /* the order matters, some tests depend on the previous ones */
   const TestCase tests[] = {
@@ -202,6 +207,20 @@ main (int argc, char *argv[])
     /* libsoup authentication must be enforced */
     {SOUP_METHOD_GET, "/protected", SOUP_STATUS_UNAUTHORIZED},
     {SOUP_METHOD_PUT, "/protected/test-put.txt", SOUP_STATUS_UNAUTHORIZED},
+
+    /* invalid If headers must be rejected, without crashing or hanging the server */
+    {SOUP_METHOD_DELETE, "/if-1", SOUP_STATUS_BAD_REQUEST, NULL, "(x)"},
+    {SOUP_METHOD_DELETE, "/if-2", SOUP_STATUS_BAD_REQUEST, NULL, "("},
+    {SOUP_METHOD_DELETE, "/if-3", SOUP_STATUS_BAD_REQUEST, NULL, "(<opaquelocktoken:x>"},
+    {SOUP_METHOD_DELETE, "/if-4", SOUP_STATUS_BAD_REQUEST, NULL, "<http://localhost/x"},
+    {SOUP_METHOD_DELETE, "/if-5", SOUP_STATUS_BAD_REQUEST, NULL, "([\"etag"},
+    {SOUP_METHOD_DELETE, "/if-6", SOUP_STATUS_BAD_REQUEST, NULL, "</a%2f..%2f..%2fx> ([\"etag\"])"},
+    {SOUP_METHOD_DELETE, "/if-7", SOUP_STATUS_PRECONDITION_FAILED, NULL, "(<opaquelocktoken:x>)"},
+    {SOUP_METHOD_DELETE, "/if-8", SOUP_STATUS_PRECONDITION_FAILED, NULL, "</if-8> (<opaquelocktoken:x>)"},
+    {SOUP_METHOD_DELETE, "/if-9", SOUP_STATUS_PRECONDITION_FAILED, NULL, "<if-9> (<opaquelocktoken:x>)"},
+    /* conditions that hold, the file doesn't exist */
+    {SOUP_METHOD_DELETE, "/if-10", SOUP_STATUS_NOT_FOUND, NULL, "(Not <DAV:no-lock>)"},
+    {SOUP_METHOD_DELETE, "/if-11", SOUP_STATUS_NOT_FOUND, NULL, "</if-11> (Not <DAV:no-lock>)"},
   };
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)
