@@ -25,7 +25,7 @@ executable(
   install : true,
 )
 
-executable(
+chezdav = executable(
   'chezdav',
   [ 'chezdav.c' ] + avahi_common,
   include_directories : incdir,
