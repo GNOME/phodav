@@ -641,6 +641,7 @@ run_service (ServiceData *service_data)
   if (drive_letter == 0)
     {
       GTask *map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
+      g_task_set_source_tag (map_drive_task, run_service);
       g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
       g_task_run_in_thread (map_drive_task, map_drive_cb);
       g_object_unref (map_drive_task);
