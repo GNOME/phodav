@@ -137,7 +137,7 @@ prop_set (SoupServerMessage *msg,
 
 gint
 phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg,
-                         const char *path, GError **err)
+                         const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;

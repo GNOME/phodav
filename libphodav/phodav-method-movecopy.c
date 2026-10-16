@@ -154,7 +154,7 @@ end:
 
 gint
 phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
-                        const char *path, GError **err)
+                        const gchar *path, GError **err)
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);

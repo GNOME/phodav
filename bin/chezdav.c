@@ -118,7 +118,7 @@ load_htdigest (const gchar *filename, const gchar *realm, GError **error)
 
 static gchar *
 digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
-                      const char *username, gpointer data)
+                      const gchar *username, gpointer data)
 {
   GHashTable *users = data;
 
@@ -126,8 +126,8 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
   return g_strdup (g_hash_table_lookup (users, username));
 }
 
-int
-main (int argc, char *argv[])
+gint
+main (gint argc, gchar *argv[])
 {
   g_autoptr(GError) error = NULL;
   GOptionContext *context;
@@ -135,7 +135,7 @@ main (int argc, char *argv[])
   const gchar *realm = NULL;
   GMainLoop *mainloop = NULL;
 
-  int version = 0;
+  gint version = 0;
   GOptionEntry entries[] = {
     { "version", 0, 0, G_OPTION_ARG_NONE, &version, N_ ("Print program version"), NULL },
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, N_ ("Be verbose"), NULL },
@@ -229,7 +229,7 @@ main (int argc, char *argv[])
 
   SoupServer *server = phodav_server_get_soup_server (dav);
 
-  int res;
+  gint res;
   if (local)
     res = soup_server_listen_local (server, port, 0, &error);
   else if (public)

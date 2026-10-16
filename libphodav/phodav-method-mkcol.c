@@ -47,7 +47,7 @@ do_mkcol_file (SoupServerMessage *msg, GFile *file,
 
 gint
 phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg,
-                     const char *path, GError **err)
+                     const gchar *path, GError **err)
 {
   GFile *file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);

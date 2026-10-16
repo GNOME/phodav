@@ -384,8 +384,8 @@ test_chezdav (gconstpointer data)
   g_object_unref (session);
 }
 
-int
-main (int argc, char *argv[])
+gint
+main (gint argc, gchar *argv[])
 {
   gchar *htdigest, *contents, *line;
   GError *error = NULL;

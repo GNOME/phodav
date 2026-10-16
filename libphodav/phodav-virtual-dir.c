@@ -173,7 +173,7 @@ phodav_virtual_dir_get_path (GFile *file)
 
 static GFileInfo *
 phodav_virtual_dir_query_info (GFile                *file,
-                               const char           *attributes,
+                               const gchar          *attributes,
                                GFileQueryInfoFlags   flags,
                                GCancellable         *cancellable,
                                GError              **error)
@@ -204,7 +204,7 @@ phodav_virtual_dir_query_info (GFile                *file,
 
 static GFileInfo *
 phodav_virtual_dir_query_filesystem_info (GFile         *file,
-                                          const char    *attributes,
+                                          const gchar   *attributes,
                                           GCancellable  *cancellable,
                                           GError       **error)
 {
@@ -261,7 +261,7 @@ phodav_virtual_dir_get_parent (GFile *file)
 
 static GFileEnumerator *
 phodav_virtual_dir_enumerate_children (GFile                *file,
-                                       const char           *attributes,
+                                       const gchar          *attributes,
                                        GFileQueryInfoFlags   flags,
                                        GCancellable         *cancellable,
                                        GError              **error)
@@ -482,7 +482,7 @@ phodav_virtual_dir_set_display_name (GFile         *file,
 
 static gboolean
 phodav_virtual_dir_set_attribute (GFile                *file,
-                                  const char           *attribute,
+                                  const gchar          *attribute,
                                   GFileAttributeType    type,
                                   gpointer              value_p,
                                   GFileQueryInfoFlags   flags,

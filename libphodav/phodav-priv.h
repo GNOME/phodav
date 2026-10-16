@@ -97,21 +97,21 @@ gint                    phodav_delete_file                   (const gchar *path,
                                                               GCancellable *cancellable);
 
 gint                    phodav_method_get                    (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_propfind               (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_proppatch              (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_mkcol                  (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_delete                 (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_movecopy               (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_lock                   (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 gint                    phodav_method_unlock                 (PathHandler *handler, SoupServerMessage *msg,
-                                                              const char *path, GError **err);
+                                                              const gchar *path, GError **err);
 void                    phodav_method_put                    (PathHandler *handler, SoupServerMessage *msg,
                                                               const gchar *path, GError **err);
 

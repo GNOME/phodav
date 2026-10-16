@@ -57,7 +57,7 @@ delete_file_recursive (GFile *file)
 
 static gboolean
 reject_auth (SoupAuthDomain *domain, SoupServerMessage *msg,
-             const char *username, const char *password, gpointer data)
+             const gchar *username, const gchar *password, gpointer data)
 {
   return FALSE;
 }
@@ -78,8 +78,8 @@ stdin_watch (GIOChannel *source, GIOCondition condition, gpointer data)
  * It creates a folder that acts as the "real" root and one virtual dir "/virtual"
  * inside it - so the setup is similar to the one used by spice-gtk.
  * The "/protected" folder requires authentication that always fails. */
-int
-main (int argc, char *argv[])
+gint
+main (gint argc, gchar *argv[])
 {
   gboolean quit_on_stdin = FALSE;
   if (argc >= 2 && g_strcmp0 (argv[1], "--quit-on-stdin") == 0) {

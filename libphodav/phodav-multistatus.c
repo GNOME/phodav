@@ -99,7 +99,7 @@ set_response_multistatus (SoupServerMessage *msg,
                           GHashTable  *mstatus)
 {
   xmlChar *mem = NULL;
-  int size;
+  gint size;
   xmlNodePtr root;
   GHashTableIter iter;
   Response *resp;

@@ -36,7 +36,7 @@ remove_brackets (const gchar *str)
 
 gint
 phodav_method_unlock (PathHandler *handler, SoupServerMessage *msg,
-                      const char *path, GError **err)
+                      const gchar *path, GError **err)
 {
   DAVLock *lock;
   gint status = SOUP_STATUS_BAD_REQUEST;

@@ -87,7 +87,7 @@ static HANDLE port_handle;
 static void start_mux_read (GInputStream *istream);
 
 static void
-quit (int sig)
+quit (gint sig)
 {
   g_debug ("quit %d", sig);
 
@@ -353,7 +353,7 @@ incoming_callback (GSocketService    *service,
   return FALSE;
 }
 
-static int port;
+static gint port;
 
 #ifdef G_OS_WIN32
 static gboolean no_service;
@@ -385,7 +385,7 @@ wait_for_virtio_host (gint fd)
 #endif
 
 static void
-open_mux_path (const char *path)
+open_mux_path (const gchar *path)
 {
   g_return_if_fail (path);
   g_return_if_fail (!mux_istream);
@@ -791,8 +791,8 @@ static GOptionEntry entries[] = {
   { NULL }
 };
 
-int
-main (int argc, char *argv[])
+gint
+main (gint argc, gchar *argv[])
 {
   ServiceData service_data;
   GOptionContext *opts;

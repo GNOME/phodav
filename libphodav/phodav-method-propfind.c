@@ -486,7 +486,7 @@ propfind_populate (PathHandler *handler, const gchar *path,
   GHashTableIter iter;
   xmlNodePtr node;
   GList *stat = NULL;
-  int i;
+  gint i;
 
   if (pf->type == PROPFIND_ALLPROP || pf->type == PROPFIND_PROPNAME)
     {
@@ -698,7 +698,7 @@ end:
 
 gint
 phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
-                        const char *path, GError **err)
+                        const gchar *path, GError **err)
 {
   PropFind *pf = NULL;
   DepthType depth;

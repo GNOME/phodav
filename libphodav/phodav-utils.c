@@ -55,7 +55,7 @@ static xmlDocPtr
 parse_xml (const gchar  *data,
            const goffset len,
            xmlNodePtr   *root,
-           const char   *name)
+           const gchar  *name)
 {
   xmlDocPtr doc;
 
@@ -172,7 +172,7 @@ depth_to_string (DepthType depth)
 }
 
 void
-xml_node_to_string (xmlNodePtr root, xmlChar **mem, int *size)
+xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size)
 {
   xmlDocPtr doc;
 
@@ -192,7 +192,7 @@ xml_node_debug (xmlNodePtr node)
 }
 
 gboolean
-xml_node_has_ns (xmlNodePtr node, const char *ns_href)
+xml_node_has_ns (xmlNodePtr node, const gchar *ns_href)
 {
   return node->ns && node->ns->href &&
     !g_strcmp0 ((gchar *) node->ns->href, ns_href);
@@ -200,7 +200,7 @@ xml_node_has_ns (xmlNodePtr node, const char *ns_href)
 }
 
 gboolean
-xml_node_has_name_ns (xmlNodePtr node, const char *name, const char *ns_href)
+xml_node_has_name_ns (xmlNodePtr node, const gchar *name, const gchar *ns_href)
 {
   gboolean has_name;
   gboolean has_ns;
@@ -219,7 +219,7 @@ xml_node_has_name_ns (xmlNodePtr node, const char *name, const char *ns_href)
 }
 
 gboolean
-xml_node_has_name (xmlNodePtr node, const char *name)
+xml_node_has_name (xmlNodePtr node, const gchar *name)
 {
   g_return_val_if_fail (node != NULL, FALSE);
 

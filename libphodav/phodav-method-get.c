@@ -19,11 +19,11 @@
 
 #include "phodav-priv.h"
 
-static int
+static gint
 compare_strings (gconstpointer a, gconstpointer b)
 {
-  const char **sa = (const char * *) a;
-  const char **sb = (const char * *) b;
+  const gchar **sa = (const gchar **) a;
+  const gchar **sb = (const gchar **) b;
 
   return g_strcmp0 (*sa, *sb);
 }
@@ -92,7 +92,7 @@ method_get (SoupServerMessage *msg, GFile *file,
   GFileInfo *info;
   const gchar *etag;
   SoupMessageHeaders *response_headers;
-  const char *method;
+  const gchar *method;
 
   info = g_file_query_info (file, "standard::*,etag::*",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
@@ -185,7 +185,7 @@ end:
 }
 
 gint
-phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const char *path, GError **err)
+phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GFile *file;
   GCancellable *cancellable = handler_get_cancellable (handler);

@@ -121,8 +121,8 @@ get_test_path (const TestCase *test)
   return test_path;
 }
 
-int
-main (int argc, char *argv[])
+gint
+main (gint argc, gchar *argv[])
 {
   GError *error = NULL;
   GSubprocess *server_subproc;
@@ -141,7 +141,7 @@ main (int argc, char *argv[])
   g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (stream), FALSE);
   gboolean server_started = FALSE;
   while (!server_started) {
-    char *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
+    gchar *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
 
     if (error) {
       g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);

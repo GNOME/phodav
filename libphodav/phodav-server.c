@@ -65,7 +65,7 @@ static GParamSpec *properties[PROP_READONLY + 1];
 
 static void server_callback (SoupServer        *server,
                              SoupServerMessage *msg,
-                             const char        *path,
+                             const gchar       *path,
                              GHashTable        *query,
                              gpointer           user_data);
 
@@ -487,14 +487,14 @@ request_started (SoupServer        *server,
 
 static void
 server_callback (SoupServer *server, SoupServerMessage *msg,
-                 const char *path, GHashTable *query,
+                 const gchar *path, GHashTable *query,
                  gpointer user_data)
 {
   GError *err = NULL;
   PathHandler *handler = user_data;
   gint status = SOUP_STATUS_NOT_IMPLEMENTED;
   GUri *uri = soup_server_message_get_uri (msg);
-  const char *method = soup_server_message_get_method (msg);
+  const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageHeaders *response_headers;
   GHashTable *params;
