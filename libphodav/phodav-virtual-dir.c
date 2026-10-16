@@ -118,8 +118,7 @@ phodav_virtual_dir_enumerator_close (GFileEnumerator *enumerator,
 {
   PhodavVirtualDirEnumerator *self = PHODAV_VIRTUAL_DIR_ENUMERATOR (enumerator);
   g_clear_pointer (&self->attributes, g_free);
-  g_list_free_full (self->children, g_object_unref);
-  self->children = NULL;
+  g_clear_list (&self->children, g_object_unref);
   g_clear_object (&self->real_root_enumerator);
   return TRUE;
 }
@@ -561,8 +560,7 @@ phodav_virtual_dir_dispose (GObject *object)
       self->parent = NULL;
     }
   self->dummy = TRUE;
-  g_list_free_full (self->children, g_object_unref);
-  self->children = NULL;
+  g_clear_list (&self->children, g_object_unref);
 
   G_OBJECT_CLASS (phodav_virtual_dir_parent_class)->dispose (object);
 }
