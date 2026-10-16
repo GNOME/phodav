@@ -17,7 +17,6 @@
 
 #include "phodav-priv.h"
 
-#include "guuid.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
 #include "phodav-lock.h"

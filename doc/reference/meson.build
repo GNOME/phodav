@@ -16,7 +16,6 @@ docpath = join_paths(datadir, 'gtk-doc', 'html')
 
 private_headers = [
   'config.h',
-  'guuid.h',
   'phodav-lock.h',
   'phodav-multistatus.h',
   'phodav-path.h',

@@ -25,10 +25,6 @@ sources = [
   'phodav-virtual-dir.c'
 ]
 
-if not dependency('glib-2.0', version : '>= 2.51.2', required: false).found()
-  sources += 'guuid.c'
-endif
-
 mapfile = 'libphodav.syms'
 vflag = compiler.get_supported_link_arguments([
   '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile),

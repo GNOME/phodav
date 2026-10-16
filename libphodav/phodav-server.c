@@ -17,7 +17,6 @@
 
 #include "config.h"
 
-#include "guuid.h"
 #include "phodav-server.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
