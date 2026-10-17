@@ -53,3 +53,23 @@ pkgconfig.generate(
   subdirs : 'libphodav-3.0',
   requires : 'libsoup-3.0'
 )
+
+build_gir = false
+gir_scanner = find_program('g-ir-scanner', required : get_option('introspection'))
+if gir_scanner.found()
+  if meson.is_cross_build()
+    if get_option('introspection').enabled()
+      error('gobject-introspection requires a native build')
+    endif
+    message('Skipping gobject-introspection when cross-compiling')
+  else
+    build_gir = true
+    libphodav_gir = gnome.generate_gir(libphodav,
+      sources : [ headers, 'phodav-server.c', 'phodav-virtual-dir.c' ],
+      namespace : 'Phodav',
+      nsversion : '3.0',
+      includes : [ 'Gio-2.0', 'Soup-3.0' ],
+      export_packages : 'libphodav-3.0',
+      install : true)
+  endif
+endif

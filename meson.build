@@ -80,7 +80,8 @@ configure_file(
 summary({
   'mDNS / Avahi support' : d1.found() and d2.found(),
   'xattr support' : conf.has('HAVE_SYS_XATTR_H'),
-  'API reference (gtk-doc)' : build_gtk_doc,
+  'Introspection data' : build_gir,
+  'API reference (gi-docgen)' : build_docs,
   'Manual pages' : build_man,
   'systemd unit directory' : systemd_systemunitdir,
   'udev rules directory' : udev_rulesdir,

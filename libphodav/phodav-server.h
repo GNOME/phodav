@@ -28,6 +28,14 @@ G_BEGIN_DECLS
 #define PHODAV_IS_SERVER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), PHODAV_TYPE_SERVER))
 #define PHODAV_SERVER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), PHODAV_TYPE_SERVER, PhodavServerClass))
 
+/**
+ * PhodavServer:
+ *
+ * A WebDAV server implementation, see RFC 4918.
+ *
+ * The directory to share is set at construction time, with either the
+ * #PhodavServer:root or the #PhodavServer:root-file property.
+ */
 typedef struct _PhodavServer PhodavServer;
 typedef struct _PhodavServerClass PhodavServerClass;
 

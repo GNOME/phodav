@@ -576,7 +576,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
  *
  * Returns the underlying %SoupServer, if any.
  *
- * Returns: the associated %SoupServer or %NULL
+ * Returns: (transfer none) (nullable): the associated %SoupServer or %NULL
  **/
 SoupServer *
 phodav_server_get_soup_server (PhodavServer *self)
@@ -588,13 +588,13 @@ phodav_server_get_soup_server (PhodavServer *self)
 
 /**
  * phodav_server_new:
- * @root: (allow-none): Root path.
+ * @root: (nullable): Root path.
  *
  * Creates a new #PhodavServer.
  * This is equivalent to constructing a #GFile from @root
  * and using phodav_server_new_for_root_file().
  *
- * Returns: a new #PhodavServer
+ * Returns: (transfer full): a new #PhodavServer
  **/
 PhodavServer *
 phodav_server_new (const gchar *root)

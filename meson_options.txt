@@ -1,6 +1,12 @@
-option('gtk_doc',
+option('introspection',
        type : 'feature',
-       description : 'Generate API documentation with gtk-doc')
+       value : 'auto',
+       description : 'Generate GObject introspection data')
+
+option('docs',
+       type : 'feature',
+       value : 'auto',
+       description : 'Generate API documentation with gi-docgen')
 
 option('avahi',
        type : 'feature',
