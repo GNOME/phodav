@@ -21,12 +21,7 @@
 
 G_BEGIN_DECLS
 
-#define PHODAV_TYPE_SERVER            (phodav_server_get_type ())
-#define PHODAV_SERVER(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), PHODAV_TYPE_SERVER, PhodavServer))
-#define PHODAV_SERVER_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass), PHODAV_TYPE_SERVER, PhodavServerClass))
-#define PHODAV_IS_SERVER(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), PHODAV_TYPE_SERVER))
-#define PHODAV_IS_SERVER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), PHODAV_TYPE_SERVER))
-#define PHODAV_SERVER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), PHODAV_TYPE_SERVER, PhodavServerClass))
+#define PHODAV_TYPE_SERVER phodav_server_get_type ()
 
 /**
  * PhodavServer:
@@ -36,15 +31,10 @@ G_BEGIN_DECLS
  * The directory to share is set at construction time, with either the
  * #PhodavServer:root or the #PhodavServer:root-file property.
  */
-typedef struct _PhodavServer PhodavServer;
-typedef struct _PhodavServerClass PhodavServerClass;
-
-GType           phodav_server_get_type          (void);
+G_DECLARE_FINAL_TYPE (PhodavServer, phodav_server, PHODAV, SERVER, GObject)
 
 PhodavServer *  phodav_server_new               (const gchar *root);
 PhodavServer *  phodav_server_new_for_root_file (GFile *root);
 SoupServer *    phodav_server_get_soup_server   (PhodavServer *server);
-
-G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavServer, g_object_unref)
 
 G_END_DECLS

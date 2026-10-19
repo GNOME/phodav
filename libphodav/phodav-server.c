@@ -46,12 +46,7 @@ struct _PhodavServer
   gboolean      readonly;
 };
 
-struct _PhodavServerClass
-{
-  GObjectClass parent_class;
-};
-
-G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
+G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
 /* Properties */
 typedef enum {
