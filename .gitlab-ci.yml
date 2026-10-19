@@ -1,4 +1,4 @@
-image: fedora:38
+image: fedora:44
 
 stages:
   - build
@@ -9,7 +9,6 @@ variables:
     asciidoc
     avahi-gobject-devel
     gcc
-    gcc-c++
     gettext
     gi-docgen
     git
@@ -18,8 +17,16 @@ variables:
     libxml2-devel
     meson
     systemd-devel
-    systemd-units
     xmlto
+
+  # litmus has been retired from Fedora, the test jobs build the
+  # 0.14 release from source (with its bundled neon) instead
+  LITMUS_DEPENDENCIES:
+    autoconf
+    automake
+    libtool
+    make
+    openssl-devel
 
   WIN_DEPENDENCIES:
     dos2unix
@@ -28,30 +35,29 @@ variables:
     gettext
     git
     meson
-    mingw32-libsoup
-    mingw64-libsoup
-    mingw32-readline
-    mingw64-readline
+    mingw32-gcc
+    mingw64-gcc
+    mingw32-libxml2
+    mingw64-libxml2
+    mingw32-libsoup3
+    mingw64-libsoup3
     msitools
 
 build:
   stage: build
   before_script:
-    - dnf update -y --nogpgcheck
     - dnf install -y --nogpgcheck $DEPENDENCIES
-    - mkdir dev
   script:
-    - meson build
-    - ninja -C build dist
-    # avahi is not needed to test with litmus, so build without it,
-    # otherwise we would need another image with systemd
-    - meson --prefix=$(pwd)/dev -Davahi=disabled build-no-avahi
-    - ninja -C build-no-avahi install
+    # avahi needs a system bus, which is not available in the container,
+    # and the spice-webdavd of the dist test run refuses to start without
+    # the avahi daemon (see the test job)
+    - meson setup -Davahi=disabled build
+    - meson dist -C build
+    # check that the project installs correctly
+    - meson install -C build --destdir "$(pwd)/install-root"
   artifacts:
     paths:
       - build/meson-logs/*.txt
-      - dev
-      - build-no-avahi/tests/virtual-dir-server
     expire_in: 1 week
     when: always
 
@@ -66,46 +72,56 @@ formatting:
     - clang-format --version
     - find libphodav bin tests -name '*.[ch]' -print0 | xargs -0 clang-format --dry-run -Werror
 
-# Temporarily disabled because libsoup 3 is not yet available:
-# https://gitlab.gnome.org/GNOME/phodav/-/merge_requests/27#note_1488522
-#
-#build_win:
-#  stage: build
-#  before_script:
-#    - rm -f /etc/rpm/macros.image-language-conf
-#    - dnf update -y --nogpgcheck
-#    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
-#  script:
-#    - mkdir w32 && cd w32 && mingw32-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
-#    - pwd
-#    - ls
-#    - cd ..
-#    - mkdir w64 && cd w64 && mingw64-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
-#  artifacts:
-#    paths:
-#      - w32/*.msi
-#      - w64/*.msi
-#      - w32/meson-logs/*.txt
-#      - w64/meson-logs/*.txt
-#    expire_in: 1 week
-#    when: always
-
-litmus:
-  stage: test
-  dependencies:
-    - build
+warnings:
+  stage: build
   before_script:
-    - dnf install -y litmus libsoup3 nmap-ncat
-  variables:
-    TESTS: basic copymove props locks http
+    - dnf install -y --nogpgcheck $DEPENDENCIES
   script:
-    - export LD_LIBRARY_PATH=$(pwd)/dev/lib64/
-    - ./dev/bin/chezdav &
-    # wait for the port to open
-    - while ! nc -z localhost 8080; do sleep 1s; done
-    - litmus --keep-going dav://localhost:8080/
-    - kill $!
-    # check that virtual root works as well
-    - ./build-no-avahi/tests/virtual-dir-server &
-    - while ! nc -z localhost 8080; do sleep 1s; done
-    - litmus dav://localhost:8080/
+    - meson setup -Dwerror=true build-werror
+    - meson compile -C build-werror
+
+build_win:
+  stage: build
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
+  script:
+    - mkdir w32 && cd w32 && mingw32-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
+    - cd ..
+    - mkdir w64 && cd w64 && mingw64-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
+  artifacts:
+    paths:
+      - w32/*.msi
+      - w64/*.msi
+      - w32/meson-logs/*.txt
+      - w64/meson-logs/*.txt
+    expire_in: 1 week
+    when: always
+
+.litmus:
+  before_script:
+    - dnf install -y --nogpgcheck $DEPENDENCIES $LITMUS_DEPENDENCIES
+    - git clone --quiet --recursive --depth 1 --branch 0.14 https://github.com/notroj/litmus.git
+    - cd litmus && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && cd ..
+
+test:
+  extends: .litmus
+  stage: test
+  needs: []
+  script:
+    # avahi needs a system bus, which is not available in the container
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled build-test
+    - meson test -C build-test --print-errorlogs
+
+sanitizers:
+  extends: .litmus
+  stage: test
+  needs: []
+  variables:
+    # make undefined behaviour abort the tests
+    UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  script:
+    # the sanitizer runtimes are not pulled in by gcc on Fedora
+    - dnf install -y --nogpgcheck libasan libubsan
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Db_sanitize=address,undefined build-sanitize
+    - meson test -C build-sanitize --print-errorlogs
