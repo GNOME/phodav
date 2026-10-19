@@ -1,0 +1,1067 @@
+/*
+ * Copyright (C) 2026 Red Hat, Inc.
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* End-to-end tests for the WebDAV methods, using an in-process
+ * PhodavServer and a SoupSession client. This complements the litmus
+ * compliance suite with checks of the phodav specific behaviour. */
+
+#include "config.h"
+
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <libsoup/soup.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
+
+#include "libphodav/phodav.h"
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (xmlDoc, xmlFreeDoc)
+
+#define HELLO_CONTENT "Hello, phodav!\n"
+#define HELLO_LENGTH 15
+
+#define PROPFIND_ALLPROP "<D:propfind xmlns:D=\"DAV:\"><D:allprop/></D:propfind>"
+#define PROPFIND_PROPNAME "<D:propfind xmlns:D=\"DAV:\"><D:propname/></D:propfind>"
+#define PROPFIND_LENGTH_AND_ETAG \
+  "<D:propfind xmlns:D=\"DAV:\"><D:prop><D:getcontentlength/><D:getetag/></D:prop></D:propfind>"
+#define PROPFIND_UNKNOWN \
+  "<D:propfind xmlns:D=\"DAV:\"><D:prop><D:getcontentlength/><D:nonexistent/></D:prop></D:propfind>"
+#define PROPPATCH_SET                                  \
+  "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>" \
+  "<user.phodav-test>test value</user.phodav-test>"    \
+  "</D:prop></D:set></D:propertyupdate>"
+#define PROPPATCH_REMOVE                                  \
+  "<D:propertyupdate xmlns:D=\"DAV:\"><D:remove><D:prop>" \
+  "<user.phodav-test/>"                                   \
+  "</D:prop></D:remove></D:propertyupdate>"
+#define PROPFIND_DEAD_PROP \
+  "<D:propfind xmlns:D=\"DAV:\"><D:prop><user.phodav-test/></D:prop></D:propfind>"
+#define LOCK_EXCLUSIVE                                                     \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope>" \
+  "<D:locktype><D:write/></D:locktype>"                                    \
+  "<D:owner>unit-test</D:owner></D:lockinfo>"
+
+typedef struct _DavFixture
+{
+  gchar *dir;
+  PhodavServer *phodav;
+  GMainContext *context;
+  GMainLoop *loop;
+  GThread *thread;
+  SoupSession *session;
+  gchar *base_uri;
+} DavFixture;
+
+static void
+write_file (const gchar *dir, const gchar *name, const gchar *contents)
+{
+  g_autofree gchar *path = g_build_filename (dir, name, NULL);
+
+  g_assert_true (g_file_set_contents (path, contents, -1, NULL));
+}
+
+static void
+make_directory (const gchar *dir, const gchar *name)
+{
+  g_autofree gchar *path = g_build_filename (dir, name, NULL);
+
+  g_assert_cmpint (g_mkdir (path, 0700), ==, 0);
+}
+
+static void
+remove_recursive (GFile *file)
+{
+  g_autoptr(GFileEnumerator) e = NULL;
+
+  e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+  if (e)
+    {
+      while (TRUE)
+        {
+          GFileInfo *info = g_file_enumerator_next_file (e, NULL, NULL);
+
+          if (!info)
+            break;
+
+          {
+            GFile *child = g_file_get_child (file, g_file_info_get_name (info));
+
+            remove_recursive (child);
+            g_object_unref (child);
+          }
+          g_object_unref (info);
+        }
+    }
+
+  g_file_delete (file, NULL, NULL);
+}
+
+static gpointer
+server_thread (gpointer data)
+{
+  DavFixture *f = data;
+
+  g_main_context_push_thread_default (f->context);
+  g_main_loop_run (f->loop);
+  g_main_context_pop_thread_default (f->context);
+
+  return NULL;
+}
+
+static void
+dav_fixture_setup (DavFixture *f, gconstpointer user_data)
+{
+  gboolean readonly = user_data != NULL;
+  g_autoptr(GError) error = NULL;
+  g_autoslist(GUri) uris = NULL;
+
+  f->dir = g_dir_make_tmp ("phodav-dav-XXXXXX", &error);
+  g_assert_no_error (error);
+
+  write_file (f->dir, "hello.txt", HELLO_CONTENT);
+  make_directory (f->dir, "dir");
+  write_file (f->dir, "dir/inner.txt", "inner\n");
+
+  /* the server runs its own context and thread: the synchronous
+   * client blocks on the socket while waiting for the response, so
+   * it cannot share a context with the server */
+  f->context = g_main_context_new ();
+  g_main_context_push_thread_default (f->context);
+
+  f->phodav = g_object_new (PHODAV_TYPE_SERVER,
+                            "root", f->dir,
+                            "read-only", readonly,
+                            NULL);
+
+  {
+    SoupServer *server = phodav_server_get_soup_server (f->phodav);
+
+    g_assert_true (soup_server_listen_local (server, 0,
+                                             SOUP_SERVER_LISTEN_IPV4_ONLY,
+                                             &error));
+    g_assert_no_error (error);
+
+    uris = soup_server_get_uris (server);
+    g_assert_nonnull (uris);
+    f->base_uri = g_uri_to_string (uris->data);
+  }
+
+  f->loop = g_main_loop_new (f->context, FALSE);
+  g_main_context_pop_thread_default (f->context);
+  f->thread = g_thread_new ("dav-server", server_thread, f);
+
+  f->session = soup_session_new ();
+}
+
+static void
+dav_fixture_teardown (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GFile) file = NULL;
+
+  g_object_unref (f->session);
+
+  g_main_loop_quit (f->loop);
+  g_thread_join (f->thread);
+  g_main_loop_unref (f->loop);
+
+  g_object_unref (f->phodav);
+  g_main_context_unref (f->context);
+
+  file = g_file_new_for_path (f->dir);
+  remove_recursive (file);
+
+  g_free (f->base_uri);
+  g_free (f->dir);
+}
+
+/* Send a request with an optional body and a NULL-terminated list of
+ * extra headers (name, value pairs). Returns the message; the response
+ * body is returned too when @response_body is given. */
+static SoupMessage *dav_request (DavFixture *f,
+                                 const gchar *method,
+                                 const gchar *path,
+                                 const gchar *body,
+                                 GBytes **response_body,
+                                 ...) G_GNUC_NULL_TERMINATED;
+
+static SoupMessage *
+dav_request (DavFixture *f, const gchar *method, const gchar *path, const gchar *body, GBytes **response_body, ...)
+{
+  g_autofree gchar *uri = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GBytes) bytes = NULL;
+  g_autoptr(GError) error = NULL;
+  va_list ap;
+  const gchar *name;
+
+  uri = g_build_path ("/", f->base_uri, path, NULL);
+  msg = soup_message_new (method, uri);
+
+  va_start (ap, response_body);
+  while ((name = va_arg (ap, const gchar *)))
+    {
+      const gchar *value = va_arg (ap, const gchar *);
+
+      g_assert_nonnull (value);
+      soup_message_headers_append (soup_message_get_request_headers (msg), name, value);
+    }
+  va_end (ap);
+
+  if (body)
+    {
+      g_autoptr(GBytes) request = g_bytes_new (body, strlen (body));
+
+      soup_message_set_request_body_from_bytes (msg, NULL, request);
+    }
+
+  bytes = soup_session_send_and_read (f->session, msg, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (bytes);
+
+  if (response_body)
+    *response_body = g_steal_pointer (&bytes);
+
+  return g_steal_pointer (&msg);
+}
+
+static guint
+dav_status (DavFixture *f, const gchar *method, const gchar *path, const gchar *body, ...)
+{
+  g_autoptr(SoupMessage) msg = NULL;
+  va_list ap;
+  const gchar *name;
+
+  {
+    g_autofree gchar *uri = g_build_path ("/", f->base_uri, path, NULL);
+
+    msg = soup_message_new (method, uri);
+  }
+
+  va_start (ap, body);
+  while ((name = va_arg (ap, const gchar *)))
+    {
+      const gchar *value = va_arg (ap, const gchar *);
+
+      g_assert_nonnull (value);
+      soup_message_headers_append (soup_message_get_request_headers (msg), name, value);
+    }
+  va_end (ap);
+
+  if (body)
+    {
+      g_autoptr(GBytes) request = g_bytes_new (body, strlen (body));
+
+      soup_message_set_request_body_from_bytes (msg, NULL, request);
+    }
+
+  {
+    g_autoptr(GBytes) bytes = soup_session_send_and_read (f->session, msg, NULL, NULL);
+
+    g_assert_nonnull (bytes);
+  }
+
+  return soup_message_get_status (msg);
+}
+
+static xmlNodePtr
+find_child (xmlNodePtr parent, const gchar *name)
+{
+  for (xmlNodePtr node = parent->children; node; node = node->next)
+    if (node->type == XML_ELEMENT_NODE && g_strcmp0 ((gchar *) node->name, name) == 0)
+      return node;
+
+  return NULL;
+}
+
+static gchar *
+node_content (xmlNodePtr node)
+{
+  xmlChar *content = xmlNodeGetContent (node);
+  gchar *str = g_strdup ((gchar *) content);
+
+  xmlFree (content);
+  return str;
+}
+
+static xmlDocPtr
+parse_multistatus (GBytes *body)
+{
+  gsize size;
+  gconstpointer data = g_bytes_get_data (body, &size);
+  xmlDocPtr doc = xmlReadMemory (data, size, "response.xml", NULL,
+                                 XML_PARSE_NONET | XML_PARSE_NOWARNING |
+                                   XML_PARSE_NOBLANKS | XML_PARSE_NSCLEAN);
+
+  g_assert_nonnull (doc);
+  g_assert_cmpstr ((gchar *) xmlDocGetRootElement (doc)->name, ==, "multistatus");
+
+  return doc;
+}
+
+/* find the <D:response> element of a multistatus for @path, NULL if missing */
+static xmlNodePtr
+find_response (DavFixture *f, xmlDocPtr doc, const gchar *path)
+{
+  gsize base_len = strlen (f->base_uri);
+
+  /* the base URI ends with "/", keep the "/" starting the path */
+  if (base_len > 0 && f->base_uri[base_len - 1] == '/')
+    base_len--;
+
+  for (xmlNodePtr node = xmlDocGetRootElement (doc)->children; node; node = node->next)
+    {
+      xmlNodePtr href = find_child (node, "href");
+      g_autofree gchar *content = NULL;
+
+      if (g_strcmp0 ((gchar *) node->name, "response") != 0 || !href)
+        continue;
+
+      content = node_content (href);
+
+      /* the href is the full request URI, with the base stripped it
+       * compares equal to the request path */
+      if (g_str_has_prefix (content, f->base_uri) &&
+          g_strcmp0 (content + base_len, path) == 0)
+        return node;
+    }
+
+  return NULL;
+}
+
+/* find the <D:propstat> of @response holding a <D:prop> child named @name */
+static xmlNodePtr
+find_propstat (xmlNodePtr response, const gchar *name)
+{
+  for (xmlNodePtr node = response->children; node; node = node->next)
+    {
+      xmlNodePtr prop = find_child (node, "prop");
+
+      if (g_strcmp0 ((gchar *) node->name, "propstat") == 0 &&
+          prop && find_child (prop, name))
+        return node;
+    }
+
+  return NULL;
+}
+
+static guint
+propstat_status (xmlNodePtr propstat)
+{
+  g_autofree gchar *content = node_content (find_child (propstat, "status"));
+  gint status = 0;
+
+  g_assert_nonnull (content);
+  g_assert_true (sscanf (content, "HTTP/%*d.%*d %d", &status) == 1);
+
+  return status;
+}
+
+static xmlDocPtr
+parse_prop (GBytes *body)
+{
+  gsize size;
+  gconstpointer data = g_bytes_get_data (body, &size);
+  xmlDocPtr doc = xmlReadMemory (data, size, "response.xml", NULL,
+                                 XML_PARSE_NONET | XML_PARSE_NOWARNING |
+                                   XML_PARSE_NOBLANKS | XML_PARSE_NSCLEAN);
+
+  g_assert_nonnull (doc);
+  g_assert_cmpstr ((gchar *) xmlDocGetRootElement (doc)->name, ==, "prop");
+
+  return doc;
+}
+
+static xmlNodePtr
+find_activelock (xmlDocPtr doc)
+{
+  xmlNodePtr discovery = find_child (xmlDocGetRootElement (doc), "lockdiscovery");
+
+  g_assert_nonnull (discovery);
+  return find_child (discovery, "activelock");
+}
+
+/* status of a property in a multistatus response, 0 when absent */
+static guint
+prop_status (DavFixture *f, xmlDocPtr doc, const gchar *path, const gchar *name)
+{
+  xmlNodePtr response = find_response (f, doc, path);
+  xmlNodePtr propstat;
+
+  if (!response)
+    return 0;
+
+  propstat = find_propstat (response, name);
+
+  return propstat ? propstat_status (propstat) : 0;
+}
+
+static gchar *
+prop_value (DavFixture *f, xmlDocPtr doc, const gchar *path, const gchar *name)
+{
+  xmlNodePtr response = find_response (f, doc, path);
+  xmlNodePtr propstat;
+
+  g_assert_nonnull (response);
+  propstat = find_propstat (response, name);
+  g_assert_nonnull (propstat);
+  g_assert_cmpuint (propstat_status (propstat), ==, SOUP_STATUS_OK);
+
+  return node_content (find_child (find_child (propstat, "prop"), name));
+}
+
+static void
+test_options (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(SoupMessage) msg = dav_request (f, SOUP_METHOD_OPTIONS, "/", NULL, NULL, NULL);
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "DAV"), ==, "1,2");
+  g_assert_nonnull (soup_message_headers_get_one (soup_message_get_response_headers (msg), "MS-Author-Via"));
+  g_assert_nonnull (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Allow"));
+}
+
+static void
+test_get (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, HELLO_LENGTH);
+  g_assert_cmpmem (g_bytes_get_data (body, NULL), HELLO_LENGTH, HELLO_CONTENT, HELLO_LENGTH);
+
+  /* directories are listed as HTML */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/dir", NULL, &body,
+                     "Accept", "text/html", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  {
+    const gchar *type;
+    GHashTable *params = NULL;
+
+    type = soup_message_headers_get_content_type (soup_message_get_response_headers (msg), &params);
+    g_assert_cmpstr (type, ==, "text/html");
+    g_clear_pointer (&params, g_hash_table_unref);
+  }
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL, NULL), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/missing.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_put (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "new.txt", NULL);
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+
+  msg = dav_request (f, SOUP_METHOD_PUT, "/new.txt", "new content", NULL, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+  g_assert_true (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  /* overwriting an existing resource is not a creation */
+  g_clear_object (&msg);
+  msg = dav_request (f, SOUP_METHOD_PUT, "/new.txt", "overwritten", NULL, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+
+  g_clear_object (&msg);
+  msg = dav_request (f, SOUP_METHOD_GET, "/new.txt", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  {
+    g_autofree gchar *text = g_strndup (g_bytes_get_data (body, NULL), g_bytes_get_size (body));
+
+    g_assert_cmpstr (text, ==, "overwritten");
+  }
+
+  /* writing below a missing collection fails, RFC 4918 section 9.7.1 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing-dir/new.txt", "data", NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  {
+    g_autofree gchar *missing = g_build_filename (f->dir, "missing-dir", NULL);
+
+    g_assert_false (g_file_test (missing, G_FILE_TEST_EXISTS));
+  }
+}
+
+static void
+test_mkcol (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "col", NULL);
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/col", NULL, NULL), ==, SOUP_STATUS_CREATED);
+  g_assert_true (g_file_test (path, G_FILE_TEST_IS_DIR));
+
+  /* it already exists */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/col", NULL, NULL), ==, SOUP_STATUS_METHOD_NOT_ALLOWED);
+
+  /* the parent collection is missing */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/col/sub/deep", NULL, NULL), ==, SOUP_STATUS_CONFLICT);
+
+  /* a body is not allowed */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/col2", "body", NULL),
+                    ==, SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE);
+}
+
+static void
+test_move_copy (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *dest = g_build_path ("/", f->base_uri, "moved.txt", NULL);
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/file.txt", "data", NULL), ==, SOUP_STATUS_CREATED);
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/file.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/file.txt", NULL, NULL), ==, SOUP_STATUS_OK);
+
+  /* copying over an existing resource overwrites it */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/file.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+  /* ... unless Overwrite is disabled */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/file.txt", NULL,
+                                "Destination", dest, "Overwrite", "F", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/file.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/file.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/moved.txt", NULL, NULL), ==, SOUP_STATUS_OK);
+
+  /* the source does not exist */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/file.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+}
+
+static void
+test_delete (DavFixture *f, gconstpointer user_data)
+{
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/del.txt", "data", NULL), ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/del.txt", NULL, NULL), ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/del.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/del.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+
+  /* collections are removed recursively */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/dd", NULL, NULL), ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dd/x.txt", "data", NULL), ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dd", NULL, NULL), ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/dd/x.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_propfind_allprop (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = dav_request (f, "PROPFIND", "/", PROPFIND_ALLPROP, &body,
+                                            "Depth", "1", NULL);
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *content = NULL;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  /* the root and its direct children are listed */
+  g_assert_nonnull (find_response (f, doc, "/"));
+  g_assert_nonnull (find_response (f, doc, "/hello.txt"));
+  g_assert_nonnull (find_response (f, doc, "/dir"));
+  g_assert_null (find_response (f, doc, "/dir/inner.txt"));
+  g_assert_null (find_response (f, doc, "/missing.txt"));
+
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "getcontentlength"), ==, SOUP_STATUS_OK);
+  content = prop_value (f, doc, "/hello.txt", "getcontentlength");
+  g_assert_cmpstr (content, ==, G_STRINGIFY (HELLO_LENGTH));
+
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "getcontenttype"), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "resourcetype"), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (prop_status (f, doc, "/dir", "resourcetype"), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (prop_status (f, doc, "/", "getlastmodified"), ==, SOUP_STATUS_OK);
+
+  /* collections are marked in the resourcetype property */
+  {
+    xmlNodePtr response = find_response (f, doc, "/dir");
+    xmlNodePtr propstat = find_propstat (response, "resourcetype");
+
+    g_assert_nonnull (find_child (find_child (propstat, "prop"), "resourcetype")->children);
+    g_assert_cmpstr ((gchar *) find_child (find_child (propstat, "prop"), "resourcetype")->children->name,
+                     ==, "collection");
+  }
+
+  /* depth 1 on a collection lists its children */
+  {
+    g_autoptr(GBytes) dir_body = NULL;
+    g_autoptr(xmlDoc) dir_doc = NULL;
+    g_autoptr(SoupMessage) dir_msg = dav_request (f, "PROPFIND", "/dir", PROPFIND_ALLPROP, &dir_body,
+                                                  "Depth", "1", NULL);
+
+    g_assert_cmpuint (soup_message_get_status (dir_msg), ==, SOUP_STATUS_MULTI_STATUS);
+    dir_doc = parse_multistatus (dir_body);
+    g_assert_nonnull (find_response (f, dir_doc, "/dir"));
+    g_assert_nonnull (find_response (f, dir_doc, "/dir/inner.txt"));
+    g_assert_null (find_response (f, dir_doc, "/hello.txt"));
+  }
+}
+
+static void
+test_propfind_prop (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_LENGTH_AND_ETAG,
+                                            &body, "Depth", "0", NULL);
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *content = NULL;
+  g_autofree gchar *etag = NULL;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  content = prop_value (f, doc, "/hello.txt", "getcontentlength");
+  g_assert_cmpstr (content, ==, G_STRINGIFY (HELLO_LENGTH));
+
+  /* the reported etag is the GIO etag, in quotes */
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    etag = g_strdup_printf ("\"%s\"", g_file_info_get_etag (info));
+  }
+  g_clear_pointer (&content, g_free);
+  content = prop_value (f, doc, "/hello.txt", "getetag");
+  g_assert_cmpstr (content, ==, etag);
+
+  /* only the requested properties are returned */
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "getcontenttype"), ==, 0);
+
+  /* unknown properties are reported in a separate, failing propstat */
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_UNKNOWN, &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "getcontentlength"), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "nonexistent"), ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_propfind_propname (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_PROPNAME,
+                                            &body, "Depth", "0", NULL);
+  g_autoptr(xmlDoc) doc = NULL;
+  xmlNodePtr propstat;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  propstat = find_propstat (find_response (f, doc, "/hello.txt"), "getcontentlength");
+  g_assert_nonnull (propstat);
+  /* propname responses have no values */
+  g_assert_null (find_child (find_child (propstat, "prop"), "getcontentlength")->children);
+}
+
+static void
+test_propfind_empty_body (DavFixture *f, gconstpointer user_data)
+{
+  /* an empty body is accepted, as a Windows kludge, and behaves like allprop */
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = dav_request (f, "PROPFIND", "/hello.txt", NULL,
+                                            &body, "Depth", "0", NULL);
+  g_autoptr(xmlDoc) doc = NULL;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "getcontentlength"), ==, SOUP_STATUS_OK);
+}
+
+static void
+test_propfind_errors (DavFixture *f, gconstpointer user_data)
+{
+  /* malformed body */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", "<propfind", "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* unexpected root element */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", "<unexpected/>", "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* missing resource */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/missing.txt", PROPFIND_ALLPROP, "Depth", "0", NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+  /* infinite depth is not supported, it is rejected with a warning */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "*should not be reached*");
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/", PROPFIND_ALLPROP, "Depth", "infinity", NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+  g_test_assert_expected_messages ();
+}
+
+static void
+test_proppatch (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *content = NULL;
+  g_autoptr(GError) error = NULL;
+  gboolean supported;
+
+  /* dead properties are stored as user xattrs, which is not supported
+   * by every filesystem */
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+
+    supported = g_file_set_attribute (file, "xattr::user.phodav-probe",
+                                      G_FILE_ATTRIBUTE_TYPE_STRING, "probe",
+                                      G_FILE_QUERY_INFO_NONE, NULL, &error);
+    if (!supported)
+      {
+        g_test_skip ("user xattrs are not supported by the filesystem");
+        return;
+      }
+  }
+
+  msg = dav_request (f, "PROPPATCH", "/hello.txt", PROPPATCH_SET, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-test"), ==, SOUP_STATUS_OK);
+
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_DEAD_PROP, &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  content = prop_value (f, doc, "/hello.txt", "user.phodav-test");
+  g_assert_cmpstr (content, ==, "test value");
+
+  /* non-ASCII values must round-trip unmodified */
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPPATCH", "/hello.txt",
+                     "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                     "<user.phodav-test>ünïcødé 𐀀</user.phodav-test>"
+                     "</D:prop></D:set></D:propertyupdate>",
+                     &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_DEAD_PROP, &body, "Depth", "0", NULL);
+  doc = parse_multistatus (body);
+  g_clear_pointer (&content, g_free);
+  content = prop_value (f, doc, "/hello.txt", "user.phodav-test");
+  g_assert_cmpstr (content, ==, "ünïcødé 𐀀");
+
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPPATCH", "/hello.txt", PROPPATCH_REMOVE, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-test"), ==, SOUP_STATUS_OK);
+
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/hello.txt", PROPFIND_DEAD_PROP, &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
+
+  /* a missing resource is reported per-property, in a multistatus */
+  {
+    g_autoptr(GBytes) missing_body = NULL;
+    g_autoptr(SoupMessage) missing_msg = NULL;
+    g_autoptr(xmlDoc) missing_doc = NULL;
+
+    g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "failed to set property: *");
+    missing_msg = dav_request (f, "PROPPATCH", "/missing.txt", PROPPATCH_SET, &missing_body, NULL);
+    g_test_assert_expected_messages ();
+    g_assert_cmpuint (soup_message_get_status (missing_msg), ==, SOUP_STATUS_MULTI_STATUS);
+    missing_doc = parse_multistatus (missing_body);
+    g_assert_cmpuint (prop_status (f, missing_doc, "/missing.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
+  }
+}
+
+/* take an exclusive write lock, returns the Lock-Token header value */
+static gchar *
+lock_resource (DavFixture *f, const gchar *path, const gchar *timeout)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", path, LOCK_EXCLUSIVE, &body,
+                                            "Timeout", timeout, "Depth", "0", NULL);
+  const gchar *token;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+  token = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token");
+  g_assert_nonnull (token);
+  g_assert_true (g_str_has_prefix (token, "<urn:uuid:"));
+  g_assert_true (g_str_has_suffix (token, ">"));
+
+  /* the lockdiscovery body reports the lock */
+  {
+    g_autoptr(xmlDoc) doc = parse_prop (body);
+
+    g_assert_nonnull (find_activelock (doc));
+  }
+
+  return g_strdup (token);
+}
+
+static void
+test_lock (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/locked.txt", "Second-3600");
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+  g_autofree gchar *path = g_build_filename (f->dir, "locked.txt", NULL);
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+
+  /* the resource was created by the lock */
+  g_assert_true (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  /* it cannot be modified without submitting the lock */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/locked.txt", "data", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/locked.txt", NULL, NULL),
+                    ==, SOUP_STATUS_LOCKED);
+
+  /* a second exclusive lock is refused */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "lock failed");
+  g_assert_cmpuint (dav_status (f, "LOCK", "/locked.txt", LOCK_EXCLUSIVE, NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_test_assert_expected_messages ();
+
+  /* the lock can be discovered with PROPFIND */
+  msg = dav_request (f, "PROPFIND", "/locked.txt",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop><D:lockdiscovery/></D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/locked.txt", "lockdiscovery"), ==, SOUP_STATUS_OK);
+
+  /* submitting the lock token in the If header allows writes */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/locked.txt", "locked content",
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* an invalid If header syntax is a bad request */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/locked.txt", "data", "If", "(x)", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* unlocking requires the token */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/locked.txt", NULL,
+                                "Lock-Token", "<urn:uuid:11111111-2222-3333-4444-555555555555>", NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/locked.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  /* the resource is writable again */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/locked.txt", "unlocked", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* the token is gone */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/locked.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+}
+
+static void
+test_lock_depth_infinity (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = NULL;
+  g_autofree gchar *if_header = NULL;
+
+  /* locking a collection with infinite depth locks its tree,
+   * the collection itself is not created by the lock */
+  {
+    g_autoptr(GBytes) body = NULL;
+    g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", "/dir", LOCK_EXCLUSIVE, &body,
+                                              "Depth", "infinity", NULL);
+    const gchar *t;
+
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+    t = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token");
+    g_assert_nonnull (t);
+    token = g_strdup (t);
+  }
+
+  if_header = g_strdup_printf ("(%s)", token);
+
+  /* children are covered by the lock */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/inner.txt", "data", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/other.txt", "data", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/other.txt", "data",
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_CREATED);
+
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/other.txt", "data", NULL),
+                    ==, SOUP_STATUS_OK);
+}
+
+static void
+test_lock_refresh (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/refresh.txt", "Second-60");
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *content = NULL;
+
+  /* an empty body with an If header refreshes the lock timeout */
+  msg = dav_request (f, "LOCK", "/refresh.txt", NULL, &body,
+                     "If", if_header, "Timeout", "Second-120", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  {
+    g_autoptr(xmlDoc) ldoc = parse_prop (body);
+    xmlNodePtr timeout = find_child (find_activelock (ldoc), "timeout");
+
+    g_assert_nonnull (timeout);
+    content = node_content (timeout);
+    g_assert_true (g_str_has_prefix (content, "Second-"));
+    {
+      gint64 remaining = g_ascii_strtoll (content + strlen ("Second-"), NULL, 10);
+
+      g_assert_cmpint (remaining, >, 60);
+      g_assert_cmpint (remaining, <=, 120);
+    }
+  }
+
+  /* refreshing an unknown token is a bad request */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/refresh.txt", NULL,
+                                "If", "(<urn:uuid:11111111-2222-3333-4444-555555555555>)", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* so is a malformed If header */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/refresh.txt", NULL, "If", "(x)", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/refresh.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+}
+
+static void
+test_if_etag (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *if_header = NULL;
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/etag.txt", "data", NULL),
+                    ==, SOUP_STATUS_CREATED);
+
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "etag.txt", NULL);
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+  }
+
+  /* a failing etag condition */
+  if_header = g_strdup_printf ("([\"not-the-etag\"])");
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/etag.txt", NULL,
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* the matching etag satisfies the condition */
+  g_clear_pointer (&if_header, g_free);
+  if_header = g_strdup_printf ("([\"%s\"])", etag);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/etag.txt", NULL,
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/etag.txt", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_readonly (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *dest = g_build_path ("/", f->base_uri, "moved.txt", NULL);
+
+  /* read-only servers still serve content */
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/", PROPFIND_ALLPROP, &body, "Depth", "1", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+
+  /* but reject every modification */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/x.txt", "data", NULL), ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/x", NULL, NULL), ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL, NULL), ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt", PROPPATCH_SET, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", LOCK_EXCLUSIVE, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "x.txt", NULL);
+
+    g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+  }
+}
+
+gint
+main (gint argc, gchar *argv[])
+{
+  g_test_init (&argc, &argv, NULL);
+  g_test_set_nonfatal_assertions ();
+
+  g_test_add ("/dav/options", DavFixture, NULL, dav_fixture_setup, test_options, dav_fixture_teardown);
+  g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
+  g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
+  g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
+  g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
+  g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);
+
+  g_test_add ("/dav/propfind/allprop", DavFixture, NULL, dav_fixture_setup, test_propfind_allprop, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/prop", DavFixture, NULL, dav_fixture_setup, test_propfind_prop, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/propname", DavFixture, NULL, dav_fixture_setup, test_propfind_propname, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/empty-body", DavFixture, NULL, dav_fixture_setup, test_propfind_empty_body, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/errors", DavFixture, NULL, dav_fixture_setup, test_propfind_errors, dav_fixture_teardown);
+  g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
+
+  g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
+  g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
+  g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
+  g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
+
+  g_test_add ("/dav/readonly", DavFixture, GINT_TO_POINTER (1), dav_fixture_setup, test_readonly, dav_fixture_teardown);
+
+  return g_test_run ();
+}

@@ -27,6 +27,14 @@ unit = executable('test-unit',
                    dependencies : deps)
 test('test-unit', unit)
 
+# end-to-end tests of the DAV methods over HTTP
+dav = executable('test-dav',
+                 sources : 'dav.c',
+                 include_directories : incdir,
+                 link_with : libphodav,
+                 dependencies : deps)
+test('test-dav', dav)
+
 chezdav_env = ['CHEZDAV=' + chezdav.full_path()]
 if conf.has('WITH_AVAHI')
   # chezdav exits when there is no avahi daemon to announce to
