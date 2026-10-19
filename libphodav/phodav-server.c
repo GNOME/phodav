@@ -179,6 +179,16 @@ phodav_server_constructed (GObject *gobject)
 }
 
 static void
+free_path_locks (gpointer key, gpointer value, gpointer user_data)
+{
+  Path *path = value;
+
+  /* the locks remove themselves from the list when freed */
+  while (path->locks)
+    dav_lock_free (path->locks->data);
+}
+
+static void
 phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
@@ -190,6 +200,11 @@ phodav_server_dispose (GObject *gobject)
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
+
+  /* remaining locks hold references on the paths, free them first
+   * so the paths are released with the table */
+  if (self->paths)
+    g_hash_table_foreach (self->paths, free_path_locks, NULL);
   g_clear_pointer (&self->paths, g_hash_table_unref);
 
   /* Chain up to the parent class */
