@@ -44,7 +44,7 @@ static gint public = 0;
 static gint nomdns = 0;
 #endif
 
-G_GNUC_PRINTF (1, 2)
+G_GNUC_PRINTF (1, 2) G_GNUC_NORETURN
 static void
 my_error (const gchar *format, ...)
 {
