@@ -149,6 +149,23 @@ lock_submitted_free (LockSubmitted *l)
   g_free (l);
 }
 
+/* the token may be submitted for the locked resource itself or for
+ * any resource covered by the lock */
+static gboolean
+locks_submitted_path_has (const gchar *path, const gchar *lock_path)
+{
+  gsize len = strlen (lock_path);
+
+  if (g_strcmp0 (path, lock_path) == 0)
+    return TRUE;
+
+  /* a lock on the root covers everything */
+  if (g_strcmp0 (lock_path, "/") == 0)
+    return path[0] == '/';
+
+  return g_str_has_prefix (path, lock_path) && path[len] == '/';
+}
+
 gboolean
 locks_submitted_has (GList *locks, DAVLock *lock)
 {
@@ -157,8 +174,9 @@ locks_submitted_has (GList *locks, DAVLock *lock)
   for (l = locks; l != NULL; l = l->next)
     {
       LockSubmitted *sub = l->data;
-      if (g_strcmp0 (sub->path, lock->path->path) == 0 &&
-          g_strcmp0 (sub->token, lock->token) == 0)
+
+      if (g_strcmp0 (sub->token, lock->token) == 0 &&
+          locks_submitted_path_has (sub->path, lock->path->path))
         return TRUE;
     }
 
