@@ -6,7 +6,6 @@ stages:
 
 variables:
   DEPENDENCIES:
-    asciidoc
     avahi-gobject-devel
     gcc
     gettext
@@ -16,8 +15,8 @@ variables:
     libsoup3-devel
     libxml2-devel
     meson
+    scdoc
     systemd-devel
-    xmlto
 
   # litmus has been retired from Fedora; the test jobs build it from
   # source as a meson subproject, which needs neon

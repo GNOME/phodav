@@ -38,35 +38,18 @@ else
   )
 endif
 
-asciidoc = find_program('asciidoc', required : false)
-xmlto = find_program('xmlto', required : false)
+scdoc = find_program('scdoc', required : false)
 
-build_man = asciidoc.found() and xmlto.found()
+build_man = scdoc.found()
 
 if build_man
-  xml = custom_target(
-    'chezdav XML',
-    input : [ 'chezdav.txt' ],
-    output : [ 'chezdav.xml' ],
-    command : [
-      asciidoc,
-      '-o',
-      '@OUTPUT@',
-      '--backend=docbook',
-      '--doctype=manpage',
-      '@INPUT@',
-    ],
-  )
-  man = custom_target(
+  custom_target(
     'chezdav MAN',
-    input : xml,
-    output : [ 'chezdav.1' ],
-    command : [
-      xmlto,
-      'man',
-      '-o', meson.current_build_dir(),
-      '@INPUT@',
-    ],
+    input : 'chezdav.1.scd',
+    output : 'chezdav.1',
+    command : [ scdoc ],
+    feed : true,
+    capture : true,
     install : true,
     install_dir : mandir / 'man1',
   )
