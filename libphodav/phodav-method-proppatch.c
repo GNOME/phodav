@@ -112,10 +112,10 @@ prop_set (SoupServerMessage *msg,
           if (!xml_node_is_element (attrnode))
             continue;
 
+          *attr = xmlCopyNode (attrnode, 2);
+
           if (!remove)
             {
-              *attr = xmlCopyNode (attrnode, 2);
-
               buf = node_children_to_string (attrnode);
               type = G_FILE_ATTRIBUTE_TYPE_STRING;
             }
@@ -176,6 +176,8 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
         {
           attr->_private = GINT_TO_POINTER (status);
           props = g_list_append (props, attr);
+          /* the list owns the node now */
+          attr = NULL;
         }
     }
 
