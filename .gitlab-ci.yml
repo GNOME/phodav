@@ -19,14 +19,10 @@ variables:
     systemd-devel
     xmlto
 
-  # litmus has been retired from Fedora, the test jobs build the
-  # 0.14 release from source (with its bundled neon) instead
+  # litmus has been retired from Fedora; the test jobs build it from
+  # source as a meson subproject, which needs neon
   LITMUS_DEPENDENCIES:
-    autoconf
-    automake
-    libtool
-    make
-    openssl-devel
+    neon-devel
 
   WIN_DEPENDENCIES:
     dos2unix
@@ -117,8 +113,6 @@ build_win:
 .litmus:
   before_script:
     - dnf install -y --nogpgcheck $DEPENDENCIES $LITMUS_DEPENDENCIES
-    - git clone --quiet --recursive --depth 1 --branch 0.14 https://github.com/notroj/litmus.git
-    - cd litmus && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && cd ..
 
 test:
   extends: .litmus
@@ -126,7 +120,7 @@ test:
   needs: []
   script:
     # avahi needs a system bus, which is not available in the container
-    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled build-test
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled build-test
     - meson test -C build-test --print-errorlogs
 
 sanitizers:
@@ -139,5 +133,5 @@ sanitizers:
   script:
     # the sanitizer runtimes are not pulled in by gcc on Fedora
     - dnf install -y --nogpgcheck libasan libubsan
-    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Db_sanitize=address,undefined build-sanitize
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_sanitize=address,undefined build-sanitize
     - meson test -C build-sanitize --print-errorlogs

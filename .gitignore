@@ -1,0 +1,4 @@
+# meson subproject downloads
+/subprojects/litmus/
+/subprojects/packagecache/
+/subprojects/.wraplock

@@ -20,6 +20,10 @@ option('udevrulesdir',
        type : 'string',
        description : 'Directory for udev rules')
 
+option('litmus',
+       type : 'feature',
+       description : 'Run the litmus WebDAV compliance test suite')
+
 option('build-id',
        type : 'integer',
        value : 0,

@@ -48,11 +48,25 @@ test('chezdav',
      depends : chezdav,
      env : chezdav_env)
 
-# run the litmus compliance suite when it is installed
-litmus = find_program('litmus', required : false)
+# run the litmus compliance suite; litmus is not packaged everywhere
+# (Fedora retired it), so build it from source as an optional subproject
+# when it is not installed on the system
+litmus = disabler()
+if not get_option('litmus').disabled()
+  litmus = find_program('litmus', required : false)
+  if not litmus.found()
+    litmus_sub = subproject('litmus', required : get_option('litmus'))
+    if litmus_sub.found()
+      litmus = litmus_sub.get_variable('litmus_prog')
+    endif
+  endif
+endif
 if litmus.found()
   test('litmus',
        find_program(files('litmus.sh')),
        args : [server.full_path(), litmus.full_path()],
        timeout : 120)
 endif
+
+summary({'litmus compliance tests' : litmus.found()},
+        section : 'Configuration')
