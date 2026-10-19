@@ -47,3 +47,12 @@ test('chezdav',
                 dependencies : deps),
      depends : chezdav,
      env : chezdav_env)
+
+# run the litmus compliance suite when it is installed
+litmus = find_program('litmus', required : false)
+if litmus.found()
+  test('litmus',
+       find_program(files('litmus.sh')),
+       args : [server.full_path(), litmus.full_path()],
+       timeout : 120)
+endif
