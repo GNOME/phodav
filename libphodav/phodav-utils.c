@@ -52,10 +52,10 @@ path_has_dot_dot_segment (const gchar *path)
 }
 
 static xmlDocPtr
-parse_xml (const gchar  *data,
+parse_xml (const gchar *data,
            const goffset len,
-           xmlNodePtr   *root,
-           const gchar  *name)
+           xmlNodePtr *root,
+           const gchar *name)
 {
   xmlDocPtr doc;
 
@@ -63,11 +63,11 @@ parse_xml (const gchar  *data,
                        "request.xml",
                        NULL,
                        XML_PARSE_NONET |
-                       XML_PARSE_NOWARNING |
-                       XML_PARSE_NOBLANKS |
-                       XML_PARSE_NSCLEAN |
-                       XML_PARSE_NOCDATA |
-                       XML_PARSE_COMPACT);
+                         XML_PARSE_NOWARNING |
+                         XML_PARSE_NOBLANKS |
+                         XML_PARSE_NSCLEAN |
+                         XML_PARSE_NOCDATA |
+                         XML_PARSE_COMPACT);
   if (doc == NULL)
     {
       g_debug ("Could not parse request");
@@ -100,8 +100,7 @@ parse_xml (const gchar  *data,
 }
 
 gboolean
-davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body,
-              const gchar *name)
+davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const gchar *name)
 {
   xmlDocPtr doc;
   xmlNodePtr root;
@@ -195,8 +194,7 @@ gboolean
 xml_node_has_ns (xmlNodePtr node, const gchar *ns_href)
 {
   return node->ns && node->ns->href &&
-    !g_strcmp0 ((gchar *) node->ns->href, ns_href);
-
+         !g_strcmp0 ((gchar *) node->ns->href, ns_href);
 }
 
 gboolean

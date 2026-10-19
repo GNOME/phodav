@@ -44,7 +44,8 @@ static gint public = 0;
 static gint nomdns = 0;
 #endif
 
-G_GNUC_PRINTF (1, 2) static void
+G_GNUC_PRINTF (1, 2)
+static void
 my_error (const gchar *format, ...)
 {
   va_list args;
@@ -74,7 +75,7 @@ sighup_received (gpointer user_data)
 static gchar *
 get_realm (void)
 {
-    return g_strdup_printf ("%s\'s public share", g_get_user_name ());
+  return g_strdup_printf ("%s\'s public share", g_get_user_name ());
 }
 
 gchar *htdigest = NULL;
@@ -113,8 +114,7 @@ load_htdigest (const gchar *filename, const gchar *realm, GError **error)
 }
 
 static gchar *
-digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg,
-                      const gchar *username, gpointer data)
+digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg, const gchar *username, gpointer data)
 {
   GHashTable *users = data;
 
@@ -180,10 +180,10 @@ main (gint argc, gchar *argv[])
     public = 1; // default
 
   if (!path)
-      path = g_get_home_dir ();
+    path = g_get_home_dir ();
 
   if (!realm)
-      realm = get_realm ();
+    realm = get_realm ();
 
   mainloop = g_main_loop_new (NULL, FALSE);
 
@@ -211,8 +211,7 @@ main (gint argc, gchar *argv[])
 
       server = phodav_server_get_soup_server (dav);
       soup_server_add_auth_domain (server, auth);
-  }
-
+    }
 
 #ifdef WITH_AVAHI
   gchar *name = get_realm ();
@@ -230,9 +229,10 @@ main (gint argc, gchar *argv[])
   else
     my_error (_ ("Internal error, should not happen\n"));
 
-  if (!res) {
-    my_error (_ ("Listen failed: %s\n"), error->message);
-  }
+  if (!res)
+    {
+      my_error (_ ("Listen failed: %s\n"), error->message);
+    }
 
   g_main_loop_run (mainloop);
 

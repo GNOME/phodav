@@ -22,7 +22,7 @@
 
 static void
 method_put_finished (SoupServerMessage *msg,
-                     gpointer           user_data)
+                     gpointer user_data)
 {
   GFileOutputStream *output = user_data;
 
@@ -33,8 +33,8 @@ method_put_finished (SoupServerMessage *msg,
 
 static void
 method_put_got_chunk (SoupServerMessage *msg,
-                      GBytes            *chunk,
-                      gpointer           user_data)
+                      GBytes *chunk,
+                      gpointer user_data)
 {
   GFileOutputStream *output = user_data;
   PathHandler *handler = g_object_get_data (user_data, "handler");
@@ -62,9 +62,7 @@ end:
 }
 
 static gint
-put_start (SoupServerMessage *msg, GFile *file,
-           GFileOutputStream **output, GCancellable *cancellable,
-           GError **err)
+put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCancellable *cancellable, GError **err)
 {
   GFileOutputStream *s = NULL;
   gchar *etag = NULL;
@@ -104,10 +102,10 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
   g_debug ("%s %s HTTP/1.%d %s %s", soup_server_message_get_method (msg), path, soup_server_message_get_http_version (msg),
-           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
+           soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
-  if (handler_get_readonly(handler))
+  if (handler_get_readonly (handler))
     {
       status = SOUP_STATUS_FORBIDDEN;
       goto end;

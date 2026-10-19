@@ -58,8 +58,7 @@ try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
 }
 
 static gboolean
-lock_ensure_file (PathHandler *handler, const gchar *path,
-                  GCancellable *cancellable, GError **err)
+lock_ensure_file (PathHandler *handler, const gchar *path, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) e = NULL;
   g_autoptr(GFileOutputStream) stream = NULL;
@@ -115,14 +114,15 @@ parse_locktype (xmlNodePtr rt)
 }
 
 gint
-phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
-                    const gchar *path, GError **err)
+phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   Path *lpath = NULL;
   xmlChar *mem = NULL;
   gint size = 0;
-  DavDoc doc = {0, };
+  DavDoc doc = {
+    0,
+  };
   xmlNodePtr node = NULL, owner = NULL, root = NULL;
   xmlNsPtr ns = NULL;
   DAVLockScopeType scope = DAV_LOCK_SCOPE_SHARED;

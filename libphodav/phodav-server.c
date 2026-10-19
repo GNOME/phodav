@@ -37,19 +37,20 @@
 
 struct _PhodavServer
 {
-  GObject       parent;
-  SoupServer   *server;
+  GObject parent;
+  SoupServer *server;
   GCancellable *cancellable;
-  GFile        *root_file;
-  PathHandler  *root_handler; /* weak ref */
-  GHashTable   *paths;
-  gboolean      readonly;
+  GFile *root_file;
+  PathHandler *root_handler; /* weak ref */
+  GHashTable *paths;
+  gboolean readonly;
 };
 
 G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
 /* Properties */
-typedef enum {
+typedef enum
+{
   PROP_ROOT = 1,
   PROP_ROOT_FILE,
   PROP_SERVER,
@@ -58,15 +59,15 @@ typedef enum {
 
 static GParamSpec *properties[PROP_READONLY + 1];
 
-static void server_callback (SoupServer        *server,
+static void server_callback (SoupServer *server,
                              SoupServerMessage *msg,
-                             const gchar       *path,
-                             GHashTable        *query,
-                             gpointer           user_data);
+                             const gchar *path,
+                             GHashTable *query,
+                             gpointer user_data);
 
-static void request_started (SoupServer        *server,
+static void request_started (SoupServer *server,
                              SoupServerMessage *message,
-                             gpointer           user_data);
+                             gpointer user_data);
 
 Path *
 server_get_path (PhodavServer *self, const gchar *_path)
@@ -89,22 +90,22 @@ server_get_path (PhodavServer *self, const gchar *_path)
 struct _PathHandler
 {
   PhodavServer *self;
-  GFile       *file;
+  GFile *file;
 };
 
-PhodavServer * G_GNUC_PURE
+PhodavServer *G_GNUC_PURE
 handler_get_server (PathHandler *handler)
 {
   return handler->self;
 }
 
-GFile * G_GNUC_PURE
+GFile *G_GNUC_PURE
 handler_get_file (PathHandler *handler)
 {
   return handler->file;
 }
 
-GCancellable * G_GNUC_PURE
+GCancellable *G_GNUC_PURE
 handler_get_cancellable (PathHandler *handler)
 {
   return handler->self->cancellable;
@@ -197,9 +198,9 @@ phodav_server_dispose (GObject *gobject)
 }
 
 static void
-phodav_server_get_property (GObject    *gobject,
-                            guint       prop_id,
-                            GValue     *value,
+phodav_server_get_property (GObject *gobject,
+                            guint prop_id,
+                            GValue *value,
                             GParamSpec *pspec)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
@@ -207,8 +208,7 @@ phodav_server_get_property (GObject    *gobject,
   switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
-      g_value_take_string (value, self->root_file ?
-        g_file_get_path (self->root_file) : NULL);
+      g_value_take_string (value, self->root_file ? g_file_get_path (self->root_file) : NULL);
       break;
 
     case PROP_ROOT_FILE:
@@ -226,10 +226,10 @@ phodav_server_get_property (GObject    *gobject,
 }
 
 static void
-phodav_server_set_property (GObject      *gobject,
-                            guint         prop_id,
+phodav_server_set_property (GObject *gobject,
+                            guint prop_id,
                             const GValue *value,
-                            GParamSpec   *pspec)
+                            GParamSpec *pspec)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
   const gchar *root;
@@ -270,8 +270,8 @@ phodav_server_class_init (PhodavServerClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
-  gobject_class->dispose      = phodav_server_dispose;
-  gobject_class->constructed  = phodav_server_constructed;
+  gobject_class->dispose = phodav_server_dispose;
+  gobject_class->constructed = phodav_server_constructed;
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;
 
@@ -289,10 +289,10 @@ phodav_server_class_init (PhodavServerClass *klass)
                          NULL, NULL,
                          NULL,
                          G_PARAM_CONSTRUCT |
-                         G_PARAM_READWRITE |
-                         G_PARAM_STATIC_STRINGS);
+                           G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
 
-/**
+  /**
    * PhodavServer:root-file:
    *
    * A more generic version of #PhodavServer:root,
@@ -305,8 +305,8 @@ phodav_server_class_init (PhodavServerClass *klass)
                          NULL, NULL,
                          G_TYPE_FILE,
                          G_PARAM_CONSTRUCT |
-                         G_PARAM_READWRITE |
-                         G_PARAM_STATIC_STRINGS);
+                           G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
 
   /**
    * PhodavServer:server:
@@ -318,7 +318,7 @@ phodav_server_class_init (PhodavServerClass *klass)
                          NULL, NULL,
                          SOUP_TYPE_SERVER,
                          G_PARAM_READABLE |
-                         G_PARAM_STATIC_STRINGS);
+                           G_PARAM_STATIC_STRINGS);
 
   /**
    * PhodavServer:read-only:
@@ -330,7 +330,7 @@ phodav_server_class_init (PhodavServerClass *klass)
                           NULL, NULL,
                           FALSE,
                           G_PARAM_READWRITE |
-                          G_PARAM_STATIC_STRINGS);
+                            G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, G_N_ELEMENTS (properties), properties);
 }
@@ -373,7 +373,7 @@ end:
 typedef struct _PathGetLock
 {
   const gchar *token;
-  DAVLock     *lock;
+  DAVLock *lock;
 } PathGetLock;
 
 static gboolean
@@ -433,7 +433,7 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
 
 static void
 got_headers (SoupServerMessage *msg,
-             gpointer     user_data)
+             gpointer user_data)
 {
   PhodavServer *self = user_data;
   GUri *uri = soup_server_message_get_uri (msg);
@@ -462,9 +462,9 @@ got_headers (SoupServerMessage *msg,
 }
 
 static void
-request_started (SoupServer        *server,
+request_started (SoupServer *server,
                  SoupServerMessage *message,
-                 gpointer           user_data)
+                 gpointer user_data)
 {
   PhodavServer *self = user_data;
 
@@ -472,9 +472,7 @@ request_started (SoupServer        *server,
 }
 
 static void
-server_callback (SoupServer *server, SoupServerMessage *msg,
-                 const gchar *path, GHashTable *query,
-                 gpointer user_data)
+server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
 {
   g_autoptr(GError) err = NULL;
   PathHandler *handler = user_data;
@@ -487,8 +485,8 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
   g_autoptr(GHashTable) params = NULL;
 
   g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_server_message_get_http_version (msg),
-           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
+           soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
   if (!(path && *path == '/'))
     {
@@ -520,7 +518,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
        method == SOUP_METHOD_MOVE ||
        method == SOUP_METHOD_COPY ||
        method == SOUP_METHOD_LOCK))
-      status = SOUP_STATUS_FORBIDDEN;
+    status = SOUP_STATUS_FORBIDDEN;
   else if (method == SOUP_METHOD_OPTIONS)
     {
       soup_message_headers_append (response_headers, "DAV", "1,2");

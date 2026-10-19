@@ -1,0 +1,42 @@
+# phodav coding style
+#
+# This follows the GTK coding style configuration, on top of the rules
+# already documented in .editorconfig: 2-space indentation, no tabs.
+#
+# Like GTK, the column limit is disabled, as clang-format makes
+# dubious hanging-indent choices when wrapping. The 100-column limit
+# of .editorconfig remains a soft guidance: existing line breaks are
+# preserved and new ones are expected to be wrapped sensibly by hand.
+#
+# Requires clang-format >= 17, for "Language: C" support (C++ mode
+# tokenizes identifiers such as "not" or "public", which are C++
+# keywords, and misformats them). Keep the CI "formatting" job in
+# sync with the version used to format the sources.
+#
+# Include blocks are preserved: keep the standard C, system and
+# project headers in separate blocks, separated by blank lines, as
+# sorted blocks are expected to stay within a single category.
+
+BasedOnStyle: GNU
+Language: C
+
+# Like GTK
+ColumnLimit: 0
+BreakBeforeBinaryOperators: None
+BinPackParameters: false
+SpaceAfterCStyleCast: true
+PointerAlignment: Right
+
+# The GLib type-parameterized cleanup macros keep the GLib convention
+# of no space before the parenthesis, unlike regular functions
+WhitespaceSensitiveMacros: [g_autoptr, g_auto, g_autolist, g_autoslist]
+
+# Function definitions have the return type on its own line,
+# declarations keep it on the same line.
+AlwaysBreakAfterReturnType: TopLevelDefinitions
+
+# phodav indents continuations by 2, not the GNU default of 4
+ContinuationIndentWidth: 2
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve

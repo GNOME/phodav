@@ -21,30 +21,32 @@
 typedef struct _OutputQueueElem
 {
   const guint8 *buf;
-  gsize         size;
-  PushedCb      cb;
-  gpointer      user_data;
+  gsize size;
+  PushedCb cb;
+  gpointer user_data;
 } OutputQueueElem;
 
 struct _OutputQueue
 {
-  GObject        parent_instance;
+  GObject parent_instance;
   GOutputStream *output;
-  gboolean       writing;
-  GQueue        *queue;
-  GCancellable  *cancel;
+  gboolean writing;
+  GQueue *queue;
+  GCancellable *cancel;
 };
 
 G_DEFINE_FINAL_TYPE (OutputQueue, output_queue, G_TYPE_OBJECT);
 
 static void output_queue_kick (OutputQueue *q);
 
-static void output_queue_init (OutputQueue *self)
+static void
+output_queue_init (OutputQueue *self)
 {
   self->queue = g_queue_new ();
 }
 
-static void output_queue_finalize (GObject *obj)
+static void
+output_queue_finalize (GObject *obj)
 {
   OutputQueue *self = OUTPUT_QUEUE (obj);
 
@@ -55,13 +57,15 @@ static void output_queue_finalize (GObject *obj)
   G_OBJECT_CLASS (output_queue_parent_class)->finalize (obj);
 }
 
-static void output_queue_class_init (OutputQueueClass *klass)
+static void
+output_queue_class_init (OutputQueueClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   gobject_class->finalize = output_queue_finalize;
 }
 
-OutputQueue* output_queue_new (GOutputStream *output, GCancellable *cancel)
+OutputQueue *
+output_queue_new (GOutputStream *output, GCancellable *cancel)
 {
   OutputQueue *self = g_object_new (OUTPUT_TYPE_QUEUE, NULL);
   self->output = g_object_ref (output);
@@ -103,12 +107,11 @@ output_queue_kick (OutputQueue *q)
   e = g_queue_peek_head (q->queue);
   q->writing = TRUE;
   g_output_stream_write_all_async (q->output, e->buf, e->size,
-    G_PRIORITY_DEFAULT, q->cancel, write_cb, g_object_ref (q));
+                                   G_PRIORITY_DEFAULT, q->cancel, write_cb, g_object_ref (q));
 }
 
 void
-output_queue_push (OutputQueue *q, const guint8 *buf, gsize size,
-                   PushedCb pushed_cb, gpointer user_data)
+output_queue_push (OutputQueue *q, const guint8 *buf, gsize size, PushedCb pushed_cb, gpointer user_data)
 {
   OutputQueueElem *e;
 

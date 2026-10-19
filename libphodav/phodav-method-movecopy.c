@@ -23,8 +23,7 @@
 #include "phodav-virtual-dir.h"
 
 static gboolean
-do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags,
-           GCancellable *cancellable, GError **err)
+do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
   GFileEnumerator *e = NULL;
   gboolean success = FALSE;
@@ -73,9 +72,7 @@ end:
 }
 
 static gint
-do_movecopy_file (SoupServerMessage *msg, GFile *file,
-                  GFile *dest, const gchar *dest_path,
-                  GCancellable *cancellable, GError **err)
+do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar *dest_path, GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gboolean overwrite;
@@ -98,10 +95,11 @@ again:
   switch (depth)
     {
     case DEPTH_INFINITY:
-    case DEPTH_ZERO: {
+    case DEPTH_ZERO:
+      {
         copy
-        ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
-        : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
+          ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
+          : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
 
         if (overwrite && !retry &&
             (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
@@ -153,8 +151,7 @@ end:
 }
 
 gint
-phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
-                        const gchar *path, GError **err)
+phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);

@@ -15,6 +15,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
+
 #include <glib.h>
 
 #include "libphodav/phodav.h"
@@ -54,8 +55,7 @@ delete_file_recursive (GFile *file)
 }
 
 static gboolean
-reject_auth (SoupAuthDomain *domain, SoupServerMessage *msg,
-             const gchar *username, const gchar *password, gpointer data)
+reject_auth (SoupAuthDomain *domain, SoupServerMessage *msg, const gchar *username, const gchar *password, gpointer data)
 {
   return FALSE;
 }
@@ -80,9 +80,10 @@ gint
 main (gint argc, gchar *argv[])
 {
   gboolean quit_on_stdin = FALSE;
-  if (argc >= 2 && g_strcmp0 (argv[1], "--quit-on-stdin") == 0) {
-    quit_on_stdin = TRUE;
-  }
+  if (argc >= 2 && g_strcmp0 (argv[1], "--quit-on-stdin") == 0)
+    {
+      quit_on_stdin = TRUE;
+    }
 
   g_autoptr(GFile) root_dir = g_file_new_for_path ("./phodav-virtual-root");
   g_autoptr(GFile) real_dir = g_file_get_child (root_dir, "real");
@@ -103,7 +104,7 @@ main (gint argc, gchar *argv[])
   g_autoptr(PhodavVirtualDir) virtual_dir = phodav_virtual_dir_new_dir (root, "/virtual", NULL);
   phodav_virtual_dir_attach_real_child (virtual_dir, real_dir);
 
-  g_autoptr(PhodavServer) phodav = phodav_server_new_for_root_file (G_FILE(root));
+  g_autoptr(PhodavServer) phodav = phodav_server_new_for_root_file (G_FILE (root));
 
   SoupServer *server = phodav_server_get_soup_server (phodav);
   g_autoptr(GError) error = NULL;
@@ -123,15 +124,16 @@ main (gint argc, gchar *argv[])
 
   g_autoptr(GMainLoop) loop = g_main_loop_new (NULL, FALSE);
 
-  if (quit_on_stdin) {
-    g_autoptr(GIOChannel) stdin_channel = NULL;
+  if (quit_on_stdin)
+    {
+      g_autoptr(GIOChannel) stdin_channel = NULL;
 #ifdef G_OS_WIN32
-    stdin_channel = g_io_channel_win32_new_fd (0);
+      stdin_channel = g_io_channel_win32_new_fd (0);
 #else
-    stdin_channel = g_io_channel_unix_new (0);
+      stdin_channel = g_io_channel_unix_new (0);
 #endif
-    g_io_add_watch (stdin_channel, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_watch, loop);
-  }
+      g_io_add_watch (stdin_channel, G_IO_IN | G_IO_HUP | G_IO_ERR, stdin_watch, loop);
+    }
 
   g_autoslist(GUri) uris = soup_server_get_uris (server);
   g_assert_nonnull (uris);

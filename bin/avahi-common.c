@@ -37,7 +37,8 @@ static gboolean s_local;
 static gboolean
 ifaddr_is_loopback (struct ifaddrs *ifa)
 {
-  union {
+  union
+  {
     struct sockaddr_in *in;
     struct sockaddr_in6 *in6;
   } sa;
@@ -50,12 +51,12 @@ ifaddr_is_loopback (struct ifaddrs *ifa)
 
   switch (ifa->ifa_addr->sa_family)
     {
-      case AF_INET:
-        sa.in = (struct sockaddr_in *)(ifa->ifa_addr);
-        return sa.in->sin_addr.s_addr == g_htonl (0x7f000001); // 127.0.0.1
-      case AF_INET6:
-        sa.in6 = (struct sockaddr_in6 *)(ifa->ifa_addr);
-        return IN6_IS_ADDR_LOOPBACK (&sa.in6->sin6_addr);
+    case AF_INET:
+      sa.in = (struct sockaddr_in *) (ifa->ifa_addr);
+      return sa.in->sin_addr.s_addr == g_htonl (0x7f000001); // 127.0.0.1
+    case AF_INET6:
+      sa.in6 = (struct sockaddr_in6 *) (ifa->ifa_addr);
+      return IN6_IS_ADDR_LOOPBACK (&sa.in6->sin6_addr);
     }
   return FALSE;
 }
@@ -68,7 +69,7 @@ get_loopback_if_id (void)
 
   if (getifaddrs (&ifaddr) == -1)
     {
-      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror(errno));
+      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror (errno));
       return id;
     }
 

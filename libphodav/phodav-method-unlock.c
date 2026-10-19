@@ -35,14 +35,13 @@ remove_brackets (const gchar *str)
 }
 
 gint
-phodav_method_unlock (PathHandler *handler, SoupServerMessage *msg,
-                      const gchar *path, GError **err)
+phodav_method_unlock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   DAVLock *lock;
   gint status = SOUP_STATUS_BAD_REQUEST;
 
   gchar *token = remove_brackets (
-                                  soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Lock-Token"));
+    soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Lock-Token"));
 
   g_return_val_if_fail (token != NULL, SOUP_STATUS_BAD_REQUEST);
 

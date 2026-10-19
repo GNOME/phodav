@@ -17,40 +17,38 @@
 #pragma once
 
 #include <libsoup/soup.h>
+
 #include "phodav-priv.h"
 
 G_BEGIN_DECLS
 
-void             remove_trailing                 (gchar *str, gchar c);
-gboolean         path_has_dot_dot_segment        (const gchar *path);
+void remove_trailing (gchar *str, gchar c);
+gboolean path_has_dot_dot_segment (const gchar *path);
 
-DepthType        depth_from_string               (const gchar *depth);
-const gchar *    depth_to_string                 (DepthType depth);
-guint            timeout_from_string             (const gchar *timeout);
+DepthType depth_from_string (const gchar *depth);
+const gchar *depth_to_string (DepthType depth);
+guint timeout_from_string (const gchar *timeout);
 
-typedef struct _DavDoc     DavDoc;
+typedef struct _DavDoc DavDoc;
 
 struct _DavDoc
 {
-  xmlDocPtr  doc;
+  xmlDocPtr doc;
   xmlNodePtr root;
 
-  GUri      *target;
-  gchar     *path;
+  GUri *target;
+  gchar *path;
 };
 
-gboolean         davdoc_parse                    (DavDoc *dd, SoupServerMessage *msg,
-                                                  SoupMessageBody *body,
-                                                  const gchar *name);
-void             davdoc_free                     (DavDoc *dd);
+gboolean davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const gchar *name);
+void davdoc_free (DavDoc *dd);
 
-void             xml_node_to_string              (xmlNodePtr root, xmlChar **mem, gint *size);
-gboolean         xml_node_is_element             (xmlNodePtr node);
-gboolean         xml_node_has_name               (xmlNodePtr node, const gchar *name);
-gboolean         xml_node_has_name_ns            (xmlNodePtr node, const gchar *name,
-                                                  const gchar *ns_href);
-gboolean         xml_node_has_ns                 (xmlNodePtr node, const gchar *ns_href);
-void             xml_node_debug                  (xmlNodePtr node);
-gchar *          xml_node_get_xattr_name         (xmlNodePtr node, const gchar *prefix);
+void xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size);
+gboolean xml_node_is_element (xmlNodePtr node);
+gboolean xml_node_has_name (xmlNodePtr node, const gchar *name);
+gboolean xml_node_has_name_ns (xmlNodePtr node, const gchar *name, const gchar *ns_href);
+gboolean xml_node_has_ns (xmlNodePtr node, const gchar *ns_href);
+void xml_node_debug (xmlNodePtr node);
+gchar *xml_node_get_xattr_name (xmlNodePtr node, const gchar *prefix);
 
 G_END_DECLS

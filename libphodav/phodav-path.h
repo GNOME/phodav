@@ -22,14 +22,14 @@ G_BEGIN_DECLS
 
 struct _Path
 {
-  gchar         *path;
-  GList         *locks;
-  guint32        refs;
+  gchar *path;
+  GList *locks;
+  guint32 refs;
 };
 
-Path *                  path_ref                    (Path *path);
-void                    path_unref                  (Path *path);
-void                    path_remove_lock            (Path *path, DAVLock *lock);
-void                    path_add_lock               (Path *path, DAVLock *lock);
+Path *path_ref (Path *path);
+void path_unref (Path *path);
+void path_remove_lock (Path *path, DAVLock *lock);
+void path_add_lock (Path *path, DAVLock *lock);
 
 G_END_DECLS

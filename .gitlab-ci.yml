@@ -55,6 +55,17 @@ build:
     expire_in: 1 week
     when: always
 
+formatting:
+  stage: build
+  # The .clang-format file requires clang-format >= 17 ("Language: C");
+  # keep this image in sync with the version the sources were formatted with
+  image: fedora:44
+  before_script:
+    - dnf install -y --nogpgcheck clang-tools-extra
+  script:
+    - clang-format --version
+    - find libphodav bin tests -name '*.[ch]' -print0 | xargs -0 clang-format --dry-run -Werror
+
 # Temporarily disabled because libsoup 3 is not yet available:
 # https://gitlab.gnome.org/GNOME/phodav/-/merge_requests/27#note_1488522
 #

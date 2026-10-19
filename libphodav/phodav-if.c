@@ -23,10 +23,10 @@
 
 typedef struct _IfState
 {
-  gchar   *cur;
-  GUri    *base;
-  gchar   *path;
-  GList   *locks;
+  gchar *cur;
+  GUri *base;
+  gchar *path;
+  GList *locks;
   gboolean error;
 } IfState;
 
@@ -58,7 +58,7 @@ accept_token (IfState *state, const gchar *token)
   return success;
 }
 
-static const gchar*
+static const gchar *
 accept_ref (IfState *state)
 {
   gchar *url, *end;
@@ -78,7 +78,7 @@ accept_ref (IfState *state)
   return NULL;
 }
 
-static gchar*
+static gchar *
 accept_etag (IfState *state)
 {
   g_autoptr(GString) str = NULL;
@@ -283,19 +283,21 @@ eval_if_tag (PathHandler *handler, IfState *state)
   return eval_if_lists (handler, state);
 }
 
-
 static gboolean
 eval_if (PathHandler *handler, IfState *state)
 {
   gboolean success = FALSE;
 
-  if (next_token (state, "<")) {
-    while (!state->error && !eat_whitespaces (state))
-      success |= eval_if_tag (handler, state);
-  } else {
-    while (!state->error && !eat_whitespaces (state))
-      success |= eval_if_lists (handler, state);
-  }
+  if (next_token (state, "<"))
+    {
+      while (!state->error && !eat_whitespaces (state))
+        success |= eval_if_tag (handler, state);
+    }
+  else
+    {
+      while (!state->error && !eat_whitespaces (state))
+        success |= eval_if_lists (handler, state);
+    }
 
   return success;
 }
@@ -333,7 +335,8 @@ phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path
 
 end:
   status = success ? SOUP_STATUS_OK
-           : str ? SOUP_STATUS_PRECONDITION_FAILED : SOUP_STATUS_LOCKED;
+           : str   ? SOUP_STATUS_PRECONDITION_FAILED
+                   : SOUP_STATUS_LOCKED;
 
   if (success && !copy && server_path_has_other_locks (server, path, *locks))
     status = SOUP_STATUS_LOCKED;

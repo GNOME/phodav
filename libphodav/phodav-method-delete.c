@@ -32,9 +32,7 @@ error_to_status (GError *err)
 }
 
 gint
-phodav_delete_file (const gchar *path, GFile *file,
-                    GHashTable *mstatus,
-                    GCancellable *cancellable)
+phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
 {
   g_autoptr(GFileEnumerator) e = NULL;
   g_autoptr(GError) error = NULL;
@@ -77,8 +75,7 @@ phodav_delete_file (const gchar *path, GFile *file,
 }
 
 gint
-phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
-                      const gchar *path, GError **err)
+phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;

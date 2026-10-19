@@ -22,10 +22,10 @@
  * The htdigest file contains two users of the server realm and one
  * user of another realm, to exercise the file parsing too. */
 
-#include <stdlib.h>
-#include <string.h>
 #include <glib.h>
 #include <libsoup/soup.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifdef G_OS_UNIX
 #include <signal.h>
@@ -47,12 +47,13 @@ static pid_t server_pid;
 
 static const gchar test_put_data[] = "test_put: test data";
 
-typedef struct _AuthCase {
+typedef struct _AuthCase
+{
   const gchar *username; /* NULL: don't send credentials */
   const gchar *password;
   const gchar *method;
   const gchar *path;
-  guint        status_code;
+  guint status_code;
 } AuthCase;
 
 static void
@@ -171,7 +172,7 @@ launch_server (const gchar *htdigest)
 
   g_ptr_array_add (args, NULL);
 
-  server = g_subprocess_newv ((const gchar * const *) args->pdata,
+  server = g_subprocess_newv ((const gchar *const *) args->pdata,
                               G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE,
                               &error);
 
@@ -221,7 +222,7 @@ wait_for_server (void)
   for (i = 0; i < 100; i++)
     {
       g_autoptr(GSocketConnection) connection =
-        g_socket_client_connect_to_host (client, "127.0.0.1", PORT, NULL, NULL);
+                   g_socket_client_connect_to_host (client, "127.0.0.1", PORT, NULL, NULL);
 
       if (connection)
         {
@@ -259,8 +260,7 @@ wait_for_server (void)
 }
 
 static gboolean
-authenticate_cb (SoupMessage *msg, SoupAuth *auth, gboolean retrying,
-                 gpointer user_data)
+authenticate_cb (SoupMessage *msg, SoupAuth *auth, gboolean retrying, gpointer user_data)
 {
   const AuthCase *test = user_data;
 
@@ -335,7 +335,8 @@ test_chezdav (gconstpointer data)
   g_assert_cmpint (soup_message_get_status (msg), ==, test->status_code);
 
   /* read the response body to completion, to finish the exchange */
-  while (g_input_stream_read (in, buf, sizeof (buf), NULL, &error) > 0);
+  while (g_input_stream_read (in, buf, sizeof (buf), NULL, &error) > 0)
+    ;
   g_assert_no_error (error);
 
   if (test->method == SOUP_METHOD_PUT)
@@ -395,33 +396,33 @@ main (gint argc, gchar *argv[])
    * or not by the previous requests */
   const AuthCase tests[] = {
     /* without credentials, nothing is accessible */
-    {NULL, NULL, SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED},
-    {NULL, NULL, SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_UNAUTHORIZED},
+    { NULL, NULL, SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED },
+    { NULL, NULL, SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_UNAUTHORIZED },
 
     /* the digest password must be checked */
-    {"user1", "wrong", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED},
-    {"user1", "wrong", SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_UNAUTHORIZED},
+    { "user1", "wrong", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED },
+    { "user1", "wrong", SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_UNAUTHORIZED },
 
     /* unknown users are rejected */
-    {"nobody", "password1", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED},
+    { "nobody", "password1", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED },
 
     /* users of another realm are not accepted */
-    {"other", "password3", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED},
+    { "other", "password3", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_UNAUTHORIZED },
 
     /* valid credentials are accepted */
-    {"user1", "password1", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_OK},
+    { "user1", "password1", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_OK },
     /* the second entry of the htdigest file works too, on first attempt */
-    {"user2", "password2", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_OK},
-    {"user1", "password1", SOUP_METHOD_GET, "/non-existent", SOUP_STATUS_NOT_FOUND},
-    {"user2", "password2", SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_CREATED},
+    { "user2", "password2", SOUP_METHOD_GET, "/test.txt", SOUP_STATUS_OK },
+    { "user1", "password1", SOUP_METHOD_GET, "/non-existent", SOUP_STATUS_NOT_FOUND },
+    { "user2", "password2", SOUP_METHOD_PUT, "/put.txt", SOUP_STATUS_CREATED },
   };
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)
     {
       g_autofree gchar *test_path = g_strdup_printf ("/chezdav/%s-%s/%s%s",
-                                          tests[i].username ? tests[i].username : "anonymous",
-                                          tests[i].password ? tests[i].password : "",
-                                          tests[i].method, tests[i].path);
+                                                     tests[i].username ? tests[i].username : "anonymous",
+                                                     tests[i].password ? tests[i].password : "",
+                                                     tests[i].method, tests[i].path);
       g_test_add_data_func (test_path, &tests[i], test_chezdav);
     }
 

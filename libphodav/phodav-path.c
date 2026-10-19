@@ -17,43 +17,44 @@
 #include "config.h"
 
 #include "phodav-path.h"
+
 #include "phodav-lock.h"
 
 Path *
 path_ref (Path *path)
 {
-    path->refs++;
+  path->refs++;
 
-    return path;
+  return path;
 }
 
 void
 path_unref (Path *path)
 {
-    path->refs--;
+  path->refs--;
 
-    if (path->refs == 0)
+  if (path->refs == 0)
     {
-        g_list_free_full (path->locks, (GDestroyNotify) dav_lock_free);
-        g_free (path->path);
-        g_free (path);
+      g_list_free_full (path->locks, (GDestroyNotify) dav_lock_free);
+      g_free (path->path);
+      g_free (path);
     }
 }
 
 void
 path_remove_lock (Path *path, DAVLock *lock)
 {
-    g_return_if_fail (path);
-    g_return_if_fail (lock);
+  g_return_if_fail (path);
+  g_return_if_fail (lock);
 
-    path->locks =  g_list_remove (path->locks, lock);
+  path->locks = g_list_remove (path->locks, lock);
 }
 
 void
 path_add_lock (Path *path, DAVLock *lock)
 {
-    g_return_if_fail (path);
-    g_return_if_fail (lock);
+  g_return_if_fail (path);
+  g_return_if_fail (lock);
 
-    path->locks = g_list_append (path->locks, lock);
+  path->locks = g_list_append (path->locks, lock);
 }

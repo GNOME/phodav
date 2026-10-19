@@ -33,8 +33,8 @@ G_BEGIN_DECLS
  */
 G_DECLARE_FINAL_TYPE (PhodavServer, phodav_server, PHODAV, SERVER, GObject)
 
-PhodavServer *  phodav_server_new               (const gchar *root);
-PhodavServer *  phodav_server_new_for_root_file (GFile *root);
-SoupServer *    phodav_server_get_soup_server   (PhodavServer *server);
+PhodavServer *phodav_server_new (const gchar *root);
+PhodavServer *phodav_server_new_for_root_file (GFile *root);
+SoupServer *phodav_server_get_soup_server (PhodavServer *server);
 
 G_END_DECLS

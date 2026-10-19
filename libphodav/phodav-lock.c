@@ -32,10 +32,7 @@ dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
 }
 
 DAVLock *
-dav_lock_new (Path *path, const gchar *token,
-              DAVLockScopeType scope, DAVLockType type,
-              DepthType depth, const xmlNodePtr owner,
-              guint timeout)
+dav_lock_new (Path *path, const gchar *token, DAVLockScopeType scope, DAVLockType type, DepthType depth, const xmlNodePtr owner, guint timeout)
 {
   DAVLock *lock;
 
@@ -92,7 +89,7 @@ lockscope_to_string (DAVLockScopeType type)
 
 xmlNodePtr
 dav_lock_get_activelock_node (const DAVLock *lock,
-                              xmlNsPtr       ns)
+                              xmlNsPtr ns)
 {
   xmlNodePtr node, active;
 
@@ -118,7 +115,7 @@ dav_lock_get_activelock_node (const DAVLock *lock,
   if (lock->timeout)
     {
       g_autofree gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -
-                                               g_get_monotonic_time () / G_USEC_PER_SEC);
+                                                                             g_get_monotonic_time () / G_USEC_PER_SEC);
       node = xmlNewChild (active, ns, BAD_CAST "timeout", NULL);
       xmlAddChild (node, xmlNewText (BAD_CAST tmp));
     }
@@ -158,12 +155,12 @@ locks_submitted_has (GList *locks, DAVLock *lock)
   GList *l;
 
   for (l = locks; l != NULL; l = l->next)
-  {
-    LockSubmitted *sub = l->data;
-    if (g_strcmp0 (sub->path, lock->path->path) == 0 &&
-        g_strcmp0 (sub->token, lock->token) == 0)
-      return TRUE;
-  }
+    {
+      LockSubmitted *sub = l->data;
+      if (g_strcmp0 (sub->path, lock->path->path) == 0 &&
+          g_strcmp0 (sub->token, lock->token) == 0)
+        return TRUE;
+    }
 
   g_message ("missing lock: %s %s", lock->path->path, lock->token);
 

@@ -42,7 +42,7 @@ response_free (Response *h)
   g_free (h);
 }
 
-static gchar*
+static gchar *
 status_to_string (gint status)
 {
   return g_strdup_printf ("HTTP/1.1 %d %s",
@@ -63,8 +63,7 @@ status_node_new (xmlNsPtr ns, gint status)
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg,
-              const gchar *path, GList *props)
+add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg, const gchar *path, GList *props)
 {
   xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
   GList *s;
@@ -95,7 +94,7 @@ add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg,
 
 gint
 set_response_multistatus (SoupServerMessage *msg,
-                          GHashTable  *mstatus)
+                          GHashTable *mstatus)
 {
   xmlChar *mem = NULL;
   gint size;

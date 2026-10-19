@@ -17,6 +17,7 @@
 #pragma once
 
 #include <libsoup/soup.h>
+
 #include "phodav-priv.h"
 
 G_BEGIN_DECLS
@@ -24,13 +25,13 @@ G_BEGIN_DECLS
 typedef struct _Response
 {
   GList *props;
-  gint   status;
+  gint status;
 } Response;
 
-Response *     response_new                      (GList       *props,
-                                                  gint         status);
-void           response_free                     (Response    *h);
+Response *response_new (GList *props,
+                        gint status);
+void response_free (Response *h);
 
-gint           set_response_multistatus          (SoupServerMessage *msg,
-                                                  GHashTable        *mstatus);
+gint set_response_multistatus (SoupServerMessage *msg,
+                               GHashTable *mstatus);
 G_END_DECLS

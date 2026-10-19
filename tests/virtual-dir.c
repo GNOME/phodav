@@ -15,6 +15,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
+
 #include <glib.h>
 
 #include "libphodav/phodav.h"
@@ -24,10 +25,11 @@ static gchar *server_uri;
 
 static const gchar test_put_data[] = "test_put: test data";
 
-typedef struct _TestCase {
+typedef struct _TestCase
+{
   const gchar *method;
   const gchar *path;
-  guint        status_code;
+  guint status_code;
   const gchar *destination;
   const gchar *if_header;
 } TestCase;
@@ -126,36 +128,40 @@ main (gint argc, gchar *argv[])
     G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
     "tests/virtual-dir-server", "--quit-on-stdin", NULL);
 
-  if (error) {
-    g_printerr ("Failed to launch virtual-dir-server: %s\n", error->message);
-    return 1;
-  }
+  if (error)
+    {
+      g_printerr ("Failed to launch virtual-dir-server: %s\n", error->message);
+      return 1;
+    }
 
   /* wait for the server to start */
   g_autoptr(GDataInputStream) stream = g_data_input_stream_new (g_subprocess_get_stdout_pipe (server_subproc));
   g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (stream), FALSE);
   gboolean server_started = FALSE;
-  while (!server_started) {
-    gchar *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
+  while (!server_started)
+    {
+      gchar *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
 
-    if (error) {
-      g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);
-      return 1;
+      if (error)
+        {
+          g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);
+          return 1;
+        }
+
+      if (line == NULL)
+        {
+          g_printerr ("Failed to start virtual-dir-server\n");
+          return 1;
+        }
+
+      /* the server prints "OK <port>" once it listens */
+      if (g_str_has_prefix (line, "OK "))
+        {
+          server_uri = g_strdup_printf ("dav://127.0.0.1:%s/", line + 3);
+          server_started = TRUE;
+        }
+      g_free (line);
     }
-
-    if (line == NULL) {
-      g_printerr ("Failed to start virtual-dir-server\n");
-      return 1;
-    }
-
-    /* the server prints "OK <port>" once it listens */
-    if (g_str_has_prefix (line, "OK "))
-      {
-        server_uri = g_strdup_printf ("dav://127.0.0.1:%s/", line + 3);
-        server_started = TRUE;
-      }
-    g_free (line);
-  }
   g_clear_object (&stream);
 
   g_test_init (&argc, &argv, NULL);
@@ -165,56 +171,56 @@ main (gint argc, gchar *argv[])
 
   /* the order matters, some tests depend on the previous ones */
   const TestCase tests[] = {
-    {SOUP_METHOD_GET, "/", SOUP_STATUS_OK},
-    {SOUP_METHOD_GET, "/virtual", SOUP_STATUS_OK},
-    {SOUP_METHOD_GET, "/non-existent", SOUP_STATUS_NOT_FOUND},
-    {SOUP_METHOD_GET, "/virtual/non-existent", SOUP_STATUS_NOT_FOUND},
-    {SOUP_METHOD_GET, "/virtual/real", SOUP_STATUS_OK},
+    { SOUP_METHOD_GET, "/", SOUP_STATUS_OK },
+    { SOUP_METHOD_GET, "/virtual", SOUP_STATUS_OK },
+    { SOUP_METHOD_GET, "/non-existent", SOUP_STATUS_NOT_FOUND },
+    { SOUP_METHOD_GET, "/virtual/non-existent", SOUP_STATUS_NOT_FOUND },
+    { SOUP_METHOD_GET, "/virtual/real", SOUP_STATUS_OK },
 
-    {SOUP_METHOD_MKCOL, "/A", SOUP_STATUS_CREATED},
-    {SOUP_METHOD_MKCOL, "/virtual/B", SOUP_STATUS_FORBIDDEN},
-    {SOUP_METHOD_MKCOL, "/virtual/real/B", SOUP_STATUS_CREATED},
+    { SOUP_METHOD_MKCOL, "/A", SOUP_STATUS_CREATED },
+    { SOUP_METHOD_MKCOL, "/virtual/B", SOUP_STATUS_FORBIDDEN },
+    { SOUP_METHOD_MKCOL, "/virtual/real/B", SOUP_STATUS_CREATED },
 
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/test-copy.txt"},
-    {SOUP_METHOD_COPY, "/virtual", SOUP_STATUS_FORBIDDEN, "/virtual-copy"},
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_FORBIDDEN, "/virtual/test-copy.txt"},
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/virtual/real/test-copy.txt"},
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/test-copy.txt" },
+    { SOUP_METHOD_COPY, "/virtual", SOUP_STATUS_FORBIDDEN, "/virtual-copy" },
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_FORBIDDEN, "/virtual/test-copy.txt" },
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/virtual/real/test-copy.txt" },
 
-    {SOUP_METHOD_PUT, "/test-put.txt", SOUP_STATUS_CREATED},
-    {SOUP_METHOD_PUT, "/virtual/test-put.txt", SOUP_STATUS_INTERNAL_SERVER_ERROR},
-    {SOUP_METHOD_PUT, "/virtual/real/test-put.txt", SOUP_STATUS_CREATED},
+    { SOUP_METHOD_PUT, "/test-put.txt", SOUP_STATUS_CREATED },
+    { SOUP_METHOD_PUT, "/virtual/test-put.txt", SOUP_STATUS_INTERNAL_SERVER_ERROR },
+    { SOUP_METHOD_PUT, "/virtual/real/test-put.txt", SOUP_STATUS_CREATED },
 
-    {SOUP_METHOD_DELETE, "/A", SOUP_STATUS_NO_CONTENT},
-    {SOUP_METHOD_DELETE, "/virtual/real/B", SOUP_STATUS_NO_CONTENT},
-    {SOUP_METHOD_DELETE, "/virtual", SOUP_STATUS_FORBIDDEN},
+    { SOUP_METHOD_DELETE, "/A", SOUP_STATUS_NO_CONTENT },
+    { SOUP_METHOD_DELETE, "/virtual/real/B", SOUP_STATUS_NO_CONTENT },
+    { SOUP_METHOD_DELETE, "/virtual", SOUP_STATUS_FORBIDDEN },
 
     /* encoded slashes must not allow escaping the root */
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-copy.txt"},
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/..%2fescaped-copy.txt"},
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2F..%2F..%2Fescaped-copy.txt"},
-    {SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/%2e%2e/escaped-copy.txt"},
-    {SOUP_METHOD_MOVE, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-move.txt"},
-    {SOUP_METHOD_PUT, "/..%2fescaped-put.txt", SOUP_STATUS_BAD_REQUEST},
-    {SOUP_METHOD_MKCOL, "/..%2fescaped-mkcol", SOUP_STATUS_BAD_REQUEST},
-    {SOUP_METHOD_GET, "/..%2fphodav-virtual-root%2ftest.txt", SOUP_STATUS_BAD_REQUEST},
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-copy.txt" },
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/..%2fescaped-copy.txt" },
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2F..%2F..%2Fescaped-copy.txt" },
+    { SOUP_METHOD_COPY, "/test.txt", SOUP_STATUS_CREATED, "/%2e%2e/escaped-copy.txt" },
+    { SOUP_METHOD_MOVE, "/test.txt", SOUP_STATUS_BAD_REQUEST, "/x%2f..%2f..%2fescaped-move.txt" },
+    { SOUP_METHOD_PUT, "/..%2fescaped-put.txt", SOUP_STATUS_BAD_REQUEST },
+    { SOUP_METHOD_MKCOL, "/..%2fescaped-mkcol", SOUP_STATUS_BAD_REQUEST },
+    { SOUP_METHOD_GET, "/..%2fphodav-virtual-root%2ftest.txt", SOUP_STATUS_BAD_REQUEST },
 
     /* libsoup authentication must be enforced */
-    {SOUP_METHOD_GET, "/protected", SOUP_STATUS_UNAUTHORIZED},
-    {SOUP_METHOD_PUT, "/protected/test-put.txt", SOUP_STATUS_UNAUTHORIZED},
+    { SOUP_METHOD_GET, "/protected", SOUP_STATUS_UNAUTHORIZED },
+    { SOUP_METHOD_PUT, "/protected/test-put.txt", SOUP_STATUS_UNAUTHORIZED },
 
     /* invalid If headers must be rejected, without crashing or hanging the server */
-    {SOUP_METHOD_DELETE, "/if-1", SOUP_STATUS_BAD_REQUEST, NULL, "(x)"},
-    {SOUP_METHOD_DELETE, "/if-2", SOUP_STATUS_BAD_REQUEST, NULL, "("},
-    {SOUP_METHOD_DELETE, "/if-3", SOUP_STATUS_BAD_REQUEST, NULL, "(<opaquelocktoken:x>"},
-    {SOUP_METHOD_DELETE, "/if-4", SOUP_STATUS_BAD_REQUEST, NULL, "<http://localhost/x"},
-    {SOUP_METHOD_DELETE, "/if-5", SOUP_STATUS_BAD_REQUEST, NULL, "([\"etag"},
-    {SOUP_METHOD_DELETE, "/if-6", SOUP_STATUS_BAD_REQUEST, NULL, "</a%2f..%2f..%2fx> ([\"etag\"])"},
-    {SOUP_METHOD_DELETE, "/if-7", SOUP_STATUS_PRECONDITION_FAILED, NULL, "(<opaquelocktoken:x>)"},
-    {SOUP_METHOD_DELETE, "/if-8", SOUP_STATUS_PRECONDITION_FAILED, NULL, "</if-8> (<opaquelocktoken:x>)"},
-    {SOUP_METHOD_DELETE, "/if-9", SOUP_STATUS_PRECONDITION_FAILED, NULL, "<if-9> (<opaquelocktoken:x>)"},
+    { SOUP_METHOD_DELETE, "/if-1", SOUP_STATUS_BAD_REQUEST, NULL, "(x)" },
+    { SOUP_METHOD_DELETE, "/if-2", SOUP_STATUS_BAD_REQUEST, NULL, "(" },
+    { SOUP_METHOD_DELETE, "/if-3", SOUP_STATUS_BAD_REQUEST, NULL, "(<opaquelocktoken:x>" },
+    { SOUP_METHOD_DELETE, "/if-4", SOUP_STATUS_BAD_REQUEST, NULL, "<http://localhost/x" },
+    { SOUP_METHOD_DELETE, "/if-5", SOUP_STATUS_BAD_REQUEST, NULL, "([\"etag" },
+    { SOUP_METHOD_DELETE, "/if-6", SOUP_STATUS_BAD_REQUEST, NULL, "</a%2f..%2f..%2fx> ([\"etag\"])" },
+    { SOUP_METHOD_DELETE, "/if-7", SOUP_STATUS_PRECONDITION_FAILED, NULL, "(<opaquelocktoken:x>)" },
+    { SOUP_METHOD_DELETE, "/if-8", SOUP_STATUS_PRECONDITION_FAILED, NULL, "</if-8> (<opaquelocktoken:x>)" },
+    { SOUP_METHOD_DELETE, "/if-9", SOUP_STATUS_PRECONDITION_FAILED, NULL, "<if-9> (<opaquelocktoken:x>)" },
     /* conditions that hold, the file doesn't exist */
-    {SOUP_METHOD_DELETE, "/if-10", SOUP_STATUS_NOT_FOUND, NULL, "(Not <DAV:no-lock>)"},
-    {SOUP_METHOD_DELETE, "/if-11", SOUP_STATUS_NOT_FOUND, NULL, "</if-11> (Not <DAV:no-lock>)"},
+    { SOUP_METHOD_DELETE, "/if-10", SOUP_STATUS_NOT_FOUND, NULL, "(Not <DAV:no-lock>)" },
+    { SOUP_METHOD_DELETE, "/if-11", SOUP_STATUS_NOT_FOUND, NULL, "</if-11> (Not <DAV:no-lock>)" },
   };
 
   for (guint i = 0; i < G_N_ELEMENTS (tests); i++)

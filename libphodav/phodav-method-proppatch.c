@@ -27,7 +27,6 @@
 #include <sys/xattr.h>
 #endif
 
-
 static xmlBufferPtr
 node_children_to_string (xmlNodePtr node)
 {
@@ -40,8 +39,7 @@ node_children_to_string (xmlNodePtr node)
 }
 
 static gint
-set_attr (GFile *file, xmlNodePtr attrnode,
-          GFileAttributeType type, gchar *mem, GCancellable *cancellable)
+set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem, GCancellable *cancellable)
 {
   g_autofree gchar *attrname = NULL;
   gint status = SOUP_STATUS_OK;
@@ -91,8 +89,11 @@ set_attr (GFile *file, xmlNodePtr attrnode,
 
 static gint
 prop_set (SoupServerMessage *msg,
-          GFile *file, xmlNodePtr parent, xmlNodePtr *attr,
-          gboolean remove, GCancellable *cancellable)
+          GFile *file,
+          xmlNodePtr parent,
+          xmlNodePtr *attr,
+          gboolean remove,
+          GCancellable *cancellable)
 {
   xmlNodePtr node, attrnode;
   gint type = G_FILE_ATTRIBUTE_TYPE_INVALID;
@@ -132,13 +133,14 @@ prop_set (SoupServerMessage *msg,
 }
 
 gint
-phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg,
-                         const gchar *path, GError **err)
+phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
-  g_autoptr(GHashTable) mstatus = NULL;   // path -> statlist
-  DavDoc doc = {0, };
+  g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
+  DavDoc doc = {
+    0,
+  };
   xmlNodePtr node = NULL, attr = NULL;
   GList *props = NULL, *submitted = NULL;
   gint status;

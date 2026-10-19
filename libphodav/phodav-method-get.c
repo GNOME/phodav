@@ -82,8 +82,7 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 }
 
 static gint
-method_get (SoupServerMessage *msg, GFile *file,
-            GCancellable *cancellable, GError **err)
+method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
