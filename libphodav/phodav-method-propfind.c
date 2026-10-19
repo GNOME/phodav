@@ -187,7 +187,7 @@ prop_creationdate (PathHandler *handler, PropFind *pf, const gchar *path, GFileI
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, NODE_DATE_FORMAT_HTTP);
+    node_add_time (node, time, NODE_DATE_FORMAT_ISO8601);
 
 end:
   PROP_SET_STATUS (node, status);
