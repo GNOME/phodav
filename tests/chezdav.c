@@ -331,6 +331,7 @@ test_chezdav (gconstpointer data)
   session = soup_session_new ();
   in = soup_session_send (session, msg, NULL, &error);
   g_assert_no_error (error);
+  g_assert_nonnull (in);
 
   g_assert_cmpint (soup_message_get_status (msg), ==, test->status_code);
 
