@@ -35,7 +35,10 @@ path_unref (Path *path)
 
   if (path->refs == 0)
     {
-      g_list_free_full (path->locks, (GDestroyNotify) dav_lock_free);
+      /* the locks remove themselves from the list when freed */
+      while (path->locks)
+        dav_lock_free (path->locks->data);
+
       g_free (path->path);
       g_free (path);
     }
