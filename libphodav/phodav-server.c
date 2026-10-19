@@ -69,13 +69,37 @@ static void request_started (SoupServer *server,
                              SoupServerMessage *message,
                              gpointer user_data);
 
+/* Canonicalize a request path for use as a key in the paths table:
+ * empty segments ("//") and trailing slashes are skipped, just like
+ * the walk in server_foreach_parent_path() does, so that locks are
+ * found again under whatever form the client used in its request. */
+static gchar *
+path_key (const gchar *_path)
+{
+  g_auto(GStrv) parts = g_strsplit (_path, "/", -1);
+  g_autoptr(GString) path = g_string_new (NULL);
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      if (!*parts[i])
+        continue;
+
+      g_string_append_c (path, '/');
+      g_string_append (path, parts[i]);
+    }
+
+  if (!path->len)
+    g_string_append_c (path, '/');
+
+  return g_string_free (g_steal_pointer (&path), FALSE);
+}
+
 Path *
 server_get_path (PhodavServer *self, const gchar *_path)
 {
   Path *p;
-  g_autofree gchar *path = g_strdup (_path);
+  g_autofree gchar *path = path_key (_path);
 
-  remove_trailing (path, '/');
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
     {

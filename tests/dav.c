@@ -887,6 +887,24 @@ test_lock (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_lock_double_slash (DavFixture *f, gconstpointer user_data)
+{
+  /* empty path segments are ignored: a lock taken on a resource
+   * addressed with a doubled slash can be released again under the
+   * same (or any other equivalent) form of the path */
+  g_autofree gchar *token = lock_resource (f, "//locked.txt", "Second-3600");
+
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "//locked.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  /* and the token is gone for any spelling of the path */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/locked.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+}
+
+static void
 test_lock_depth_infinity (DavFixture *f, gconstpointer user_data)
 {
   g_autofree gchar *token = NULL;
@@ -1057,6 +1075,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
 
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
+  g_test_add ("/dav/lock-double-slash", DavFixture, NULL, dav_fixture_setup, test_lock_double_slash, dav_fixture_teardown);
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
