@@ -28,7 +28,7 @@ response_new (GList *props, gint status)
 
   g_return_val_if_fail (props != NULL || status > 0, NULL);
 
-  r = g_slice_new0 (Response);
+  r = g_new0 (Response, 1);
   r->status = status;
   r->props = props;
 
@@ -39,7 +39,7 @@ void
 response_free (Response *h)
 {
   g_list_free_full (h->props, (GDestroyNotify) xmlFreeNode);
-  g_slice_free (Response, h);
+  g_free (h);
 }
 
 static gchar*

@@ -83,7 +83,7 @@ server_get_path (PhodavServer *self, const gchar *_path)
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
     {
-      p = g_slice_new0 (Path);
+      p = g_new0 (Path, 1);
       p->path = g_steal_pointer (&path);
       g_hash_table_insert (self->paths, p->path, path_ref (p));
     }
@@ -124,7 +124,7 @@ handler_get_readonly (PathHandler *handler)
 static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
-  PathHandler *h = g_slice_new0 (PathHandler);
+  PathHandler *h = g_new0 (PathHandler, 1);
 
   h->self = self;
   h->file = g_object_ref (file);
@@ -135,7 +135,7 @@ static void
 path_handler_free (PathHandler *h)
 {
   g_object_unref (h->file);
-  g_slice_free (PathHandler, h);
+  g_free (h);
 }
 
 static void

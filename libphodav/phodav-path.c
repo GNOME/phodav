@@ -36,7 +36,7 @@ path_unref (Path *path)
     {
         g_list_free_full (path->locks, (GDestroyNotify) dav_lock_free);
         g_free (path->path);
-        g_slice_free (Path, path);
+        g_free (path);
     }
 }
 

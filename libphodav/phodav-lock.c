@@ -42,7 +42,7 @@ dav_lock_new (Path *path, const gchar *token,
   g_return_val_if_fail (token, NULL);
   g_return_val_if_fail (strlen (token) == sizeof (lock->token), NULL);
 
-  lock = g_slice_new0 (DAVLock);
+  lock = g_new0 (DAVLock, 1);
   lock->path = path_ref (path);
   memcpy (lock->token, token, sizeof (lock->token));
   lock->scope = scope;
@@ -67,7 +67,7 @@ dav_lock_free (DAVLock *lock)
   if (lock->owner)
     xmlFreeNode (lock->owner);
 
-  g_slice_free (DAVLock, lock);
+  g_free (lock);
 }
 
 static const gchar *
@@ -134,7 +134,7 @@ lock_submitted_new (const gchar *path, const gchar *token)
   g_return_val_if_fail (path, NULL);
   g_return_val_if_fail (token, NULL);
 
-  l = g_slice_new (LockSubmitted);
+  l = g_new (LockSubmitted, 1);
 
   l->path = g_strdup (path);
   l->token = g_strdup (token);
@@ -149,7 +149,7 @@ lock_submitted_free (LockSubmitted *l)
 {
   g_free (l->path);
   g_free (l->token);
-  g_slice_free (LockSubmitted, l);
+  g_free (l);
 }
 
 gboolean

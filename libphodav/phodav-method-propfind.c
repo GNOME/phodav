@@ -32,7 +32,7 @@ typedef struct _PropFind
 static PropFind*
 propfind_new (void)
 {
-  PropFind *pf = g_slice_new0 (PropFind);
+  PropFind *pf = g_new0 (PropFind, 1);
 
   // TODO: a better hash for Node (name, ns)
   pf->props = g_hash_table_new (g_direct_hash, g_direct_equal);
@@ -46,7 +46,7 @@ propfind_free (PropFind *pf)
     return;
 
   g_hash_table_unref (pf->props);
-  g_slice_free (PropFind, pf);
+  g_free (pf);
 }
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (PropFind, propfind_free)
