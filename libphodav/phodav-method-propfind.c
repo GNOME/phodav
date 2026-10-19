@@ -210,7 +210,7 @@ prop_getlastmodified (PathHandler *handler, PropFind *pf,
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, NODE_DATE_FORMAT_ISO8601);
+    node_add_time (node, time, NODE_DATE_FORMAT_HTTP);
 
 end:
   PROP_SET_STATUS (node, status);
