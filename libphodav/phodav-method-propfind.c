@@ -17,6 +17,12 @@
 
 #include "config.h"
 
+#include <sys/types.h>
+
+#ifdef HAVE_SYS_XATTR_H
+#include <sys/xattr.h>
+#endif
+
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
@@ -473,9 +479,52 @@ prop_xattr (gchar *xattr)
   return node;
 }
 
+static gssize
+xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
+{
+#ifdef __APPLE__
+  return getxattr (path, name, value, size, 0, 0);
+#else
+  return getxattr (path, name, value, size);
+#endif
+}
+
+/* GIO escapes non-ASCII bytes in extended attribute values, which breaks
+ * UTF-8 property values. Read the raw value when possible and fall back
+ * to the escaped GIO value otherwise. */
+static gchar *
+xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
+{
+#ifdef HAVE_SYS_XATTR_H
+  g_autofree gchar *path = g_file_get_path (file);
+
+  if (path)
+    {
+      /* the "xattr::" namespace lists user attributes only */
+      g_autofree gchar *name = g_strdup_printf ("user.%s", xattr + strlen ("xattr::"));
+      gssize len = xattr_get (path, name, NULL, 0);
+
+      if (len > 0)
+        {
+          g_autofree gchar *value = g_malloc (len + 1);
+
+          if (xattr_get (path, name, value, len) == len)
+            {
+              value[len] = '\0';
+
+              if (g_utf8_validate (value, len, NULL))
+                return g_steal_pointer (&value);
+            }
+        }
+    }
+#endif
+
+  return g_strdup (g_file_info_get_attribute_string (info, xattr));
+}
+
 #define FILE_QUERY "standard::*,time::*,access::*,etag::*,xattr::*"
 static GList *
-propfind_populate (PathHandler *handler, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
+propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
 {
   GHashTableIter iter;
   xmlNodePtr node;
@@ -528,15 +577,12 @@ propfind_populate (PathHandler *handler, const gchar *path, PropFind *pf, GFileI
 
       if (i == G_N_ELEMENTS (prop_list))
         {
-          gchar *xattr = xml_node_get_xattr_name (node, "xattr::");
+          g_autofree gchar *xattr = xml_node_get_xattr_name (node, "xattr::");
+          g_autofree gchar *val = NULL;
           node = xmlCopyNode (node, 2);
-          const gchar *val = NULL;
 
           if (xattr)
-            {
-              val = g_file_info_get_attribute_string (info, xattr);
-              g_free (xattr);
-            }
+            val = xattr_get_value (file, info, xattr);
 
           if (val)
             {
@@ -577,7 +623,7 @@ propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHas
       return SOUP_STATUS_NOT_FOUND;
     }
 
-  stat = propfind_populate (handler, path, pf, info, ns);
+  stat = propfind_populate (handler, file, path, pf, info, ns);
   g_hash_table_insert (path_resp, g_strdup (path),
                        response_new (stat, 0));
 
@@ -610,8 +656,9 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
       if (!info)
         break;
 
+      g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
       g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
-      stat = propfind_populate (handler, path, pf, info, ns);
+      stat = propfind_populate (handler, child, path, pf, info, ns);
       g_hash_table_insert (path_resp, g_build_path ("/", path, escape, NULL),
                            response_new (stat, 0));
     }
