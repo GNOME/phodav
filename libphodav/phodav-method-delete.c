@@ -36,8 +36,8 @@ phodav_delete_file (const gchar *path, GFile *file,
                     GHashTable *mstatus,
                     GCancellable *cancellable)
 {
-  GError *error = NULL;
-  GFileEnumerator *e;
+  g_autoptr(GFileEnumerator) e = NULL;
+  g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NO_CONTENT;
 
   e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
@@ -46,40 +46,32 @@ phodav_delete_file (const gchar *path, GFile *file,
     {
       while (1)
         {
-          GFileInfo *info = g_file_enumerator_next_file (e, cancellable, &error);
+          g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &error);
           if (!info)
             break;
-          GFile *del = g_file_get_child (file, g_file_info_get_name (info));
+          g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
           g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
           g_autofree gchar *del_path = g_build_path ("/", path, escape, NULL);
           phodav_delete_file (del_path, del, mstatus, cancellable);
-          g_object_unref (del);
-          g_object_unref (info);
         }
 
       g_file_enumerator_close (e, cancellable, NULL);
-      g_clear_object (&e);
     }
 
   if (error)
-    {
-      g_warning ("DELETE: enumeration error: %s", error->message);
-      g_clear_error (&error);
-    }
+    g_warning ("DELETE: enumeration error: %s", error->message);
 
-  if (!g_file_delete (file, cancellable, &error) && mstatus)
+  g_autoptr(GError) del_error = NULL;
+  if (!g_file_delete (file, cancellable, &del_error) && mstatus)
     {
-      status = error_to_status (error);
+      status = error_to_status (del_error);
 
       g_hash_table_insert (mstatus, g_strdup (path),
                            response_new (NULL, status));
     }
 
-  if (error)
-    {
-      g_debug ("ignored del error: %s", error->message);
-      g_clear_error (&error);
-    }
+  if (del_error)
+    g_debug ("ignored del error: %s", del_error->message);
 
   return status;
 }

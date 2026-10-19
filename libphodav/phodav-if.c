@@ -135,11 +135,10 @@ static gboolean
 check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
-  GFile *file = NULL;
-  GFileInfo *info = NULL;
-  GError *error = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GFileInfo) info = NULL;
+  g_autoptr(GError) error = NULL;
   const gchar *fetag;
-  gboolean success = FALSE;
 
   g_debug ("check etag %s for %s", etag, path);
 
@@ -147,24 +146,16 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
   info = g_file_query_info (file, "etag::*",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
-    goto end;
+    {
+      if (error)
+        g_warning ("check_etag error: %s", error->message);
+      return FALSE;
+    }
 
   fetag = g_file_info_get_etag (info);
   g_warn_if_fail (fetag != NULL);
 
-  success = !g_strcmp0 (etag, fetag);
-
-end:
-  if (error)
-    {
-      g_warning ("check_etag error: %s", error->message);
-      g_clear_error (&error);
-    }
-
-  g_clear_object (&info);
-  g_clear_object (&file);
-
-  return success;
+  return !g_strcmp0 (etag, fetag);
 }
 
 static gboolean

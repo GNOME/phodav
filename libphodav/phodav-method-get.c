@@ -85,9 +85,9 @@ static gint
 method_get (SoupServerMessage *msg, GFile *file,
             GCancellable *cancellable, GError **err)
 {
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
-  GFileInfo *info;
+  g_autoptr(GFileInfo) info = NULL;
   const gchar *etag;
   SoupMessageHeaders *response_headers;
   const gchar *method;
@@ -130,10 +130,9 @@ method_get (SoupServerMessage *msg, GFile *file,
     {
       GMappedFile *mapping;
       g_autoptr(GBytes) buffer = NULL;
-      gchar *path = g_file_get_path (file);
+      g_autofree gchar *path = g_file_get_path (file);
 
       mapping = g_mapped_file_new (path, FALSE, NULL);
-      g_free (path);
       if (!mapping)
         {
           status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
@@ -167,15 +166,11 @@ end:
   if (error)
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        {
-          g_debug ("getfile: %s", error->message);
-          g_clear_error (&error);
-        }
+        g_debug ("getfile: %s", error->message);
       else
-        g_propagate_error (err, error);
+        g_propagate_error (err, g_steal_pointer (&error));
     }
 
-  g_clear_object (&info);
   return status;
 }
 

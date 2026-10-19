@@ -438,7 +438,7 @@ got_headers (SoupServerMessage *msg,
   PhodavServer *self = user_data;
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *path = g_uri_get_path (uri);
-  GError *err = NULL;
+  g_autoptr(GError) err = NULL;
 
   if (soup_server_message_get_method (msg) != SOUP_METHOD_PUT)
     return;
@@ -458,10 +458,7 @@ got_headers (SoupServerMessage *msg,
   phodav_method_put (self->root_handler, msg, path, &err);
 
   if (err)
-    {
-      g_warning ("error: %s", err->message);
-      g_clear_error (&err);
-    }
+    g_warning ("error: %s", err->message);
 }
 
 static void
@@ -479,9 +476,10 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
                  const gchar *path, GHashTable *query,
                  gpointer user_data)
 {
-  GError *err = NULL;
+  g_autoptr(GError) err = NULL;
   PathHandler *handler = user_data;
   gint status = SOUP_STATUS_NOT_IMPLEMENTED;
+
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
@@ -559,10 +557,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
 
   g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
   if (err)
-    {
-      g_warning ("error: %s", err->message);
-      g_clear_error (&err);
-    }
+    g_warning ("error: %s", err->message);
 }
 
 /**

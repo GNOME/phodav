@@ -43,9 +43,9 @@ static gint
 set_attr (GFile *file, xmlNodePtr attrnode,
           GFileAttributeType type, gchar *mem, GCancellable *cancellable)
 {
-  gchar *attrname;
+  g_autofree gchar *attrname = NULL;
   gint status = SOUP_STATUS_OK;
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
 
   if (type == G_FILE_ATTRIBUTE_TYPE_INVALID)
     {
@@ -59,7 +59,7 @@ set_attr (GFile *file, xmlNodePtr attrnode,
         g_object_ref (file);
       if (!file)
         return SOUP_STATUS_FORBIDDEN;
-      gchar *path = g_file_get_path (file);
+      g_autofree gchar *path = g_file_get_path (file);
 #ifdef HAVE_SYS_XATTR_H
 #ifdef __APPLE__
       removexattr (path, attrname, 0);
@@ -69,7 +69,6 @@ set_attr (GFile *file, xmlNodePtr attrnode,
 #else
       g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
 #endif
-      g_free (path);
       g_object_unref (file);
     }
   else
@@ -81,12 +80,9 @@ set_attr (GFile *file, xmlNodePtr attrnode,
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
     }
 
-  g_free (attrname);
-
   if (error)
     {
       g_warning ("failed to set property: %s", error->message);
-      g_clear_error (&error);
       status = SOUP_STATUS_NOT_FOUND;
     }
 

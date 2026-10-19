@@ -61,25 +61,17 @@ static gboolean
 lock_ensure_file (PathHandler *handler, const gchar *path,
                   GCancellable *cancellable, GError **err)
 {
-  GError *e = NULL;
-  GFileOutputStream *stream = NULL;
-  GFile *file = NULL;
+  g_autoptr(GError) e = NULL;
+  g_autoptr(GFileOutputStream) stream = NULL;
+  g_autoptr(GFile) file = NULL;
   gboolean created = FALSE;
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
   stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &e);
   created = !!stream;
 
-  if (e)
-    {
-      if (g_error_matches (e, G_IO_ERROR, G_IO_ERROR_EXISTS))
-        g_clear_error (&e);
-      else
-        g_propagate_error (err, e);
-    }
-
-  g_clear_object (&stream);
-  g_clear_object (&file);
+  if (e && !g_error_matches (e, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    g_propagate_error (err, g_steal_pointer (&e));
 
   return created;
 }

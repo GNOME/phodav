@@ -23,7 +23,7 @@ static gint
 do_mkcol_file (SoupServerMessage *msg, GFile *file,
                GCancellable *cancellable, GError **err)
 {
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_CREATED;
 
   if (!g_file_make_directory (file, cancellable, &error))
@@ -35,11 +35,8 @@ do_mkcol_file (SoupServerMessage *msg, GFile *file,
       else
         {
           status = SOUP_STATUS_FORBIDDEN;
-          g_propagate_error (err, error);
-          error = NULL;
+          g_propagate_error (err, g_steal_pointer (&error));
         }
-
-      g_clear_error (&error);
     }
 
   return status;

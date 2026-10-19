@@ -39,7 +39,7 @@ method_put_got_chunk (SoupServerMessage *msg,
   GFileOutputStream *output = user_data;
   PathHandler *handler = g_object_get_data (user_data, "handler");
   GCancellable *cancellable = handler_get_cancellable (handler);
-  GError *err = NULL;
+  g_autoptr(GError) err = NULL;
   gsize bytes_written;
   gconstpointer data;
   gsize data_length;
@@ -57,7 +57,6 @@ end:
   if (err)
     {
       g_warning ("error: %s", err->message);
-      g_clear_error (&err);
       soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
     }
 }

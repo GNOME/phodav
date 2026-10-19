@@ -564,28 +564,25 @@ propfind_query_zero (PathHandler *handler, PropFind *pf,
                      xmlNsPtr     ns)
 {
   GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *err = NULL;
-  GFileInfo *info = NULL;
-  GFile *file;
+  g_autoptr(GError) err = NULL;
+  g_autoptr(GFileInfo) info = NULL;
+  g_autoptr(GFile) file = NULL;
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
   info = g_file_query_info (file, FILE_QUERY,
                             G_FILE_QUERY_INFO_NONE, cancellable, &err);
-  g_object_unref (file);
   if (err)
     {
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         g_warning ("queryinfo: %s", err->message);
-      g_clear_error (&err);
       return SOUP_STATUS_NOT_FOUND;
     }
 
   stat = propfind_populate (handler, path, pf, info, ns);
   g_hash_table_insert (path_resp, g_strdup (path),
                        response_new (stat, 0));
-  g_clear_object (&info);
 
   return status;
 }
@@ -596,9 +593,9 @@ propfind_query_one (PathHandler *handler, PropFind *pf,
                     xmlNsPtr     ns)
 {
   GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *err = NULL;
-  GFile *file;
-  GFileEnumerator *e;
+  g_autoptr(GError) err = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GFileEnumerator) e = NULL;
   gint status;
 
   status = propfind_query_zero (handler, pf, path, path_resp, ns);
@@ -608,35 +605,27 @@ propfind_query_one (PathHandler *handler, PropFind *pf,
   file = g_file_get_child (handler_get_file (handler), path + 1);
   e = g_file_enumerate_children (file, FILE_QUERY, G_FILE_QUERY_INFO_NONE,
                                  cancellable, &err);
-  g_object_unref (file);
   if (!e)
     goto end;
 
   while (1)
     {
       GList *stat;
-      GFileInfo *info = g_file_enumerator_next_file (e, cancellable, &err);
+      g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &err);
       if (!info)
         break;
 
-      gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
+      g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
       stat = propfind_populate (handler, path, pf, info, ns);
       g_hash_table_insert (path_resp, g_build_path ("/", path, escape, NULL),
                            response_new (stat, 0));
-      g_free (escape);
-      g_object_unref (info);
     }
 
   g_file_enumerator_close (e, cancellable, NULL);
-  g_clear_object (&e);
 
 end:
-  if (err)
-    {
-      if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
-        g_warning ("query: %s", err->message);
-      g_clear_error (&err);
-    }
+  if (err && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
+    g_warning ("query: %s", err->message);
 
   return status;
 }
