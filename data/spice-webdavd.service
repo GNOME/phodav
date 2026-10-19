@@ -7,4 +7,23 @@ After=dbus.service avahi-daemon.service
 Type=simple
 EnvironmentFile=-/etc/sysconfig/spice-webdavd
 ExecStart=/usr/sbin/spice-webdavd -p 9843 $SPICE_WEBDAVD_EXTRA_ARGS
-Restart=on-success
+# the daemon may be started before the virtio port device is usable,
+# in which case it exits with a failure: restart it until it succeeds
+Restart=on-failure
+RestartSec=1s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
