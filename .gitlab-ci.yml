@@ -80,6 +80,22 @@ warnings:
     - meson setup -Dwerror=true build-werror
     - meson compile -C build-werror
 
+static-analysis:
+  stage: build
+  before_script:
+    - dnf install -y --nogpgcheck $DEPENDENCIES clang-analyzer
+  script:
+    # the dead stores checker is disabled: GLib marks its warning macros
+    # (g_warn_if_reached()...) as analyzer-noreturn, so the usual "warn,
+    # then set the status" error handling pattern reads as a dead store
+    - SCANBUILD="scan-build -o scanbuild-report --status-bugs -disable-checker deadcode.DeadStores"
+    - $SCANBUILD meson setup -Davahi=enabled -Ddocs=disabled -Dintrospection=disabled build-scanbuild
+    - $SCANBUILD ninja -C build-scanbuild
+  artifacts:
+    when: on_failure
+    paths:
+      - scanbuild-report/
+
 build_win:
   stage: build
   before_script:
