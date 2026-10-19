@@ -64,6 +64,7 @@ end:
 static gint
 put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCancellable *cancellable, GError **err)
 {
+  g_autoptr(GError) error = NULL;
   GFileOutputStream *s = NULL;
   gchar *etag = NULL;
   gboolean created = TRUE;
@@ -80,9 +81,20 @@ put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCan
   else if (soup_message_headers_get_list (headers, "Expect"))
     g_warn_if_reached ();
 
-  s = g_file_replace (file, etag, FALSE, G_FILE_CREATE_PRIVATE, cancellable, err);
+  s = g_file_replace (file, etag, FALSE, G_FILE_CREATE_PRIVATE, cancellable, &error);
   if (!s)
-    goto end;
+    {
+      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+        {
+          /* missing intermediate collection, see RFC 4918 section 9.7.1 */
+          g_clear_error (&error);
+          status = SOUP_STATUS_CONFLICT;
+        }
+      else
+        g_propagate_error (err, g_steal_pointer (&error));
+
+      goto end;
+    }
 
   status = created ? SOUP_STATUS_CREATED : SOUP_STATUS_OK;
 
