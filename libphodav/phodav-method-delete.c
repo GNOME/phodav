@@ -17,6 +17,7 @@
 
 #include "config.h"
 
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-priv.h"
 
@@ -81,7 +82,7 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
   GFile *file = NULL;
   g_autoptr(GHashTable) mstatus = NULL;
   gint status;
-  GList *submitted = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
 
   /* depth = depth_from_string(soup_message_headers_get_one (msg->request_headers, "Depth")); */
   /* must be == infinity with collection */

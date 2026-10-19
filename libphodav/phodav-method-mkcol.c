@@ -17,6 +17,7 @@
 
 #include "config.h"
 
+#include "phodav-lock.h"
 #include "phodav-priv.h"
 
 static gint
@@ -47,7 +48,7 @@ phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *
   GFile *file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
   gint status;
-  GList *submitted = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
 
   if (request_body && request_body->length)

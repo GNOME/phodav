@@ -17,6 +17,7 @@
 
 #include "config.h"
 
+#include "phodav-lock.h"
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
@@ -108,7 +109,7 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
-  GList *submitted = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   GFileOutputStream *output = NULL;
   gint status;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);

@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-priv.h"
 #include "phodav-utils.h"
@@ -142,7 +143,8 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
     0,
   };
   xmlNodePtr node = NULL, attr = NULL;
-  GList *props = NULL, *submitted = NULL;
+  GList *props = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   gint status;
 
   if (!davdoc_parse (&doc, msg, soup_server_message_get_request_body (msg), "propertyupdate"))
