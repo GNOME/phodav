@@ -125,8 +125,8 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   };
   xmlNodePtr node = NULL, owner = NULL, root = NULL;
   xmlNsPtr ns = NULL;
-  DAVLockScopeType scope = DAV_LOCK_SCOPE_SHARED;
-  DAVLockType type;
+  DAVLockScopeType scope = DAV_LOCK_SCOPE_NONE;
+  DAVLockType type = DAV_LOCK_NONE;
   DepthType depth;
   guint timeout;
   g_autofree gchar *ltoken = NULL;
@@ -197,6 +197,9 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
             g_warn_if_reached ();
         }
     }
+
+  if (scope == DAV_LOCK_SCOPE_NONE || type == DAV_LOCK_NONE)
+    goto end;
 
   g_debug ("lock depth:%d scope:%d type:%d owner:%p, timeout: %u",
            depth, scope, type, owner, timeout);
