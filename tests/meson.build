@@ -19,6 +19,14 @@ foreach src : tests_sources
   test(f'test-@name@', exe, depends : server)
 endforeach
 
+# unit tests for the internal helpers, linked against the private symbols
+unit = executable('test-unit',
+                   sources : 'unit.c',
+                   include_directories : [incdir, libphodav_inc],
+                   link_with : libphodav_internals,
+                   dependencies : deps)
+test('test-unit', unit)
+
 chezdav_env = ['CHEZDAV=' + chezdav.full_path()]
 if conf.has('WITH_AVAHI')
   # chezdav exits when there is no avahi daemon to announce to

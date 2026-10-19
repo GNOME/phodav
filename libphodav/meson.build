@@ -25,13 +25,24 @@ sources = [
   'phodav-virtual-dir.c'
 ]
 
+libphodav_inc = include_directories('.')
+
+# the private symbols are needed by the unit tests, so build them as
+# a static library which is included as a whole in the shared one
+libphodav_internals = static_library(
+  'phodav-internal',
+  sources,
+  c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
+  include_directories : incdir,
+  dependencies : deps,
+)
+
 symbol_map = 'libphodav.syms'
 version_script = meson.current_source_dir() / symbol_map
 
 libphodav = library(
   'phodav-3.0',
-  sources,
-  c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
+  link_whole : libphodav_internals,
   include_directories : incdir,
   # libtool-style ABI version current.revision.age: bump current and age
   # when adding symbols, revision otherwise; soversion (current - age)
