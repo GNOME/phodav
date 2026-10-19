@@ -479,6 +479,7 @@ prop_xattr (gchar *xattr)
   return node;
 }
 
+#ifdef HAVE_SYS_XATTR_H
 static gssize
 xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
 {
@@ -488,6 +489,7 @@ xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
   return getxattr (path, name, value, size);
 #endif
 }
+#endif /* HAVE_SYS_XATTR_H */
 
 /* GIO escapes non-ASCII bytes in extended attribute values, which breaks
  * UTF-8 property values. Read the raw value when possible and fall back
