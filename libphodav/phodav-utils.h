@@ -29,6 +29,9 @@ DepthType depth_from_string (const gchar *depth);
 const gchar *depth_to_string (DepthType depth);
 guint timeout_from_string (const gchar *timeout);
 
+/* is @path the tree rooted at @root, or one of its members? */
+gboolean path_is_covered (const gchar *path, const gchar *root);
+
 typedef struct _DavDoc DavDoc;
 
 struct _DavDoc

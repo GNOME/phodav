@@ -552,6 +552,54 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
 }
 
+typedef struct _TreeLockCheck
+{
+  const gchar *path; /* canonical path of the new lock root */
+  DAVLock *lock;     /* the lock about to be taken */
+  gboolean conflict;
+} TreeLockCheck;
+
+static void
+tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
+{
+  TreeLockCheck *d = user_data;
+  Path *path = value;
+  GList *l;
+
+  path_expire_locks (path);
+
+  /* the lock root itself and its ancestors are checked by
+   * server_foreach_parent_path() in try_add_lock() */
+  if (g_strcmp0 (path->path, d->path) == 0 ||
+      !path_is_covered (path->path, d->path))
+    return;
+
+  for (l = path->locks; l != NULL; l = l->next)
+    {
+      DAVLock *other = l->data;
+
+      /* RFC 4918 section 6.1: an exclusive lock conflicts with any
+       * other kind of lock, whether direct or indirect */
+      if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE ||
+          d->lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
+        d->conflict = TRUE;
+    }
+}
+
+/* does a depth-infinity lock on @path conflict with a lock on one of
+ * its members? (RFC 4918 section 7.4: such a LOCK request must fail
+ * with 423 when the members are locked in a conflicting manner) */
+gboolean
+server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *lock)
+{
+  g_autofree gchar *path = path_key (_path);
+  TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
+
+  g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
+
+  return d.conflict;
+}
+
 static void
 got_headers (SoupServerMessage *msg,
              gpointer user_data)

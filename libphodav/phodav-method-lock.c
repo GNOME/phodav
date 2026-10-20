@@ -53,6 +53,12 @@ try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
   if (!server_foreach_parent_path (server, path, check_lock, lock))
     return FALSE;
 
+  /* RFC 4918 section 7.4: a depth-infinity lock on a collection must
+   * fail when a member is locked in a conflicting manner */
+  if (lock->depth == DEPTH_INFINITY &&
+      server_tree_has_lock_conflict (server, path, lock))
+    return FALSE;
+
   p = server_get_path (server, path);
   path_add_lock (p, lock);
 

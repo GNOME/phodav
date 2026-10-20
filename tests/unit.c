@@ -123,6 +123,23 @@ test_depth (void)
 }
 
 static void
+test_path_is_covered (void)
+{
+  g_assert_true (path_is_covered ("/a", "/a"));
+  g_assert_true (path_is_covered ("/a/b", "/a"));
+  g_assert_true (path_is_covered ("/a/b/c", "/a"));
+
+  g_assert_false (path_is_covered ("/ab", "/a"));
+  g_assert_false (path_is_covered ("/", "/a"));
+  g_assert_false (path_is_covered ("/a", "/a/b"));
+
+  /* the root covers everything */
+  g_assert_true (path_is_covered ("/", "/"));
+  g_assert_true (path_is_covered ("/a/b", "/"));
+  g_assert_false (path_is_covered ("a/b", "/"));
+}
+
+static void
 test_timeout (void)
 {
   g_assert_cmpuint (timeout_from_string (NULL), ==, 0);
@@ -574,6 +591,45 @@ test_server_lock_expiry (void)
 }
 
 static void
+test_server_lock_conflict (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *member_token = new_token ();
+  g_autofree gchar *tree_token = new_token ();
+  g_autoptr(DAVLock) member_lock = NULL;
+  g_autoptr(DAVLock) tree_lock = NULL;
+  Path *p;
+
+  /* a lock on a member of the collection */
+  p = server_get_path (server, "/coll/member");
+  member_lock = dav_lock_new (p, member_token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                              DEPTH_ZERO, NULL, 60);
+  path_add_lock (p, member_lock);
+
+  /* an exclusive depth-infinity lock on the collection conflicts with
+   * it (RFC 4918 section 7.4)... */
+  tree_lock = dav_lock_new (server_get_path (server, "/coll"), tree_token,
+                            DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                            DEPTH_INFINITY, NULL, 60);
+  g_assert_true (server_tree_has_lock_conflict (server, "/coll", tree_lock));
+
+  /* ...but a shared tree lock does not conflict with a shared member lock */
+  g_clear_pointer (&member_lock, dav_lock_free);
+  g_clear_pointer (&tree_lock, dav_lock_free);
+  member_lock = dav_lock_new (server_get_path (server, "/coll/member"), member_token,
+                              DAV_LOCK_SCOPE_SHARED, DAV_LOCK_WRITE,
+                              DEPTH_ZERO, NULL, 60);
+  path_add_lock (server_get_path (server, "/coll/member"), member_lock);
+  tree_lock = dav_lock_new (server_get_path (server, "/coll"), tree_token,
+                            DAV_LOCK_SCOPE_SHARED, DAV_LOCK_WRITE,
+                            DEPTH_INFINITY, NULL, 60);
+  g_assert_false (server_tree_has_lock_conflict (server, "/coll", tree_lock));
+
+  /* a depth-infinity lock elsewhere does not conflict either */
+  g_assert_false (server_tree_has_lock_conflict (server, "/other", tree_lock));
+}
+
+static void
 test_server_dispose (void)
 {
   GLogLevelFlags fatal;
@@ -598,6 +654,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/remove-trailing", test_remove_trailing);
   g_test_add_func ("/utils/dot-dot-segment", test_path_has_dot_dot_segment);
   g_test_add_func ("/utils/depth", test_depth);
+  g_test_add_func ("/utils/path-is-covered", test_path_is_covered);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
 
@@ -612,6 +669,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/server/lock-manager", test_server_lock_manager);
   g_test_add_func ("/lock/expiry", test_dav_lock_expiry);
   g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
+  g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);
   g_test_add_func ("/server/dispose", test_server_dispose);
 
   return g_test_run ();

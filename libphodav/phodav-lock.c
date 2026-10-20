@@ -161,16 +161,7 @@ lock_submitted_free (LockSubmitted *l)
 static gboolean
 locks_submitted_path_has (const gchar *path, const gchar *lock_path)
 {
-  gsize len = strlen (lock_path);
-
-  if (g_strcmp0 (path, lock_path) == 0)
-    return TRUE;
-
-  /* a lock on the root covers everything */
-  if (g_strcmp0 (lock_path, "/") == 0)
-    return path[0] == '/';
-
-  return g_str_has_prefix (path, lock_path) && path[len] == '/';
+  return path_is_covered (path, lock_path);
 }
 
 gboolean

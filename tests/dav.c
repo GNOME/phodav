@@ -1411,6 +1411,53 @@ test_lock_expiry (DavFixture *f, gconstpointer user_data)
 
 }
 
+static void
+test_lock_tree_conflict (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/dir/locked-member.txt", "Second-3600");
+  g_autofree gchar *parent_token = NULL;
+
+  /* an exclusive depth-infinity lock on the collection conflicts with
+   * the lock held on the member (RFC 4918 section 7.4) */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "lock failed");
+  g_assert_cmpuint (dav_status (f, "LOCK", "/dir", LOCK_EXCLUSIVE,
+                                "Depth", "infinity", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_test_assert_expected_messages ();
+
+  /* a depth-0 lock does not cover the member and is allowed */
+  {
+    g_autoptr(GBytes) body = NULL;
+    g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", "/dir", LOCK_EXCLUSIVE, &body,
+                                              "Depth", "0", NULL);
+
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+    parent_token = g_strdup (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token"));
+    g_assert_nonnull (parent_token);
+  }
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir", NULL,
+                                "Lock-Token", parent_token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  /* with the member lock released, the tree can be locked */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir/locked-member.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+  {
+    g_autoptr(GBytes) body = NULL;
+    g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", "/dir", LOCK_EXCLUSIVE, &body,
+                                              "Depth", "infinity", NULL);
+
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+    g_clear_pointer (&parent_token, g_free);
+    parent_token = g_strdup (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token"));
+    g_assert_nonnull (parent_token);
+  }
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir", NULL,
+                                "Lock-Token", parent_token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1438,6 +1485,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock-double-slash", DavFixture, NULL, dav_fixture_setup, test_lock_double_slash, dav_fixture_teardown);
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
   g_test_add ("/dav/lock/expiry", DavFixture, NULL, dav_fixture_setup, test_lock_expiry, dav_fixture_teardown);
+  g_test_add ("/dav/lock/tree-conflict", DavFixture, NULL, dav_fixture_setup, test_lock_tree_conflict, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
   g_test_add ("/dav/if-malformed", DavFixture, NULL, dav_fixture_setup, test_if_malformed, dav_fixture_teardown);

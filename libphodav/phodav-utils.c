@@ -170,6 +170,21 @@ depth_to_string (DepthType depth)
   g_return_val_if_reached (NULL);
 }
 
+gboolean
+path_is_covered (const gchar *path, const gchar *root)
+{
+  gsize len = strlen (root);
+
+  if (g_strcmp0 (path, root) == 0)
+    return TRUE;
+
+  /* a lock on the root covers everything */
+  if (g_strcmp0 (root, "/") == 0)
+    return path[0] == '/';
+
+  return g_str_has_prefix (path, root) && path[len] == '/';
+}
+
 void
 xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size)
 {
