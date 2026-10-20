@@ -457,25 +457,25 @@ static const struct _PropList
 };
 
 static xmlNodePtr
-prop_xattr (gchar *xattr)
+prop_xattr (const gchar *xattr)
 {
   xmlNodePtr node;
-  gchar *ns = xattr + 7;
-  gchar *name = g_utf8_strchr (ns, -1, '#');
+  /* the attribute names are owned by the GFileInfo, copy before
+   * splitting the string in place */
+  g_autofree gchar *attr = g_strdup (xattr + 7);
+  gchar *name;
+
+  name = g_utf8_strchr (attr, -1, '#');
 
   if (name)
     {
+      /* <ns-href>#<name> */
       *name = '\0';
-      name = name + 1;
+      node = xmlNewNode (NULL, BAD_CAST name + 1);
+      xmlNewNs (node, BAD_CAST attr, NULL);
     }
   else
-    {
-      name = g_steal_pointer (&ns);
-    }
-
-  node = xmlNewNode (NULL, BAD_CAST name);
-  if (ns)
-    xmlNewNs (node, BAD_CAST ns, NULL);
+    node = xmlNewNode (NULL, BAD_CAST attr);
 
   PROP_SET_STATUS (node, SOUP_STATUS_OK);
   return node;
