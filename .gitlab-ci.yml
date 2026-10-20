@@ -156,7 +156,7 @@ coverage:
     - gcovr -r . build-coverage
         --exclude subprojects
         --exclude tests
-        --fail-under-line 75
+        --fail-under-line 90
         --txt -
         --html-nested build-coverage/meson-logs/coveragereport/index.html
   artifacts:
