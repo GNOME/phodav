@@ -57,12 +57,11 @@ parse_xml (const gchar *data,
            xmlNodePtr *root,
            const gchar *name)
 {
-  xmlParserCtxtPtr ctxt;
-  xmlDocPtr doc;
-
   /* parse with a private context, so that the libxml2 error
    * details are available when the document is rejected */
-  ctxt = xmlNewParserCtxt ();
+  g_autoptr(xmlParserCtxt) ctxt = xmlNewParserCtxt ();
+  g_autoptr(xmlDoc) doc = NULL;
+
   if (ctxt == NULL)
     {
       g_debug ("Could not create the parser context");
@@ -87,15 +86,12 @@ parse_xml (const gchar *data,
 
       g_strchomp (message);
       g_debug ("Could not parse request: %s", *message ? message : "no error details");
-      xmlFreeParserCtxt (ctxt);
       return NULL;
     }
 
-  xmlFreeParserCtxt (ctxt);
   if (!(doc->properties & XML_DOC_NSVALID))
     {
       g_debug ("Could not parse request, NS errors");
-      xmlFreeDoc (doc);
       return NULL;
     }
 
@@ -104,18 +100,16 @@ parse_xml (const gchar *data,
   if (*root == NULL || (*root)->children == NULL)
     {
       g_debug ("Empty request");
-      xmlFreeDoc (doc);
       return NULL;
     }
 
   if (g_strcmp0 ((char *) (*root)->name, name) != 0)
     {
       g_debug ("Unexpected request");
-      xmlFreeDoc (doc);
       return NULL;
     }
 
-  return doc;
+  return g_steal_pointer (&doc);
 }
 
 gboolean

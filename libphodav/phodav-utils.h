@@ -49,6 +49,13 @@ struct _DavDoc
 gboolean davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const gchar *name);
 void davdoc_free (DavDoc *dd);
 
+/* GLib auto cleanup support for the libxml2 tree types and DavDoc,
+ * so that the request documents do not have to be freed by hand */
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC (DavDoc, davdoc_free)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (xmlDoc, xmlFreeDoc)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (xmlParserCtxt, xmlFreeParserCtxt)
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (xmlNode, xmlFreeNode)
+
 void xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size);
 gboolean xml_node_is_element (xmlNodePtr node);
 gboolean xml_node_has_name (xmlNodePtr node, const gchar *name);

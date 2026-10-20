@@ -128,7 +128,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   Path *lpath = NULL;
   xmlChar *mem = NULL;
   gint size = 0;
-  DavDoc doc = {
+  g_auto(DavDoc) doc = {
     0,
   };
   xmlNodePtr node = NULL, owner = NULL, root = NULL;
@@ -262,7 +262,5 @@ body:
                                     SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
-  davdoc_free (&doc);
-
   return status;
 }

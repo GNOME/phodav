@@ -139,7 +139,7 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
   g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
-  DavDoc doc = {
+  g_auto(DavDoc) doc = {
     0,
   };
   xmlNodePtr node = NULL, attr = NULL;
@@ -190,7 +190,6 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
     status = set_response_multistatus (msg, mstatus);
 
 end:
-  davdoc_free (&doc);
   g_clear_object (&file);
 
   return status;
