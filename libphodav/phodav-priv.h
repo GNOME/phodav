@@ -30,6 +30,11 @@
 
 G_BEGIN_DECLS
 
+/* the DAV methods other than PUT parse their whole request body in
+ * memory; larger bodies are refused rather than risking to exhaust
+ * the memory of the process (PUT streams to disk and is unaffected) */
+#define PHODAV_MAX_REQUEST_BODY (1024 * 1024)
+
 typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;

@@ -608,26 +608,41 @@ got_headers (SoupServerMessage *msg,
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *path = g_uri_get_path (uri);
   g_autoptr(GError) err = NULL;
-
-  if (soup_server_message_get_method (msg) != SOUP_METHOD_PUT)
-    return;
+  const gchar *method = soup_server_message_get_method (msg);
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
   /* libsoup handlers ran first, the request may have been rejected
    * already (invalid path, authentication...) */
   if (soup_server_message_get_status (msg) != 0)
     return;
 
-  if (!(path && *path == '/') || g_path_is_absolute (path + 1))
+  if (method == SOUP_METHOD_PUT)
     {
-      g_debug ("invalid PUT path: %s", path);
-      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+      if (!(path && *path == '/') || g_path_is_absolute (path + 1))
+        {
+          g_debug ("invalid PUT path: %s", path);
+          soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+          return;
+        }
+
+      phodav_method_put (self->root_handler, msg, path, &err);
+
+      if (err)
+        g_warning ("error: %s", err->message);
+
       return;
     }
 
-  phodav_method_put (self->root_handler, msg, path, &err);
-
-  if (err)
-    g_warning ("error: %s", err->message);
+  /* unlike PUT, the other methods have their request body parsed in
+   * memory: refuse an unreasonable Content-Length before the body is
+   * received (RFC 9110 section 15.5.15), and drain it without
+   * accumulating it */
+  if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
+    {
+      g_debug ("refusing the oversized request body");
+      soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+      soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+    }
 }
 
 static void

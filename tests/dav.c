@@ -1548,6 +1548,40 @@ test_depth_headers (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_CREATED);
 }
 
+/* the methods other than PUT parse their whole request body in memory:
+ * oversized ones must be refused, not parsed */
+static void
+test_request_body_too_large (DavFixture *f, gconstpointer user_data)
+{
+  /* one byte more than the 1 MiB limit */
+  g_autofree gchar *big = g_strnfill (1024 * 1024 + 1, 'x');
+
+  /* with a Content-Length, the body is refused with 413 as soon as
+   * the headers are received, before it is read */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", big, "Depth", "0", NULL),
+                    ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+
+  /* a chunked body has no Content-Length to check: it is refused
+   * when the handler parses it */
+  {
+    g_autoptr(SoupMessage) msg = NULL;
+    g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/hello.txt", NULL);
+    g_autoptr(GBytes) request = g_bytes_new (big, strlen (big));
+    g_autoptr(GBytes) response = NULL;
+    g_autoptr(GError) error = NULL;
+
+    msg = soup_message_new (SOUP_METHOD_PROPFIND, uri);
+    soup_message_headers_append (soup_message_get_request_headers (msg), "Depth", "0");
+    soup_message_set_request_body (msg, NULL,
+                                   g_memory_input_stream_new_from_bytes (request), -1);
+
+    response = soup_session_send_and_read (f->session, msg, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_nonnull (response);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_BAD_REQUEST);
+  }
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1561,6 +1595,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/depth-headers", DavFixture, NULL, dav_fixture_setup, test_depth_headers, dav_fixture_teardown);
+  g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);
