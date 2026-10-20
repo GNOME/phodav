@@ -505,6 +505,24 @@ test_server_lock_manager (void)
   g_assert_null (server_path_get_lock (server, "/a/b/c", token));
 }
 
+
+
+static void
+test_server_dispose (void)
+{
+  GLogLevelFlags fatal;
+  PhodavServer *server = phodav_server_new (NULL);
+
+  /* dispose may run more than once (g_object_run_dispose() followed
+   * by the last unref): the second pass must not touch the cleared
+   * SoupServer, make any critical fatal for the check */
+  g_object_run_dispose (G_OBJECT (server));
+
+  fatal = g_log_set_always_fatal (G_LOG_FATAL_MASK | G_LOG_LEVEL_CRITICAL);
+  g_object_unref (server);
+  g_log_set_always_fatal (fatal);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -526,6 +544,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/server/paths", test_server_paths);
   g_test_add_func ("/server/lock-manager", test_server_lock_manager);
+  g_test_add_func ("/server/dispose", test_server_dispose);
 
   return g_test_run ();
 }

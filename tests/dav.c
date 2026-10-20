@@ -1377,6 +1377,20 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   }
 }
 
+static void
+test_unknown_method (DavFixture *f, gconstpointer user_data)
+{
+  /* methods which are not implemented are answered with 501 */
+  g_assert_cmpuint (dav_status (f, "PATCH", "/hello.txt", "data", NULL),
+                    ==, SOUP_STATUS_NOT_IMPLEMENTED);
+  g_assert_cmpuint (dav_status (f, "BREW", "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_IMPLEMENTED);
+
+  /* the file was not modified */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1386,6 +1400,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/options", DavFixture, NULL, dav_fixture_setup, test_options, dav_fixture_teardown);
   g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
+  g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);

@@ -190,7 +190,7 @@ phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  self->server = soup_server_new ("server-header", "PhodavServer ",
+  self->server = soup_server_new ("server-header", "PhodavServer",
                                   NULL);
 
   update_root_handler (self);
@@ -218,9 +218,13 @@ phodav_server_dispose (GObject *gobject)
   PhodavServer *self = PHODAV_SERVER (gobject);
 
   /* SoupServer could live longer than PhodavServer,
-   * this frees the PhodavHandler passed as user_data */
-  soup_server_remove_handler (self->server, "/");
-  g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+   * this frees the PhodavHandler passed as user_data;
+   * dispose may run again, the server is already gone then */
+  if (self->server)
+    {
+      soup_server_remove_handler (self->server, "/");
+      g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+    }
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
@@ -530,17 +534,20 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
   if (!(path && *path == '/'))
     {
       g_debug ("path must begin with /");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
   if (g_path_is_absolute (path + 1))
     {
       g_debug ("path cannot be absolute");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
 
   if (!(uri && g_uri_get_fragment (uri) == NULL))
     {
       g_debug ("using fragments in query is not supported");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
 
@@ -588,7 +595,11 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
   else if (method == SOUP_METHOD_UNLOCK)
     status = phodav_method_unlock (handler, msg, path, &err);
   else
-    g_warn_if_reached ();
+    {
+      /* rather than warning, answer that the method is not implemented */
+      g_debug ("unsupported method %s", method);
+      status = SOUP_STATUS_NOT_IMPLEMENTED;
+    }
 
   soup_server_message_set_status (msg, status, NULL);
 
