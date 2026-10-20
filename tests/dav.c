@@ -1282,6 +1282,101 @@ test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
   g_assert_nonnull (strstr (text, ">tag&lt;le&gt;.txt</a>"));
 }
 
+static void
+test_put_conditional (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *if_match = NULL;
+  g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
+
+  /* the etag of the fixture file, as a client would have got it from
+   * a GET response or a PROPFIND */
+  {
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+  }
+  if_match = g_strdup_printf ("\"%s\"", etag);
+
+  /* If-Match with the current etag allows the write */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "matched",
+                                "If-Match", if_match, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* the write happened, the etag changed with it */
+  {
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    g_clear_pointer (&etag, g_free);
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+    g_clear_pointer (&if_match, g_free);
+    if_match = g_strdup_printf ("\"%s\"", etag);
+  }
+
+  /* a failing If-Match must not overwrite the resource,
+   * RFC 9110 section 13.1.1 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "If-Match", "\"not-the-etag\"", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "If-Match", "\"not-the-etag\", W/\"weak-etag\"", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  {
+    g_autofree gchar *contents = NULL;
+
+    g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
+    g_assert_cmpstr (contents, ==, "matched");
+  }
+
+  /* If-Match: * requires the resource to exist */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "star",
+                                "If-Match", "*", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing.txt", "data",
+                                "If-Match", "*", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* If-None-Match: * forbids overwriting an existing resource,
+   * RFC 9110 section 13.1.2 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "If-None-Match", "*", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/created.txt", "data",
+                                "If-None-Match", "*", NULL),
+                    ==, SOUP_STATUS_CREATED);
+
+  /* the current etag fails an If-None-Match too; the writes above
+   * changed it, fetch it again */
+  {
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    g_clear_pointer (&etag, g_free);
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+    g_clear_pointer (&if_match, g_free);
+    if_match = g_strdup_printf ("\"%s\"", etag);
+  }
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "If-None-Match", if_match, NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* another etag does not */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "written",
+                                "If-None-Match", "\"not-the-etag\"", NULL),
+                    ==, SOUP_STATUS_OK);
+  {
+    g_autofree gchar *contents = NULL;
+
+    g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
+    g_assert_cmpstr (contents, ==, "written");
+  }
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1292,6 +1387,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
+  g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);

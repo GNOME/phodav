@@ -62,27 +62,92 @@ end:
     }
 }
 
+/* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
+ * match the current @etag of the resource, which exists per @exists? */
+static gboolean
+etag_header_matches (const gchar *header, const gchar *etag, gboolean exists)
+{
+  g_auto(GStrv) etags = NULL;
+
+  if (!g_strcmp0 (header, "*"))
+    return exists;
+
+  if (!etag)
+    return FALSE;
+
+  /* a comma separated list of quoted entity tags; the comparison is
+   * weak, so the weakness markers are ignored. (GIO etags do not
+   * contain commas, splitting on them is unambiguous.) */
+  etags = g_strsplit (header, ",", -1);
+  for (guint i = 0; etags[i]; i++)
+    {
+      const gchar *h = g_strstrip (etags[i]);
+      gsize len = strlen (h);
+
+      if (g_str_has_prefix (h, "W/"))
+        {
+          h += 2;
+          len -= 2;
+        }
+
+      if (len >= 2 && h[0] == '"' && h[len - 1] == '"')
+        {
+          h++;
+          len -= 2;
+        }
+
+      if (strlen (etag) == len && strncmp (etag, h, len) == 0)
+        return TRUE;
+    }
+
+  return FALSE;
+}
+
 static gint
 put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
+  g_autoptr(GFileInfo) info = NULL;
   GFileOutputStream *s = NULL;
-  gchar *etag = NULL;
-  gboolean created = TRUE;
+  gboolean exists = FALSE;
+  const gchar *etag = NULL;
+  const gchar *if_match, *if_none_match;
   SoupMessageHeaders *headers = soup_server_message_get_request_headers (msg);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  if (g_file_query_exists (file, cancellable))
-    created = FALSE;
+  info = g_file_query_info (file, "etag::*",
+                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  if (info)
+    {
+      exists = TRUE;
+      etag = g_file_info_get_etag (info);
+    }
+  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    g_clear_error (&error);
+  else
+    {
+      g_propagate_error (err, g_steal_pointer (&error));
+      goto end;
+    }
 
-  if (soup_message_headers_get_list (headers, "If-Match"))
-    g_warn_if_reached ();
-  else if (soup_message_headers_get_list (headers, "If-None-Match"))
-    g_warn_if_reached ();
-  else if (soup_message_headers_get_list (headers, "Expect"))
-    g_warn_if_reached ();
+  /* conditional requests, RFC 9110 section 13.1: a failing
+   * precondition must be answered with 412, not by overwriting */
+  if_match = soup_message_headers_get_one (headers, "If-Match");
+  if_none_match = soup_message_headers_get_one (headers, "If-None-Match");
 
-  s = g_file_replace (file, etag, FALSE, G_FILE_CREATE_PRIVATE, cancellable, &error);
+  if (if_match && !etag_header_matches (if_match, etag, exists))
+    {
+      status = SOUP_STATUS_PRECONDITION_FAILED;
+      goto end;
+    }
+
+  if (if_none_match && etag_header_matches (if_none_match, etag, exists))
+    {
+      status = SOUP_STATUS_PRECONDITION_FAILED;
+      goto end;
+    }
+
+  s = g_file_replace (file, NULL, FALSE, G_FILE_CREATE_PRIVATE, cancellable, &error);
   if (!s)
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
@@ -97,7 +162,7 @@ put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCan
       goto end;
     }
 
-  status = created ? SOUP_STATUS_CREATED : SOUP_STATUS_OK;
+  status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
 
 end:
   *output = s;
