@@ -354,6 +354,7 @@ incoming_callback (GSocketService *service,
 }
 
 static gint port;
+static gchar *mux_path;
 
 #ifdef G_OS_WIN32
 static gboolean no_service;
@@ -655,9 +656,9 @@ run_service (ServiceData *service_data)
   loop = g_main_loop_new (NULL, TRUE);
 #ifdef G_OS_UNIX
 #ifdef __APPLE__
-  open_mux_path ("/dev/tty.org.spice-space.webdav.0");
+  open_mux_path (mux_path ? mux_path : "/dev/tty.org.spice-space.webdav.0");
 #else
-  open_mux_path ("/dev/virtio-ports/org.spice-space.webdav.0");
+  open_mux_path (mux_path ? mux_path : "/dev/virtio-ports/org.spice-space.webdav.0");
 #endif
 #else
   open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
@@ -781,6 +782,9 @@ static GOptionEntry entries[] = {
   { "port", 'p', 0,
     G_OPTION_ARG_INT, &port,
     "Port to listen on", NULL },
+  { "mux-path", 0, 0,
+    G_OPTION_ARG_FILENAME, &mux_path,
+    "Path of the multiplexing channel (default: the spice WebDAV virtio port)", "PATH" },
 #ifdef G_OS_WIN32
   { "no-service", 0, 0,
     G_OPTION_ARG_NONE, &no_service,
