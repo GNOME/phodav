@@ -148,7 +148,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   if (!request_body->length)
     {
       const gchar *hif = soup_message_headers_get_one (request_headers, "If");
-      if(!hif)
+      if (!hif)
         goto end;
 
       gint len = strlen (hif);

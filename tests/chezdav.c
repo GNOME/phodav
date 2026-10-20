@@ -222,7 +222,7 @@ wait_for_server (void)
   for (i = 0; i < 100; i++)
     {
       g_autoptr(GSocketConnection) connection =
-                   g_socket_client_connect_to_host (client, "127.0.0.1", PORT, NULL, NULL);
+                  g_socket_client_connect_to_host (client, "127.0.0.1", PORT, NULL, NULL);
 
       if (connection)
         {

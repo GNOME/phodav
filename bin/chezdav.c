@@ -44,8 +44,8 @@ static gint public = 0;
 static gint nomdns = 0;
 #endif
 
-G_GNUC_PRINTF (1, 2) G_GNUC_NORETURN
-static void
+G_GNUC_PRINTF (1, 2)
+static void G_GNUC_NORETURN
 my_error (const gchar *format, ...)
 {
   va_list args;
