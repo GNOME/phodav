@@ -174,6 +174,49 @@ test_etag_header_matches (void)
 }
 
 static void
+test_http_time_to_string (void)
+{
+  g_autofree gchar *date = http_time_to_string (0);
+
+  g_assert_cmpstr (date, ==, "Thu, 01 Jan 1970 00:00:00 GMT");
+
+  /* times beyond the year 9999 cannot be represented */
+  g_assert_null (http_time_to_string ((guint64) G_MAXINT64));
+}
+
+static void
+test_http_request_not_modified (void)
+{
+  g_autoptr(SoupMessageHeaders) headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+
+  /* without a condition, the representation is always sent */
+  g_assert_false (http_request_not_modified (headers, "abc", 1000));
+
+  soup_message_headers_replace (headers, "If-None-Match", "\"abc\"");
+  g_assert_true (http_request_not_modified (headers, "abc", 1000));
+  g_assert_false (http_request_not_modified (headers, "xyz", 1000));
+
+  /* If-None-Match takes precedence over If-Modified-Since */
+  soup_message_headers_replace (headers, "If-Modified-Since", http_time_to_string (1000));
+  g_assert_false (http_request_not_modified (headers, "xyz", 1000));
+  g_assert_true (http_request_not_modified (headers, "abc", 2000));
+
+  /* the representation is current when its last modification is
+   * not after the condition date */
+  soup_message_headers_remove (headers, "If-None-Match");
+  g_assert_true (http_request_not_modified (headers, "xyz", 1000));
+  g_assert_false (http_request_not_modified (headers, "xyz", 1001));
+
+  /* an unparseable date is ignored */
+  soup_message_headers_replace (headers, "If-Modified-Since", "not a date");
+  g_assert_false (http_request_not_modified (headers, "xyz", 1000));
+
+  /* without a modification time, the date cannot be checked */
+  soup_message_headers_replace (headers, "If-Modified-Since", http_time_to_string (1000));
+  g_assert_false (http_request_not_modified (headers, "xyz", 0));
+}
+
+static void
 test_timeout (void)
 {
   g_assert_cmpuint (timeout_from_string (NULL), ==, 0);
@@ -791,6 +834,8 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/depth", test_depth);
   g_test_add_func ("/utils/path-is-covered", test_path_is_covered);
   g_test_add_func ("/utils/etag-header-matches", test_etag_header_matches);
+  g_test_add_func ("/utils/http-time-to-string", test_http_time_to_string);
+  g_test_add_func ("/utils/http-not-modified", test_http_request_not_modified);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
 

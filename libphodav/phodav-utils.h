@@ -39,6 +39,16 @@ gboolean path_is_covered (const gchar *path, const gchar *root);
  * match the current @etag of the resource, which exists per @exists? */
 gboolean etag_header_matches (const gchar *header, const gchar *etag, gboolean exists);
 
+/* format @time as an HTTP-date (RFC 9110 section 5.6.7) */
+gchar *http_time_to_string (guint64 time);
+
+/* do the If-None-Match / If-Modified-Since preconditions of a GET or
+ * HEAD request hold, i.e. does the client hold a current
+ * representation? RFC 9110 sections 13.1.2 and 13.1.3 */
+gboolean http_request_not_modified (SoupMessageHeaders *headers,
+                                    const gchar *etag,
+                                    guint64 mtime);
+
 typedef struct _DavDoc DavDoc;
 
 struct _DavDoc

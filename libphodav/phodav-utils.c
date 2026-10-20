@@ -235,6 +235,48 @@ etag_header_matches (const gchar *header, const gchar *etag, gboolean exists)
   return FALSE;
 }
 
+/* format @time as an HTTP-date (RFC 9110 section 5.6.7) */
+gchar *
+http_time_to_string (guint64 time)
+{
+  g_autoptr(GDateTime) date = g_date_time_new_from_unix_utc ((gint64) time);
+
+  return date ? soup_date_time_to_string (date, SOUP_DATE_HTTP) : NULL;
+}
+
+/* do the If-None-Match / If-Modified-Since preconditions of a GET or
+ * HEAD request hold, i.e. does the client hold a current
+ * representation? RFC 9110 sections 13.1.2 and 13.1.3 */
+gboolean
+http_request_not_modified (SoupMessageHeaders *headers,
+                           const gchar *etag,
+                           guint64 mtime)
+{
+  const gchar *condition;
+
+  condition = soup_message_headers_get_one (headers, "If-None-Match");
+  if (condition)
+    {
+      /* If-None-Match takes precedence over If-Modified-Since, and
+       * the resource is known to exist, since its validators come
+       * from a successful query */
+      return etag_header_matches (condition, etag, TRUE);
+    }
+
+  condition = soup_message_headers_get_one (headers, "If-Modified-Since");
+  if (condition && mtime != 0)
+    {
+      g_autoptr(GDateTime) date = soup_date_time_new_from_http_string (condition);
+
+      /* the representation is current when its last modification
+       * is not after the condition date */
+      if (date)
+        return (gint64) mtime <= g_date_time_to_unix (date);
+    }
+
+  return FALSE;
+}
+
 guint
 timeout_from_string (const gchar *timeout)
 {

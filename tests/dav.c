@@ -504,6 +504,84 @@ test_get (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_get_conditional (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *weak = NULL;
+  g_autofree gchar *list = NULL;
+  g_autofree gchar *last_modified = NULL;
+
+  /* learn the validators the way a client would */
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  {
+    SoupMessageHeaders *response_headers = soup_message_get_response_headers (msg);
+
+    g_set_str (&etag, soup_message_headers_get_one (response_headers, "ETag"));
+    g_set_str (&last_modified, soup_message_headers_get_one (response_headers, "Last-Modified"));
+    g_assert_nonnull (etag);
+    g_assert_nonnull (last_modified);
+    g_assert_cmpstr (soup_message_headers_get_one (response_headers, "Cache-Control"), ==, "no-cache");
+  }
+
+  /* an unchanged validator is answered with 304 Not Modified, with
+   * the validators still advertised and no body, RFC 9110 13.1.2 */
+  g_clear_object (&msg);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "If-None-Match", etag, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_NOT_MODIFIED);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 0);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "ETag"), ==, etag);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Last-Modified"), ==, last_modified);
+
+  /* the comparison is weak, and a list matches when any member does */
+  weak = g_strdup_printf ("W/%s", etag);
+  list = g_strdup_printf ("\"not-the-etag\", %s", etag);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-None-Match", weak, NULL),
+                    ==, SOUP_STATUS_NOT_MODIFIED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-None-Match", list, NULL),
+                    ==, SOUP_STATUS_NOT_MODIFIED);
+
+  /* the star matches any existing resource */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-None-Match", "*", NULL),
+                    ==, SOUP_STATUS_NOT_MODIFIED);
+
+  /* a non-matching validator falls back to a full response */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-None-Match", "\"not-the-etag\"", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* an unmodified resource is answered with 304 too, RFC 9110 13.1.3 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-Modified-Since", last_modified, NULL),
+                    ==, SOUP_STATUS_NOT_MODIFIED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* If-None-Match takes precedence over If-Modified-Since */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "If-None-Match", "\"not-the-etag\"",
+                                "If-Modified-Since", last_modified, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* HEAD is conditional in the same way */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL,
+                                "If-None-Match", etag, NULL),
+                    ==, SOUP_STATUS_NOT_MODIFIED);
+
+  /* a missing resource is not compared with the star */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/missing.txt", NULL,
+                                "If-None-Match", "*", NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
 test_put (DavFixture *f, gconstpointer user_data)
 {
   g_autofree gchar *path = g_build_filename (f->dir, "new.txt", NULL);
@@ -1680,6 +1758,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add ("/dav/options", DavFixture, NULL, dav_fixture_setup, test_options, dav_fixture_teardown);
   g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
+  g_test_add ("/dav/get-conditional", DavFixture, NULL, dav_fixture_setup, test_get_conditional, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);

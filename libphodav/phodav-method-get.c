@@ -18,6 +18,7 @@
 #include "config.h"
 
 #include "phodav-priv.h"
+#include "phodav-utils.h"
 
 static gint
 compare_strings (gconstpointer a, gconstpointer b)
@@ -102,11 +103,12 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
   gint status = SOUP_STATUS_NOT_FOUND;
   g_autoptr(GFileInfo) info = NULL;
   const gchar *etag;
+  guint64 mtime;
   const gchar *content_type;
   SoupMessageHeaders *response_headers;
   const gchar *method;
 
-  info = g_file_query_info (file, "standard::*,etag::*",
+  info = g_file_query_info (file, "standard::*,etag::*,time::modified",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     goto end;
@@ -128,6 +130,9 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
         }
 
       len = listing->len;
+      /* the listing is generated on the fly, it must not be cached */
+      soup_message_headers_append (soup_server_message_get_response_headers (msg),
+                                   "Cache-Control", "no-cache");
       soup_server_message_set_response (msg, "text/html; charset=utf-8",
                                         SOUP_MEMORY_TAKE,
                                         g_string_free_and_steal (listing), len);
@@ -136,14 +141,38 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
     }
 
   etag = g_file_info_get_etag (info);
+  mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
   g_warn_if_fail (etag != NULL);
 
   response_headers = soup_server_message_get_response_headers (msg);
 
+  /* the validators allow a client to revalidate its cached
+   * representation with a cheap conditional request, answered
+   * with Not Modified */
   if (etag)
     {
-      g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
-      soup_message_headers_append (response_headers, "ETag", tmp);
+      g_autofree gchar *quoted = g_strdup_printf ("\"%s\"", etag);
+      soup_message_headers_append (response_headers, "ETag", quoted);
+    }
+
+  if (mtime)
+    {
+      g_autofree gchar *modified = http_time_to_string (mtime);
+
+      if (modified)
+        soup_message_headers_append (response_headers, "Last-Modified", modified);
+    }
+
+  /* the content may only be reused after revalidation */
+  soup_message_headers_append (response_headers, "Cache-Control", "no-cache");
+
+  if (http_request_not_modified (soup_server_message_get_request_headers (msg), etag, mtime))
+    {
+      /* RFC 9110 section 15.4.5: no body, and no representation
+       * metadata beyond the validators */
+      soup_message_headers_remove (response_headers, "Content-Type");
+      status = SOUP_STATUS_NOT_MODIFIED;
+      goto end;
     }
 
   /* special files may have no content type, do not leave the
