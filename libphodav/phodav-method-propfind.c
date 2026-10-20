@@ -35,13 +35,36 @@ typedef struct _PropFind
   GHashTable *props;
 } PropFind;
 
+/* the requested properties are collected in a table keyed on the
+ * element name and namespace href, so that duplicated <prop> entries
+ * are only answered once */
+static guint
+prop_node_hash (gconstpointer p)
+{
+  xmlNodePtr node = (xmlNodePtr) p;
+  const gchar *href = node->ns ? (gchar *) node->ns->href : NULL;
+
+  return g_str_hash ((gchar *) node->name) + (href ? g_str_hash (href) : 0);
+}
+
+static gboolean
+prop_node_equal (gconstpointer a, gconstpointer b)
+{
+  xmlNodePtr na = (xmlNodePtr) a;
+  xmlNodePtr nb = (xmlNodePtr) b;
+  const gchar *ha = na->ns ? (gchar *) na->ns->href : NULL;
+  const gchar *hb = nb->ns ? (gchar *) nb->ns->href : NULL;
+
+  return g_strcmp0 ((gchar *) na->name, (gchar *) nb->name) == 0 &&
+         g_strcmp0 (ha, hb) == 0;
+}
+
 static PropFind *
 propfind_new (void)
 {
   PropFind *pf = g_new0 (PropFind, 1);
 
-  // TODO: a better hash for Node (name, ns)
-  pf->props = g_hash_table_new (g_direct_hash, g_direct_equal);
+  pf->props = g_hash_table_new (prop_node_hash, prop_node_equal);
   return pf;
 }
 
@@ -733,7 +756,7 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   g_autoptr(PropFind) pf = NULL;
   DepthType depth;
   g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
-  DavDoc doc = {
+  g_auto(DavDoc) doc = {
     0,
   };
   gint status = SOUP_STATUS_NOT_FOUND;
@@ -792,7 +815,6 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   status = set_response_multistatus (msg, mstatus);
 
 end:
-  davdoc_free (&doc);
   /* the responses use ns */
   g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
