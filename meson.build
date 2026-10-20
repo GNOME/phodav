@@ -27,7 +27,7 @@ incdir = include_directories('.')
 compiler = meson.get_compiler('c')
 conf = configuration_data()
 
-glib_ver = '>= 2.76'
+glib_ver = '>= 2.80'
 
 deps = []
 if host_machine.system() == 'windows'
@@ -50,6 +50,19 @@ endif
 if compiler.has_header('sys/xattr.h')
   conf.set('HAVE_SYS_XATTR_H', 1)
 endif
+
+# Turn any accidental use of an API which is deprecated, or only
+# available in a newer version than the ones supported here, into a
+# compiler warning: the CI builds with -Dwerror=true, so that it fails
+# the build. Keep the versions in sync with the dependency checks
+# above.
+add_project_arguments(
+  '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_80',
+  '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_80',
+  '-DSOUP_VERSION_MIN_REQUIRED=SOUP_VERSION_3_0',
+  '-DSOUP_VERSION_MAX_ALLOWED=SOUP_VERSION_3_0',
+  language : 'c',
+)
 
 subdir('po')
 subdir('libphodav')
