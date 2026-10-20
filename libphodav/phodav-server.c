@@ -259,17 +259,16 @@ phodav_server_constructed (GObject *gobject)
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
   {
-    GSource *source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
+    g_autoptr(GSource) source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
 
     /* g_timeout_add_seconds() cannot be used here: it would attach
      * the sweep to the global default context instead of the one
      * this server runs on */
     g_source_set_callback (source, expire_locks_timeout, self, NULL);
     g_source_attach (source, self->expire_locks_context);
-    /* the context holds the source alive, and the context reference
-     * above holds the context */
+    /* the context owns the source while it is attached and dispose()
+     * detaches it, keep only a borrowed pointer */
     self->expire_locks_source = source;
-    g_source_unref (source);
   }
 
   /* Chain up to the parent class */
@@ -292,11 +291,7 @@ phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  if (self->expire_locks_source)
-    {
-      g_source_destroy (self->expire_locks_source);
-      self->expire_locks_source = NULL;
-    }
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
   g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
 
   /* SoupServer could live longer than PhodavServer,

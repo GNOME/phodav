@@ -1347,8 +1347,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
     g_autoptr(GFile) file = g_file_new_for_path (path);
     g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
-    g_clear_pointer (&etag, g_free);
-    etag = g_strdup (g_file_info_get_etag (info));
+    g_set_str (&etag, g_file_info_get_etag (info));
     g_assert_nonnull (etag);
     g_clear_pointer (&if_match, g_free);
     if_match = g_strdup_printf ("\"%s\"", etag);
@@ -1393,8 +1392,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
     g_autoptr(GFile) file = g_file_new_for_path (path);
     g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
-    g_clear_pointer (&etag, g_free);
-    etag = g_strdup (g_file_info_get_etag (info));
+    g_set_str (&etag, g_file_info_get_etag (info));
     g_assert_nonnull (etag);
     g_clear_pointer (&if_match, g_free);
     if_match = g_strdup_printf ("\"%s\"", etag);
@@ -1486,8 +1484,7 @@ test_lock_tree_conflict (DavFixture *f, gconstpointer user_data)
                                               "Depth", "infinity", NULL);
 
     g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
-    g_clear_pointer (&parent_token, g_free);
-    parent_token = g_strdup (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token"));
+    g_set_str (&parent_token, soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token"));
     g_assert_nonnull (parent_token);
   }
   g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir", NULL,

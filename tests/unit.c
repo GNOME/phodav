@@ -667,7 +667,7 @@ static void
 test_server_dispose (void)
 {
   GLogLevelFlags fatal;
-  PhodavServer *server = phodav_server_new (NULL);
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
 
   /* dispose may run more than once (g_object_run_dispose() followed
    * by the last unref): the second pass must not touch the cleared
@@ -675,7 +675,8 @@ test_server_dispose (void)
   g_object_run_dispose (G_OBJECT (server));
 
   fatal = g_log_set_always_fatal (G_LOG_FATAL_MASK | G_LOG_LEVEL_CRITICAL);
-  g_object_unref (server);
+  /* the mask must be restored only after the last unref */
+  g_object_unref (g_steal_pointer (&server));
   g_log_set_always_fatal (fatal);
 }
 
