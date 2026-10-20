@@ -44,11 +44,12 @@ dav_lock_new (Path *path, const gchar *token, DAVLockScopeType scope, DAVLockTyp
   DAVLock *lock;
 
   g_return_val_if_fail (token, NULL);
-  g_return_val_if_fail (strlen (token) == sizeof (lock->token), NULL);
+  g_return_val_if_fail (strlen (token) == DAV_LOCK_TOKEN_LENGTH, NULL);
 
   lock = g_new0 (DAVLock, 1);
   lock->path = path_ref (path);
-  memcpy (lock->token, token, sizeof (lock->token));
+  /* copy the NUL terminator too, do not rely on the struct padding */
+  memcpy (lock->token, token, DAV_LOCK_TOKEN_LENGTH + 1);
   lock->scope = scope;
   lock->type = type;
   lock->depth = depth;

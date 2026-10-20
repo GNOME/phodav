@@ -272,7 +272,7 @@ test_dav_lock_new (void)
   gint64 now = g_get_monotonic_time () / G_USEC_PER_SEC;
 
   /* invalid tokens are rejected */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*strlen (token) == sizeof (lock->token)*");
+  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*strlen (token) == DAV_LOCK_TOKEN_LENGTH*");
   g_assert_null (dav_lock_new (p, "short", DAV_LOCK_SCOPE_SHARED, DAV_LOCK_WRITE,
                                DEPTH_ZERO, NULL, 60));
   g_test_assert_expected_messages ();

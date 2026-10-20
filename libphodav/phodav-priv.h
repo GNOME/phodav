@@ -61,10 +61,14 @@ typedef enum _PropFindType
   PROPFIND_PROP
 } PropFindType;
 
+/* the lock tokens are "urn:uuid:" (9 characters) followed by a
+ * 36 characters UUID */
+#define DAV_LOCK_TOKEN_LENGTH 45
+
 struct _DAVLock
 {
   Path *path;
-  gchar token[45];
+  gchar token[DAV_LOCK_TOKEN_LENGTH + 1];
   DAVLockScopeType scope;
   DAVLockType type;
   DepthType depth;
