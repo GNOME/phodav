@@ -91,7 +91,7 @@ path_key (const gchar *_path)
   if (!path->len)
     g_string_append_c (path, '/');
 
-  return g_string_free (g_steal_pointer (&path), FALSE);
+  return g_string_free_and_steal (g_steal_pointer (&path));
 }
 
 Path *

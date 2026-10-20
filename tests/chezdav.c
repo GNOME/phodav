@@ -22,10 +22,11 @@
  * The htdigest file contains two users of the server realm and one
  * user of another realm, to exercise the file parsing too. */
 
-#include <glib.h>
-#include <libsoup/soup.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <glib.h>
+#include <libsoup/soup.h>
 
 #ifdef G_OS_UNIX
 #include <signal.h>
@@ -118,7 +119,7 @@ server_wait_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
 /* kill the server on fatal signals, so that a failing test doesn't
  * leave it running and holding the port */
 static void
-fatal_signal_cb (int sig)
+fatal_signal_cb (gint sig)
 {
   if (server_pid > 0)
     kill (server_pid, SIGKILL);
@@ -517,7 +518,8 @@ gint
 main (gint argc, gchar *argv[])
 {
   g_autofree gchar *htdigest = NULL;
-  gchar *contents, *line, *tmp;
+  g_autofree gchar *contents = NULL;
+  gchar *line, *tmp;
   g_autoptr(GError) error = NULL;
 
   g_test_init (&argc, &argv, NULL);
@@ -547,7 +549,6 @@ main (gint argc, gchar *argv[])
   contents = tmp;
   g_file_set_contents (htdigest, contents, -1, &error);
   g_assert_no_error (error);
-  g_free (contents);
 
 #ifdef G_OS_UNIX
   install_fatal_signal_handlers ();

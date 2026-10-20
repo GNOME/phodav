@@ -18,10 +18,10 @@
 /* Unit tests for the write queue used by spice-webdavd to serialize
  * the output of its clients into the multiplexing channel. */
 
+#include "output-queue.h"
+
 #include <gio/gio.h>
 #include <glib.h>
-
-#include "output-queue.h"
 
 typedef struct
 {
@@ -58,7 +58,7 @@ struct _FailingOutputStream
   GOutputStream parent_instance;
 };
 
-G_DEFINE_TYPE (FailingOutputStream, failing_output_stream, G_TYPE_OUTPUT_STREAM)
+G_DEFINE_FINAL_TYPE (FailingOutputStream, failing_output_stream, G_TYPE_OUTPUT_STREAM)
 
 static gssize
 failing_output_stream_write (GOutputStream *stream, const void *buffer, gsize count, GCancellable *cancellable, GError **error)

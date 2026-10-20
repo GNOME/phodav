@@ -267,8 +267,7 @@ test_mux (void)
   g_assert_cmpint (g_subprocess_get_exit_status (daemon_), ==, 0);
   g_clear_object (&daemon_);
 
-  close (mux_fd);
-  mux_fd = -1;
+  g_clear_fd (&mux_fd, NULL);
   close (pts_slave_keep);
 }
 

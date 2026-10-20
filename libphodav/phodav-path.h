@@ -29,6 +29,7 @@ struct _Path
 
 Path *path_ref (Path *path);
 void path_unref (Path *path);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (Path, path_unref)
 void path_remove_lock (Path *path, DAVLock *lock);
 void path_add_lock (Path *path, DAVLock *lock);
 

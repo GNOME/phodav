@@ -182,6 +182,9 @@ test_xml_node_helpers (void)
 static void
 test_path_lifecycle (void)
 {
+  /* the refcount of the path is the very subject of this test: it is
+   * driven to zero by the lock teardown, so it must not be g_autoptr */
+  /* gobject-linter-ignore-next-line: use_auto_cleanup */
   Path *p = path_new_test ("/a");
   g_autofree gchar *token = new_token ();
   g_autoptr(DAVLock) lock = NULL;
@@ -217,6 +220,9 @@ test_path_lifecycle (void)
 static void
 test_path_orphaned_locks (void)
 {
+  /* like test_path_lifecycle, the path references are released manually
+   * to reach the last unref with the locks still registered */
+  /* gobject-linter-ignore-next-line: use_auto_cleanup */
   Path *p = path_new_test ("/orphan");
   g_autofree gchar *token = new_token ();
   DAVLock *lock;
@@ -236,9 +242,9 @@ test_path_orphaned_locks (void)
 static void
 test_dav_lock_new (void)
 {
-  Path *p = path_new_test ("/a");
+  g_autoptr(Path) p = path_new_test ("/a");
   g_autofree gchar *token = new_token ();
-  DAVLock *lock;
+  g_autoptr(DAVLock) lock = NULL;
   gint64 now = g_get_monotonic_time () / G_USEC_PER_SEC;
 
   /* invalid tokens are rejected */
@@ -271,9 +277,6 @@ test_dav_lock_new (void)
   dav_lock_refresh_timeout (lock, 10);
   g_assert_cmpuint (lock->timeout, >, (guint64) now);
   g_assert_cmpuint (lock->timeout, <=, (guint64) now + 70);
-
-  dav_lock_free (lock);
-  path_unref (p);
 }
 
 static void
@@ -282,7 +285,7 @@ test_dav_lock_activelock_node (void)
   xmlDocPtr doc = xmlNewDoc (NULL);
   xmlNodePtr owner = xmlNewDocNode (doc, NULL, BAD_CAST "owner", BAD_CAST "unit-test");
   xmlNsPtr ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
-  Path *p = path_new_test ("/a/b");
+  g_autoptr(Path) p = path_new_test ("/a/b");
   g_autofree gchar *token = new_token ();
   g_autoptr(DAVLock) lock = NULL;
   xmlNodePtr node;
@@ -352,27 +355,24 @@ test_dav_lock_activelock_node (void)
   xmlFreeNs (ns);
   xmlFreeNode (owner);
   xmlFreeDoc (doc);
-  path_unref (p);
 }
 
 /* check whether a lock is matched by a submitted (path, token) pair */
 static void
 check_locks_submitted (DAVLock *lock, const gchar *path, const gchar *token, gboolean expected)
 {
-  GList *locks = g_list_append (NULL, lock_submitted_new (path, token));
+  g_autolist(LockSubmitted) locks = g_list_append (NULL, lock_submitted_new (path, token));
 
   g_assert_true (locks_submitted_has (locks, lock) == expected);
-
-  g_list_free_full (locks, (GDestroyNotify) lock_submitted_free);
 }
 
 static void
 test_lock_submitted (void)
 {
-  Path *p = path_new_test ("/a");
+  g_autoptr(Path) p = path_new_test ("/a");
   g_autofree gchar *token = new_token ();
   g_autoptr(DAVLock) lock = NULL;
-  LockSubmitted *submitted;
+  g_autoptr(LockSubmitted) submitted = NULL;
 
   lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
                        DEPTH_ZERO, NULL, 60);
@@ -396,9 +396,6 @@ test_lock_submitted (void)
 
   /* a different path does not match either */
   check_locks_submitted (lock, "/other", token, FALSE);
-
-  lock_submitted_free (submitted);
-  path_unref (p);
 }
 
 static gboolean
@@ -475,7 +472,7 @@ test_server_lock_manager (void)
   g_autofree gchar *token = new_token ();
   g_autofree gchar *other = new_token ();
   g_autoptr(DAVLock) lock = NULL;
-  GList *submitted = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   Path *p;
 
   p = server_get_path (server, "/a");
@@ -502,8 +499,6 @@ test_server_lock_manager (void)
   lock_submitted_free (submitted->data);
   submitted->data = lock_submitted_new ("/a", other);
   g_assert_true (server_path_has_other_locks (server, "/a/b", submitted));
-
-  g_list_free_full (submitted, (GDestroyNotify) lock_submitted_free);
 
   /* the lock is released with the path */
   path_remove_lock (p, lock);
