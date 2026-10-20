@@ -134,3 +134,33 @@ sanitizers:
     - dnf install -y --nogpgcheck libasan libubsan
     - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_sanitize=address,undefined build-sanitize
     - meson test -C build-sanitize --print-errorlogs
+
+coverage:
+  extends: .litmus
+  stage: test
+  needs: []
+  # extract the total line coverage from the gcovr report in the job log
+  coverage: '/^TOTAL.+?(\d+\%)$/'
+  script:
+    # gcovr is needed to turn the gcov data into a report
+    - dnf install -y --nogpgcheck gcovr
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_coverage=true build-coverage
+    # build all the targets, so that the report covers every source file
+    # and not just those needed to run the tests
+    - meson compile -C build-coverage
+    - meson test -C build-coverage --print-errorlogs
+    # the report covers the project sources only: the litmus subproject
+    # and the test programs themselves are excluded; --fail-under-line
+    # fails the job when the line coverage regresses below the minimum
+    - mkdir -p build-coverage/meson-logs/coveragereport
+    - gcovr -r . build-coverage
+        --exclude subprojects
+        --exclude tests
+        --fail-under-line 75
+        --txt -
+        --html-nested build-coverage/meson-logs/coveragereport/index.html
+  artifacts:
+    paths:
+      - build-coverage/meson-logs/coveragereport/
+    expire_in: 1 week
+    when: always
