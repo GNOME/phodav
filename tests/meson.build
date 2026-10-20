@@ -52,12 +52,17 @@ test('chezdav',
 # (Fedora retired it), so build it from source as an optional subproject
 # when it is not installed on the system
 litmus = disabler()
+litmus_depends = []
 if not get_option('litmus').disabled()
   litmus = find_program('litmus', required : false)
   if not litmus.found()
     litmus_sub = subproject('litmus', required : get_option('litmus'))
     if litmus_sub.found()
       litmus = litmus_sub.get_variable('litmus_prog')
+      # the litmus(1) driver script runs the suite programs built by the
+      # subproject; meson test would not build them otherwise, as they
+      # are not in the dependency graph of the script itself
+      litmus_depends += litmus_sub.get_variable('litmus_suites')
     endif
   endif
 endif
@@ -65,6 +70,7 @@ if litmus.found()
   test('litmus',
        find_program(files('litmus.sh')),
        args : [server.full_path(), litmus.full_path()],
+       depends : [server] + litmus_depends,
        timeout : 120)
 endif
 

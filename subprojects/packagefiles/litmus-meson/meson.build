@@ -65,14 +65,24 @@ libtest = static_library('litmus-test',
   include_directories : inc,
   dependencies : neon)
 
-# the default test suites, run by the litmus(1) driver script
+# the default test suites, run by the litmus(1) driver script; they are
+# collected in litmus_suites so that a parent project can build them as
+# test dependencies (meson test does not build them on its own)
 suites = ['basic', 'http', 'props', 'locks', 'copymove']
+litmus_suites = []
+foreach suite : suites
+  litmus_suites += executable(suite, [config_h, f'src/@suite@.c'],
+                              include_directories : inc,
+                              link_with : libtest,
+                              dependencies : neon,
+                              install : false)
+endforeach
 
 # additional test programs, built but not run by default; select them
 # with the TESTS environment variable of the litmus(1) script
 extra_suites = ['largefile', 'protected']
 
-foreach suite : suites + extra_suites
+foreach suite : extra_suites
   executable(suite, [config_h, f'src/@suite@.c'],
              include_directories : inc,
              link_with : libtest,
