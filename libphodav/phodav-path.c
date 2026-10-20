@@ -61,3 +61,20 @@ path_add_lock (Path *path, DAVLock *lock)
 
   path->locks = g_list_append (path->locks, lock);
 }
+
+void
+path_expire_locks (Path *path)
+{
+  GList *l = path->locks;
+
+  while (l)
+    {
+      GList *next = l->next;
+      DAVLock *lock = l->data;
+
+      if (dav_lock_is_expired (lock))
+        dav_lock_free (lock);
+
+      l = next;
+    }
+}

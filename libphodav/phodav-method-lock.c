@@ -23,12 +23,14 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
-static gboolean G_GNUC_PURE
+static gboolean
 check_lock (const gchar *key, Path *path, gpointer data)
 {
   DAVLock *lock = data;
   DAVLock *other = NULL;
   GList *l;
+
+  path_expire_locks (path);
 
   for (l = path->locks; l; l = l->next)
     {

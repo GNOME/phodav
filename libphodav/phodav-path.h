@@ -33,4 +33,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (Path, path_unref)
 void path_remove_lock (Path *path, DAVLock *lock);
 void path_add_lock (Path *path, DAVLock *lock);
 
+/* free the locks whose timeout has elapsed; like dav_lock_free(), they
+ * remove themselves from the path lock list */
+void path_expire_locks (Path *path);
+
 G_END_DECLS

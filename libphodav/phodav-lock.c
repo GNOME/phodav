@@ -31,6 +31,13 @@ dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
     lock->timeout = 0;
 }
 
+gboolean
+dav_lock_is_expired (const DAVLock *lock)
+{
+  return lock->timeout != 0 &&
+         (guint64) (g_get_monotonic_time () / G_USEC_PER_SEC) >= lock->timeout;
+}
+
 DAVLock *
 dav_lock_new (Path *path, const gchar *token, DAVLockScopeType scope, DAVLockType type, DepthType depth, const xmlNodePtr owner, guint timeout)
 {

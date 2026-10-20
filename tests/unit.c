@@ -505,7 +505,73 @@ test_server_lock_manager (void)
   g_assert_null (server_path_get_lock (server, "/a/b/c", token));
 }
 
+static void
+test_dav_lock_expiry (void)
+{
+  /* the path references are released manually, the expiry drives the
+   * last unrefs of the locks and of the path */
+  /* gobject-linter-ignore-next-line: use_auto_cleanup */
+  Path *p = path_new_test ("/expire");
+  g_autofree gchar *active_token = new_token ();
+  g_autofree gchar *expired_token = new_token ();
+  DAVLock *active, *expired;
 
+  /* an infinite lock never expires */
+  active = dav_lock_new (p, active_token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                         DEPTH_ZERO, NULL, 0);
+  g_assert_false (dav_lock_is_expired (active));
+  path_add_lock (p, active);
+
+  /* a lock whose deadline has passed does */
+  expired = dav_lock_new (p, expired_token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                          DEPTH_ZERO, NULL, 60);
+  g_assert_false (dav_lock_is_expired (expired));
+  expired->timeout = g_get_monotonic_time () / G_USEC_PER_SEC - 1;
+  g_assert_true (dav_lock_is_expired (expired));
+  path_add_lock (p, expired);
+
+  /* the sweep frees only the expired locks */
+  path_expire_locks (p);
+  g_assert_cmpuint (g_list_length (p->locks), ==, 1);
+  g_assert_true (p->locks->data == active);
+
+  /* the path releases the remaining lock */
+  path_unref (p);
+  path_unref (p);
+}
+
+static void
+test_server_lock_expiry (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *token = new_token ();
+  DAVLock *lock;
+  Path *p;
+
+  p = server_get_path (server, "/a");
+  lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                       DEPTH_ZERO, NULL, 60);
+  path_add_lock (p, lock);
+
+  /* the lock is found while it has not expired */
+  g_assert_true (server_path_lookup_lock (server, "/a/b", token) == lock);
+
+  /* expire it behind the server's back */
+  lock->timeout = g_get_monotonic_time () / G_USEC_PER_SEC - 1;
+
+  /* the expired lock is not honored anymore */
+  g_assert_null (server_path_lookup_lock (server, "/a/b", token));
+
+  /* and the sweep reclaims the empty paths from the table */
+  server_expire_locks (server);
+  {
+    GList *collected = NULL;
+
+    g_assert_true (server_foreach_parent_path (server, "/a/b", collect_path, &collected));
+    g_assert_cmpuint (g_list_length (collected), ==, 0);
+    g_list_free_full (collected, g_free);
+  }
+}
 
 static void
 test_server_dispose (void)
@@ -544,6 +610,8 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/server/paths", test_server_paths);
   g_test_add_func ("/server/lock-manager", test_server_lock_manager);
+  g_test_add_func ("/lock/expiry", test_dav_lock_expiry);
+  g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
   g_test_add_func ("/server/dispose", test_server_dispose);
 
   return g_test_run ();

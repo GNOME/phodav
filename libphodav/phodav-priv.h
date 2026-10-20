@@ -88,9 +88,13 @@ gboolean server_foreach_parent_path (PhodavServer *server,
 DAVLock *server_path_get_lock (PhodavServer *server,
                                const gchar *path,
                                const gchar *token);
+DAVLock *server_path_lookup_lock (PhodavServer *server,
+                                  const gchar *path,
+                                  const gchar *token);
 gboolean server_path_has_other_locks (PhodavServer *self,
                                       const gchar *path,
                                       GList *locks);
+void server_expire_locks (PhodavServer *self);
 Path *server_get_path (PhodavServer *self,
                        const gchar *_path);
 

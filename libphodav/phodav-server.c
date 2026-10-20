@@ -44,6 +44,8 @@ struct _PhodavServer
   PathHandler *root_handler; /* weak ref */
   GHashTable *paths;
   gboolean readonly;
+  GMainContext *expire_locks_context;
+  GSource *expire_locks_source;
 };
 
 G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
@@ -68,6 +70,12 @@ static void server_callback (SoupServer *server,
 static void request_started (SoupServer *server,
                              SoupServerMessage *message,
                              gpointer user_data);
+
+/* how often to look for expired locks; they are also expired lazily
+ * when they are used, this only reclaims the memory */
+#define LOCK_EXPIRY_INTERVAL 1
+
+static gboolean expire_locks_timeout (gpointer user_data);
 
 /* Canonicalize a request path for use as a key in the paths table:
  * empty segments ("//") and trailing slashes are skipped, just like
@@ -165,6 +173,41 @@ phodav_server_init (PhodavServer *self)
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
+
+  /* the context this server is created on; the lock expiry sweep
+   * runs there, like the rest of the server */
+  self->expire_locks_context = g_main_context_ref (g_main_context_get_thread_default () ?: g_main_context_default ());
+}
+
+/* free the locks whose timeout has elapsed, and drop the empty paths
+ * so the lock table does not grow without bound with the locks taken
+ * over the lifetime of the server */
+void
+server_expire_locks (PhodavServer *self)
+{
+  GHashTableIter iter;
+  Path *path;
+
+  if (g_hash_table_size (self->paths) == 0)
+    return;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      path_expire_locks (path);
+
+      /* the path is only kept alive by the table when it has no locks */
+      if (!path->locks)
+        g_hash_table_iter_remove (&iter);
+    }
+}
+
+static gboolean
+expire_locks_timeout (gpointer user_data)
+{
+  server_expire_locks (PHODAV_SERVER (user_data));
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -197,6 +240,20 @@ phodav_server_constructed (GObject *gobject)
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
+  {
+    GSource *source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
+
+    /* g_timeout_add_seconds() cannot be used here: it would attach
+     * the sweep to the global default context instead of the one
+     * this server runs on */
+    g_source_set_callback (source, expire_locks_timeout, self, NULL);
+    g_source_attach (source, self->expire_locks_context);
+    /* the context holds the source alive, and the context reference
+     * above holds the context */
+    self->expire_locks_source = source;
+    g_source_unref (source);
+  }
+
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)
     G_OBJECT_CLASS (phodav_server_parent_class)->constructed (gobject);
@@ -216,6 +273,13 @@ static void
 phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
+
+  if (self->expire_locks_source)
+    {
+      g_source_destroy (self->expire_locks_source);
+      self->expire_locks_source = NULL;
+    }
+  g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
 
   /* SoupServer could live longer than PhodavServer,
    * this frees the PhodavHandler passed as user_data;
@@ -425,6 +489,8 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   PathGetLock *d = data;
   GList *l;
 
+  path_expire_locks (path);
+
   for (l = path->locks; l != NULL; l = l->next)
     {
       DAVLock *lock = l->data;
@@ -439,17 +505,27 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
+/* look for the lock with @token on @path or any of its parents,
+ * without logging when it is not found */
+DAVLock *
+server_path_lookup_lock (PhodavServer *self, const gchar *path, const gchar *token)
+{
+  PathGetLock p = { .token = token };
+
+  server_foreach_parent_path (self, path, _path_get_lock, &p);
+
+  return p.lock;
+}
+
 DAVLock *
 server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
 {
-  PathGetLock p = { .token = token };
-  gboolean success = !server_foreach_parent_path (self, path,
-                                                  _path_get_lock, (gpointer) &p);
+  DAVLock *lock = server_path_lookup_lock (self, path, token);
 
-  if (!success)
+  if (!lock)
     g_message ("Invalid lock token %s for %s", token, path);
 
-  return p.lock;
+  return lock;
 }
 
 static gboolean
@@ -457,6 +533,8 @@ other_lock_exists (const gchar *key, Path *path, gpointer data)
 {
   GList *locks = data;
   GList *l;
+
+  path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     {

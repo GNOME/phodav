@@ -33,6 +33,10 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (DAVLock, dav_lock_free)
 
 void dav_lock_refresh_timeout (DAVLock *lock, guint timeout);
 
+/* a lock with a timeout which has elapsed; infinite locks never
+ * expire and must be released with UNLOCK */
+gboolean dav_lock_is_expired (const DAVLock *lock);
+
 xmlNodePtr dav_lock_get_activelock_node (const DAVLock *lock,
                                          xmlNsPtr ns);
 

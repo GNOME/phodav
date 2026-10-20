@@ -1391,6 +1391,26 @@ test_unknown_method (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_OK);
 }
 
+static void
+test_lock_expiry (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/expiring.txt", "Second-1");
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+
+  /* the lock is enforced while it has not expired */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/expiring.txt", "data", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+
+  /* wait for the deadline to pass; expiry is enforced lazily, when
+   * the locks are looked at again */
+  g_usleep (1500000);
+
+  /* once expired, the lock is not honored anymore */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/expiring.txt", "expired", NULL),
+                    ==, SOUP_STATUS_OK);
+
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1417,6 +1437,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
   g_test_add ("/dav/lock-double-slash", DavFixture, NULL, dav_fixture_setup, test_lock_double_slash, dav_fixture_teardown);
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
+  g_test_add ("/dav/lock/expiry", DavFixture, NULL, dav_fixture_setup, test_lock_expiry, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
   g_test_add ("/dav/if-malformed", DavFixture, NULL, dav_fixture_setup, test_if_malformed, dav_fixture_teardown);

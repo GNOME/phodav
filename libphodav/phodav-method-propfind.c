@@ -124,6 +124,8 @@ lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
   g_return_val_if_fail (key, FALSE);
   g_return_val_if_fail (path, FALSE);
 
+  path_expire_locks (path);
+
   for (l = path->locks; l != NULL; l = l->next)
     xmlAddChild (node, dav_lock_get_activelock_node (l->data, NULL));
 
