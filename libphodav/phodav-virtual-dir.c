@@ -518,6 +518,7 @@ phodav_virtual_dir_dispose (GObject *object)
       self->parent = NULL;
     }
   self->dummy = TRUE;
+  g_clear_object (&self->real_root);
   g_clear_list (&self->children, g_object_unref);
 
   G_OBJECT_CLASS (phodav_virtual_dir_parent_class)->dispose (object);
