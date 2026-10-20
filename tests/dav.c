@@ -64,6 +64,7 @@ typedef struct _DavFixture
   GThread *thread;
   SoupSession *session;
   gchar *base_uri;
+  gboolean thread_done;
 } DavFixture;
 
 static void
@@ -118,6 +119,7 @@ server_thread (gpointer data)
   g_main_context_push_thread_default (f->context);
   g_main_loop_run (f->loop);
   g_main_context_pop_thread_default (f->context);
+  g_atomic_int_set (&f->thread_done, TRUE);
 
   return NULL;
 }
@@ -171,10 +173,18 @@ static void
 dav_fixture_teardown (DavFixture *f, gconstpointer user_data)
 {
   g_autoptr(GFile) file = NULL;
+  guint i;
 
   g_object_unref (f->session);
 
-  g_main_loop_quit (f->loop);
+  /* quitting a loop which is not running yet is a lost wakeup, keep
+   * quitting until the thread has actually left the loop */
+  for (i = 0; i < 3000 && !g_atomic_int_get (&f->thread_done); i++)
+    {
+      g_main_loop_quit (f->loop);
+      g_usleep (1000);
+    }
+  g_assert_true (f->thread_done);
   g_thread_join (f->thread);
   g_main_loop_unref (f->loop);
 
