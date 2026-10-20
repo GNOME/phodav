@@ -21,15 +21,59 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
+typedef struct _PutContext
+{
+  PathHandler *handler; /* borrowed, owned by the server */
+  GFile *file;
+  GFileOutputStream *output;
+} PutContext;
+
+static PutContext *
+put_context_new (PathHandler *handler, GFile *file, GFileOutputStream *output)
+{
+  PutContext *ctx = g_new0 (PutContext, 1);
+
+  ctx->handler = handler;
+  ctx->file = g_object_ref (file);
+  ctx->output = g_object_ref (output);
+
+  return ctx;
+}
+
+static void
+put_context_free (PutContext *ctx)
+{
+  g_object_unref (ctx->file);
+  g_object_unref (ctx->output);
+  g_free (ctx);
+}
+
+/* the upload cannot be completed: the file content is incomplete.
+ * The output stream of a g_file_replace() commits its content when
+ * closed or finalized, so the partial file must be removed after
+ * closing the stream. */
+static void
+put_context_abort (PutContext *ctx)
+{
+  g_autoptr(GError) close_error = NULL;
+  g_autoptr(GError) delete_error = NULL;
+
+  if (!g_output_stream_close (G_OUTPUT_STREAM (ctx->output), NULL, &close_error))
+    g_debug ("PUT: failed to close the partial file: %s", close_error->message);
+
+  if (!g_file_delete (ctx->file, NULL, &delete_error))
+    g_debug ("PUT: failed to remove the partial file: %s", delete_error->message);
+}
+
 static void
 method_put_finished (SoupServerMessage *msg,
                      gpointer user_data)
 {
-  GFileOutputStream *output = user_data;
+  PutContext *ctx = user_data;
 
-  g_debug ("PUT finished %p", output);
+  g_debug ("PUT finished %p", ctx->output);
 
-  g_object_unref (output);
+  put_context_free (ctx);
 }
 
 static void
@@ -37,9 +81,8 @@ method_put_got_chunk (SoupServerMessage *msg,
                       GBytes *chunk,
                       gpointer user_data)
 {
-  GFileOutputStream *output = user_data;
-  PathHandler *handler = g_object_get_data (user_data, "handler");
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PutContext *ctx = user_data;
+  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
   g_autoptr(GError) err = NULL;
   gsize bytes_written;
   gconstpointer data;
@@ -49,17 +92,18 @@ method_put_got_chunk (SoupServerMessage *msg,
 
   data = g_bytes_get_data (chunk, &data_length);
 
-  if (!g_output_stream_write_all (G_OUTPUT_STREAM (output),
-                                  data, data_length,
-                                  &bytes_written, cancellable, &err))
-    goto end;
+  if (g_output_stream_write_all (G_OUTPUT_STREAM (ctx->output),
+                                 data, data_length,
+                                 &bytes_written, cancellable, &err))
+    return;
 
-end:
-  if (err)
-    {
-      g_warning ("error: %s", err->message);
-      soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-    }
+  g_warning ("PUT: write error: %s", err->message);
+
+  /* answer right away, ignore the remaining chunks and discard the
+   * partial file, the client has to retry the upload from scratch */
+  soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+  g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
+  put_context_abort (ctx);
 }
 
 /* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
@@ -200,9 +244,13 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
 
   g_debug ("PUT output %p", output);
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-  g_object_set_data (G_OBJECT (output), "handler", handler);
-  g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), output);
-  g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), output);
+  {
+    PutContext *ctx = put_context_new (handler, file, output);
+
+    g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), ctx);
+    g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), ctx);
+    g_object_unref (output); /* the context owns it now */
+  }
 
 end:
   soup_server_message_set_status (msg, status, NULL);

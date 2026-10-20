@@ -27,6 +27,11 @@
 #include <libxml/parser.h>
 #include <libxml/tree.h>
 
+#ifdef G_OS_UNIX
+#include <signal.h>
+#include <sys/resource.h>
+#endif
+
 #include "libphodav/phodav.h"
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (xmlDoc, xmlFreeDoc)
@@ -1567,19 +1572,82 @@ test_request_body_too_large (DavFixture *f, gconstpointer user_data)
     g_autoptr(SoupMessage) msg = NULL;
     g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/hello.txt", NULL);
     g_autoptr(GBytes) request = g_bytes_new (big, strlen (big));
+    g_autoptr(GInputStream) stream = NULL;
     g_autoptr(GBytes) response = NULL;
     g_autoptr(GError) error = NULL;
 
     msg = soup_message_new (SOUP_METHOD_PROPFIND, uri);
     soup_message_headers_append (soup_message_get_request_headers (msg), "Depth", "0");
-    soup_message_set_request_body (msg, NULL,
-                                   g_memory_input_stream_new_from_bytes (request), -1);
+    stream = g_memory_input_stream_new_from_bytes (request);
+    soup_message_set_request_body (msg, NULL, stream, -1);
 
     response = soup_session_send_and_read (f->session, msg, NULL, &error);
     g_assert_no_error (error);
     g_assert_nonnull (response);
     g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_BAD_REQUEST);
   }
+}
+
+/* a PUT which fails mid-upload must not leave a partial file behind */
+static void
+test_put_write_error (DavFixture *f, gconstpointer user_data)
+{
+#ifdef G_OS_UNIX
+  g_autofree gchar *path = g_build_filename (f->dir, "partial.txt", NULL);
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *uri = NULL;
+  g_autoptr(GError) error = NULL;
+  struct rlimit limit, old;
+  g_autoptr(GBytes) body;
+
+  /* limit the writes to 8 bytes: writing more fails with EFBIG
+   * (SIGXFSZ must be ignored, or it would kill the test process) */
+  g_assert_cmpint (getrlimit (RLIMIT_FSIZE, &old), ==, 0);
+  limit = old;
+  limit.rlim_cur = 8;
+  signal (SIGXFSZ, SIG_IGN);
+  g_assert_cmpint (setrlimit (RLIMIT_FSIZE, &limit), ==, 0);
+
+  /* the write failure is reported as a warning by the server */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "PUT: write error: *");
+
+  uri = g_build_path ("/", f->base_uri, "/partial.txt", NULL);
+  msg = soup_message_new (SOUP_METHOD_PUT, uri);
+  body = g_bytes_new_take (g_strnfill (64, 'x'), 64);
+  soup_message_set_request_body_from_bytes (msg, NULL, body);
+
+  {
+    /* the server may answer 500, or reset the connection while it is
+     * still receiving the body */
+    g_autoptr(GBytes) response = soup_session_send_and_read (f->session, msg, NULL, &error);
+
+    if (error == NULL)
+      g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+  }
+  g_test_assert_expected_messages ();
+
+  /* the partial file was discarded */
+  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  /* the same happens when overwriting an existing file: the upload
+   * fails, and what remains is removed rather than left truncated */
+  {
+    g_autofree gchar *data = g_strnfill (64, 'x');
+    g_autofree gchar *hello = g_build_filename (f->dir, "hello.txt", NULL);
+
+    g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "PUT: write error: *");
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", data, NULL),
+                      ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+    g_test_assert_expected_messages ();
+
+    g_assert_false (g_file_test (hello, G_FILE_TEST_EXISTS));
+  }
+
+  signal (SIGXFSZ, SIG_DFL);
+  g_assert_cmpint (setrlimit (RLIMIT_FSIZE, &old), ==, 0);
+#else
+  g_test_skip ("not supported on this platform");
+#endif
 }
 
 gint
@@ -1594,6 +1662,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
+  g_test_add ("/dav/put-write-error", DavFixture, NULL, dav_fixture_setup, test_put_write_error, dav_fixture_teardown);
   g_test_add ("/dav/depth-headers", DavFixture, NULL, dav_fixture_setup, test_depth_headers, dav_fixture_teardown);
   g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
