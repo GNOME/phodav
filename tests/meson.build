@@ -67,10 +67,15 @@ if not get_option('litmus').disabled()
   endif
 endif
 if litmus.found()
+  # the litmus and neon code leaks its own test state; do not let it
+  # drown out leaks in the phodav test server (see litmus-leaks.supp).
+  # LSAN_OPTIONS is ignored unless the tests run with sanitizers
+  litmus_env = ['LSAN_OPTIONS=suppressions=' + meson.current_source_dir() / 'litmus-leaks.supp']
   test('litmus',
        find_program(files('litmus.sh')),
        args : [server.full_path(), litmus.full_path()],
        depends : [server] + litmus_depends,
+       env : litmus_env,
        timeout : 120)
 endif
 

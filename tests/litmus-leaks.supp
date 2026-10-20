@@ -1,0 +1,20 @@
+# LeakSanitizer suppressions for the litmus compliance suite.
+#
+# litmus and the neon library it is built on allocate their test state
+# and per-request data with the ne_* wrappers without always freeing
+# it (for example, the whole PROPFIND request and expat parser graph
+# is left behind by the props suite, and neon's lock discovery leaks
+# the parsed owner strings).  These are bugs in the third-party test
+# suite, not in phodav; until they are fixed upstream, suppress them
+# here so that they do not drown out leaks in the phodav code.
+#
+# The file is only loaded by the litmus test (see meson.build), so
+# leaks of the phodav test server running alongside it, which does
+# not use neon, are still reported.
+leak:ne_malloc
+leak:ne_calloc
+leak:ne_realloc
+leak:ne_strdup
+leak:ne_strndup
+# neon lock discovery parses the lock owner with plain strdup()
+leak:end_element_common
