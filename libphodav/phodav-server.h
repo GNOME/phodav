@@ -29,7 +29,10 @@ G_BEGIN_DECLS
  * A WebDAV server implementation, see RFC 4918.
  *
  * The directory to share is set at construction time, with either the
- * #PhodavServer:root or the #PhodavServer:root-file property.
+ * #PhodavServer:root or the #PhodavServer:root-file property. An
+ * already configured #SoupServer may also be given at construction
+ * time with the #PhodavServer:server property, otherwise a new one
+ * is created.
  */
 G_DECLARE_FINAL_TYPE (PhodavServer, phodav_server, PHODAV, SERVER, GObject)
 

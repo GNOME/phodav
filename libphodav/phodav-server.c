@@ -33,6 +33,11 @@
  * @include: libphodav/phodav.h
  *
  * PhodavServer implements a simple WebDAV server.
+ *
+ * The DAV methods are handled synchronously from the #SoupServer
+ * callbacks: a #PhodavServer must be used from a single thread, the
+ * one running the main context the #SoupServer is listened from,
+ * and a slow request delays the other requests.
  */
 
 struct _PhodavServer
@@ -44,6 +49,7 @@ struct _PhodavServer
   PathHandler *root_handler; /* weak ref */
   GHashTable *paths;
   gboolean readonly;
+  gboolean constructing;
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 };
@@ -169,6 +175,8 @@ path_handler_free (PathHandler *h)
 static void
 phodav_server_init (PhodavServer *self)
 {
+  self->constructing = TRUE;
+
   self->cancellable = g_cancellable_new ();
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
@@ -233,10 +241,20 @@ phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  self->server = soup_server_new ("server-header", "PhodavServer",
-                                  NULL);
+  /* the construct properties are set at this point */
+  self->constructing = FALSE;
 
-  update_root_handler (self);
+  /* a #SoupServer given at construction is used as is, so that it
+   * can be pre-configured with listeners, TLS or auth domains;
+   * otherwise create a plain one */
+  if (!self->server)
+    self->server = soup_server_new ("server-header", "PhodavServer",
+                                    NULL);
+
+  /* when a server was given at construction, the root handler is
+   * already registered on it */
+  if (!self->root_handler)
+    update_root_handler (self);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
@@ -341,24 +359,30 @@ phodav_server_set_property (GObject *gobject,
   PhodavServer *self = PHODAV_SERVER (gobject);
   const gchar *root;
 
-  /* do not overwrite the root file during construction,
-   * phodav should be constructed either with "root" or "root-file", not both */
-  if (!self->server && self->root_file)
-    return;
-
   switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
-      root = g_value_get_string (value);
-      g_clear_object (&self->root_file);
-      if (root)
-        self->root_file = g_file_new_for_path (root);
-      update_root_handler (self);
-      break;
-
     case PROP_ROOT_FILE:
-      g_clear_object (&self->root_file);
-      self->root_file = g_value_dup_object (value);
+      /* during construction, both root properties are set in turn,
+       * with their default NULL value for the one which was not
+       * given; once a root file is set, do not let the redundant
+       * NULL of the other one clobber it: phodav should be
+       * constructed either with "root" or "root-file", not both */
+      if (self->constructing && self->root_file)
+        return;
+
+      if (prop_id == PROP_ROOT)
+        {
+          root = g_value_get_string (value);
+          g_clear_object (&self->root_file);
+          if (root)
+            self->root_file = g_file_new_for_path (root);
+        }
+      else
+        {
+          g_clear_object (&self->root_file);
+          self->root_file = g_value_dup_object (value);
+        }
       update_root_handler (self);
       break;
 
@@ -367,7 +391,9 @@ phodav_server_set_property (GObject *gobject,
       break;
 
     case PROP_SERVER:
-      g_assert_not_reached ();
+      /* construct-only */
+      g_return_if_fail (self->server == NULL);
+      self->server = g_value_dup_object (value);
       break;
     }
 }
@@ -419,12 +445,20 @@ phodav_server_class_init (PhodavServerClass *klass)
    * PhodavServer:server:
    *
    * The underlying #SoupServer.
+   *
+   * When constructing a #PhodavServer, an already configured
+   * #SoupServer may be given, with listeners, TLS certificates or
+   * auth domains set up for example. When no server is provided, a
+   * new one is created.
+   *
+   * Since: 3.1
    **/
   properties[PROP_SERVER] =
     g_param_spec_object ("server",
                          NULL, NULL,
                          SOUP_TYPE_SERVER,
-                         G_PARAM_READABLE |
+                         G_PARAM_READWRITE |
+                           G_PARAM_CONSTRUCT_ONLY |
                            G_PARAM_STATIC_STRINGS);
 
   /**

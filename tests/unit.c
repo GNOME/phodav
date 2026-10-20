@@ -17,6 +17,7 @@
 #include "config.h"
 
 #include <glib.h>
+#include <glib/gstdio.h>
 
 #include "phodav-lock.h"
 #include "phodav-path.h"
@@ -652,6 +653,106 @@ test_server_dispose (void)
   g_log_set_always_fatal (fatal);
 }
 
+/* the test does a real round trip on the injected server: a
+ * synchronous client would block the context the server runs on, so
+ * the asynchronous client API is used with a loop */
+typedef struct _InjectData
+{
+  GMainLoop *loop;
+  GBytes *body;
+} InjectData;
+
+static void
+injected_read_cb (GObject *source,
+                  GAsyncResult *result,
+                  gpointer user_data)
+{
+  InjectData *d = user_data;
+
+  d->body = soup_session_send_and_read_finish (SOUP_SESSION (source), result, NULL);
+  g_main_loop_quit (d->loop);
+}
+
+static void
+test_server_injected_soup_server (void)
+{
+  g_autoptr(SoupServer) soup = soup_server_new (NULL, NULL);
+  g_autoptr(PhodavServer) server = NULL;
+  g_autoptr(GFile) root = NULL;
+  g_autoptr(SoupSession) session = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GMainLoop) loop = NULL;
+  g_autoslist(GUri) uris = NULL;
+  g_autoptr(GUri) file_uri = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *dir = NULL;
+  g_autofree gchar *file = NULL;
+  g_autofree gchar *path = NULL;
+  InjectData d = {
+    0,
+  };
+
+  dir = g_dir_make_tmp ("phodav-unit-XXXXXX", &error);
+  g_assert_no_error (error);
+
+  file = g_build_filename (dir, "hello.txt", NULL);
+  g_assert_true (g_file_set_contents (file, "hello", -1, &error));
+  g_assert_no_error (error);
+
+  root = g_file_new_for_path (dir);
+
+  /* an existing SoupServer can be injected at construction, together
+   * with a root given as a path */
+  server = g_object_new (PHODAV_TYPE_SERVER,
+                         "server", soup,
+                         "root", dir,
+                         NULL);
+  g_assert_true (phodav_server_get_soup_server (server) == soup);
+
+  /* the redundant NULL "root-file" set during construction did not
+   * clobber the root given with "root" */
+  g_object_get (server, "root", &path, NULL);
+  g_assert_cmpstr (path, ==, dir);
+
+  /* the same works with a root given as a GFile */
+  g_clear_object (&server);
+  g_clear_pointer (&path, g_free);
+  server = g_object_new (PHODAV_TYPE_SERVER,
+                         "server", soup,
+                         "root-file", root,
+                         NULL);
+  g_object_get (server, "root", &path, NULL);
+  g_assert_cmpstr (path, ==, dir);
+
+  /* the injected server serves the root like an internally created
+   * one */
+  g_assert_true (soup_server_listen_local (soup, 0, SOUP_SERVER_LISTEN_IPV4_ONLY, &error));
+  g_assert_no_error (error);
+
+  uris = soup_server_get_uris (soup);
+  g_assert_nonnull (uris);
+  file_uri = g_uri_parse_relative (uris->data, "hello.txt", G_URI_FLAGS_NONE, NULL);
+  g_assert_nonnull (file_uri);
+
+  session = soup_session_new ();
+  msg = soup_message_new_from_uri (SOUP_METHOD_GET, file_uri);
+  loop = g_main_loop_new (NULL, FALSE);
+  d.loop = loop;
+
+  soup_session_send_and_read_async (session, msg, G_PRIORITY_DEFAULT, NULL,
+                                    injected_read_cb, &d);
+  g_main_loop_run (loop);
+
+  g_assert_nonnull (d.body);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_cmpmem (g_bytes_get_data (d.body, NULL), g_bytes_get_size (d.body), "hello", 5);
+
+  g_bytes_unref (d.body);
+
+  g_unlink (file);
+  g_rmdir (dir);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -678,6 +779,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
   g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);
   g_test_add_func ("/server/dispose", test_server_dispose);
+  g_test_add_func ("/server/injected-soup-server", test_server_injected_soup_server);
 
   return g_test_run ();
 }
