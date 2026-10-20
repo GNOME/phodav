@@ -361,7 +361,7 @@ gint
 main (gint argc, gchar *argv[])
 {
   g_autofree gchar *htdigest = NULL;
-  gchar *contents, *line;
+  gchar *contents, *line, *tmp;
   g_autoptr(GError) error = NULL;
 
   g_test_init (&argc, &argv, NULL);
@@ -378,11 +378,15 @@ main (gint argc, gchar *argv[])
   line = htdigest_line ("user1", REALM, "password1");
   contents = line;
   line = htdigest_line ("user2", REALM, "password2");
-  contents = g_strconcat (contents, line, NULL);
+  tmp = g_strconcat (contents, line, NULL);
   g_free (line);
+  g_free (contents);
+  contents = tmp;
   line = htdigest_line ("other", "otherrealm", "password3");
-  contents = g_strconcat (contents, line, NULL);
+  tmp = g_strconcat (contents, line, NULL);
   g_free (line);
+  g_free (contents);
+  contents = tmp;
   g_file_set_contents (htdigest, contents, -1, &error);
   g_assert_no_error (error);
   g_free (contents);
