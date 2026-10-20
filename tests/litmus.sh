@@ -85,6 +85,14 @@ cat "$workdir/litmus.log"
 
 # closing the fifo makes the server quit
 exec 3>&-
-wait "$server_pid" 2>/dev/null || true
+# a non-zero server exit means a crash or, with sanitizers enabled, a
+# leaked allocation; either way the test must not pass
+if wait "$server_pid" 2>/dev/null; then
+  :
+else
+  echo "the test server exited with an error:" >&2
+  cat "$workdir/server-stderr" >&2
+  status=1
+fi
 
 exit $status
