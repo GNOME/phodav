@@ -140,6 +140,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   g_autofree gchar *ltoken = NULL;
   g_autofree gchar *uuid = NULL;
   g_autofree gchar *token = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean created;
@@ -155,22 +156,30 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   request_body = soup_server_message_get_request_body (msg);
   if (!request_body->length)
     {
-      const gchar *hif = soup_message_headers_get_one (request_headers, "If");
-      if (!hif)
+      /* an empty body refreshes an existing lock, which must be
+       * identified with an If header (RFC 4918 section 9.10.2) */
+      status = phodav_check_if_refresh (handler, msg, path, &submitted);
+      if (status != SOUP_STATUS_OK)
         goto end;
 
-      gint len = strlen (hif);
-      if (len <= 4 || hif[0] != '(' || hif[1] != '<' || hif[len - 2] != '>' || hif[len - 1] != ')')
-        goto end;
+      /* the lock to refresh is the one covering the path among the
+       * tokens submitted with the If header */
+      for (GList *l = submitted; l != NULL; l = l->next)
+        {
+          LockSubmitted *sub = l->data;
 
-      token = g_strndup (hif + 2, len - 4);
-
-      g_debug ("refresh token %s", token);
-      lock = server_path_get_lock (handler_get_server (handler), path, token);
+          lock = server_path_lookup_lock (handler_get_server (handler), path, sub->token);
+          if (lock)
+            break;
+        }
 
       if (!lock)
-        goto end;
+        {
+          status = SOUP_STATUS_BAD_REQUEST;
+          goto end;
+        }
 
+      g_debug ("refresh token %s", lock->token);
       dav_lock_refresh_timeout (lock, timeout);
       status = SOUP_STATUS_OK;
       goto body;

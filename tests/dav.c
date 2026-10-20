@@ -980,10 +980,11 @@ test_lock_refresh (DavFixture *f, gconstpointer user_data)
     }
   }
 
-  /* refreshing an unknown token is a bad request */
+  /* refreshing an unknown token fails the If condition, which must
+   * be rejected with 412 (RFC 4918 section 10.4.3) */
   g_assert_cmpuint (dav_status (f, "LOCK", "/refresh.txt", NULL,
                                 "If", "(<urn:uuid:11111111-2222-3333-4444-555555555555>)", NULL),
-                    ==, SOUP_STATUS_BAD_REQUEST);
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
   /* so is a malformed If header */
   g_assert_cmpuint (dav_status (f, "LOCK", "/refresh.txt", NULL, "If", "(x)", NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
@@ -1174,9 +1175,11 @@ test_lock_bad_request (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", NULL,
                                 "If", "(malformed", NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
+  /* an If condition on a token which is not a held lock fails, which
+   * must be rejected with 412 (RFC 4918 section 10.4.3) */
   g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", NULL,
                                 "If", "(<opaquelocktoken:not-a-held-lock>)", NULL),
-                    ==, SOUP_STATUS_BAD_REQUEST);
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
 
   /* a lock body which is not lockinfo at all */
   g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
@@ -1409,6 +1412,10 @@ test_lock_expiry (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/expiring.txt", "expired", NULL),
                     ==, SOUP_STATUS_OK);
 
+  /* and the token cannot be used to refresh it anymore */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/expiring.txt", NULL,
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
 }
 
 static void
@@ -1458,6 +1465,48 @@ test_lock_tree_conflict (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_NO_CONTENT);
 }
 
+static void
+test_lock_refresh_forms (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/refresh-forms.txt", "Second-60");
+  g_autofree gchar *tagged = g_strdup_printf ("</refresh-forms.txt> (%s)", token);
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *etag_if = NULL;
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+
+  /* the lock can also be identified with a tagged If header
+   * (RFC 4918 section 10.4.2), not only with the bare token form */
+  msg = dav_request (f, "LOCK", "/refresh-forms.txt", NULL, &body,
+                     "If", tagged, "Timeout", "Second-120", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  {
+    g_autoptr(xmlDoc) doc = parse_prop (body);
+    xmlNodePtr timeout = find_child (find_activelock (doc), "timeout");
+
+    g_assert_nonnull (timeout);
+  }
+
+  /* an If header matching the resource etag but carrying no lock
+   * token does not identify a lock to refresh */
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "refresh-forms.txt", NULL);
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+  }
+  etag_if = g_strdup_printf ("([\"%s\"])", etag);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/refresh-forms.txt", NULL,
+                                "If", etag_if, NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/refresh-forms.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1487,6 +1536,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock/expiry", DavFixture, NULL, dav_fixture_setup, test_lock_expiry, dav_fixture_teardown);
   g_test_add ("/dav/lock/tree-conflict", DavFixture, NULL, dav_fixture_setup, test_lock_tree_conflict, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
+  g_test_add ("/dav/lock/refresh-forms", DavFixture, NULL, dav_fixture_setup, test_lock_refresh_forms, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
   g_test_add ("/dav/if-malformed", DavFixture, NULL, dav_fixture_setup, test_if_malformed, dav_fixture_teardown);
 

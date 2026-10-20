@@ -102,6 +102,7 @@ Path *server_get_path (PhodavServer *self,
                        const gchar *_path);
 
 gint phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
+gint phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
 
 gint phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable);
 

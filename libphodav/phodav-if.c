@@ -302,46 +302,82 @@ eval_if (PathHandler *handler, IfState *state)
   return success;
 }
 
+/* Parse and evaluate the request If header (RFC 4918 section 10.4),
+ * collecting the submitted lock tokens in @locks.
+ *
+ * Returns SOUP_STATUS_OK when the request has no If header or its
+ * conditions are met, SOUP_STATUS_BAD_REQUEST for a malformed header
+ * and SOUP_STATUS_PRECONDITION_FAILED when the conditions are not
+ * met. @has_header is set when the request carried an If header. */
+static gint
+eval_if_header (PathHandler *handler,
+                SoupServerMessage *msg,
+                const gchar *path,
+                GList **locks,
+                gboolean *has_header)
+{
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  g_autofree gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
+  IfState state = { .cur = str, .base = soup_server_message_get_uri (msg), .path = g_strdup (path) };
+  gint status = SOUP_STATUS_OK;
+
+  *has_header = str != NULL;
+
+  if (str && !(eval_if (handler, &state) && !state.error))
+    {
+      g_list_free_full (state.locks, (GDestroyNotify) lock_submitted_free);
+
+      if (state.error)
+        {
+          g_debug ("invalid If header: %s", str);
+          status = SOUP_STATUS_BAD_REQUEST;
+        }
+      else
+        status = SOUP_STATUS_PRECONDITION_FAILED;
+    }
+  else
+    *locks = state.locks;
+
+  g_free (state.path);
+
+  return status;
+}
+
 gint
 phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks)
 {
   PhodavServer *server = handler_get_server (handler);
-  gboolean success = TRUE;
+  gboolean has_header;
   gint status;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  g_autofree gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
-  IfState state = { .cur = str, .base = soup_server_message_get_uri (msg), .path = g_strdup (path) };
-  gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
 
-  if (!str)
-    goto end;
+  status = eval_if_header (handler, msg, path, locks, &has_header);
+  if (status != SOUP_STATUS_OK)
+    return status;
 
-  if (eval_if (handler, &state) && !state.error)
-    {
-      *locks = state.locks;
-    }
-  else
-    {
-      g_list_free_full (state.locks, (GDestroyNotify) lock_submitted_free);
-      success = FALSE;
-    }
+  /* COPY does not modify the source, its locks do not apply */
+  if (soup_server_message_get_method (msg) != SOUP_METHOD_COPY &&
+      server_path_has_other_locks (server, path, *locks))
+    return SOUP_STATUS_LOCKED;
 
-  if (state.error)
-    {
-      g_debug ("invalid If header: %s", soup_message_headers_get_one (request_headers, "If"));
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto out;
-    }
+  return SOUP_STATUS_OK;
+}
 
-end:
-  status = success ? SOUP_STATUS_OK
-           : str   ? SOUP_STATUS_PRECONDITION_FAILED
-                   : SOUP_STATUS_LOCKED;
+/* Like phodav_check_if(), for a lock refresh (a LOCK request with an
+ * empty body, RFC 4918 section 9.10.2): the If header identifying the
+ * lock is mandatory, and the other locks held on the path are not an
+ * obstacle to refreshing a lock the client owns. */
+gint
+phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks)
+{
+  gboolean has_header;
+  gint status;
 
-  if (success && !copy && server_path_has_other_locks (server, path, *locks))
-    status = SOUP_STATUS_LOCKED;
+  status = eval_if_header (handler, msg, path, locks, &has_header);
+  if (status != SOUP_STATUS_OK)
+    return status;
 
-out:
-  g_free (state.path);
-  return status;
+  if (!has_header)
+    return SOUP_STATUS_BAD_REQUEST;
+
+  return SOUP_STATUS_OK;
 }
