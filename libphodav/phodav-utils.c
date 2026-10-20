@@ -57,22 +57,41 @@ parse_xml (const gchar *data,
            xmlNodePtr *root,
            const gchar *name)
 {
+  xmlParserCtxtPtr ctxt;
   xmlDocPtr doc;
 
-  doc = xmlReadMemory (data, len,
-                       "request.xml",
-                       NULL,
-                       XML_PARSE_NONET |
-                         XML_PARSE_NOWARNING |
-                         XML_PARSE_NOBLANKS |
-                         XML_PARSE_NSCLEAN |
-                         XML_PARSE_NOCDATA |
-                         XML_PARSE_COMPACT);
-  if (doc == NULL)
+  /* parse with a private context, so that the libxml2 error
+   * details are available when the document is rejected */
+  ctxt = xmlNewParserCtxt ();
+  if (ctxt == NULL)
     {
-      g_debug ("Could not parse request");
+      g_debug ("Could not create the parser context");
       return NULL;
     }
+
+  doc = xmlCtxtReadMemory (ctxt, data, len,
+                           "request.xml",
+                           NULL,
+                           XML_PARSE_NONET |
+                             XML_PARSE_NOWARNING |
+                             XML_PARSE_NOBLANKS |
+                             XML_PARSE_NSCLEAN |
+                             XML_PARSE_NOCDATA |
+                             XML_PARSE_COMPACT);
+  if (doc == NULL)
+    {
+      const xmlError *last = &ctxt->lastError;
+
+      /* the libxml2 messages end with a newline */
+      g_autofree gchar *message = g_strdup (last->message ? (gchar *) last->message : "");
+
+      g_strchomp (message);
+      g_debug ("Could not parse request: %s", *message ? message : "no error details");
+      xmlFreeParserCtxt (ctxt);
+      return NULL;
+    }
+
+  xmlFreeParserCtxt (ctxt);
   if (!(doc->properties & XML_DOC_NSVALID))
     {
       g_debug ("Could not parse request, NS errors");
