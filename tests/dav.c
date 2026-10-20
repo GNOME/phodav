@@ -80,6 +80,30 @@ write_file (const gchar *dir, const gchar *name, const gchar *contents)
   g_assert_true (g_file_set_contents (path, contents, -1, NULL));
 }
 
+/* the response to a PUT is sent as soon as the request is received,
+ * while the body is still being streamed to the file: wait for the
+ * expected contents to appear before reading the file back */
+static void
+wait_file_contents (const gchar *path, const gchar *expected)
+{
+  g_autofree gchar *contents = NULL;
+  gint i;
+
+  for (i = 0; i < 500; i++)
+    {
+      g_clear_pointer (&contents, g_free);
+
+      if (g_file_get_contents (path, &contents, NULL, NULL) &&
+          g_strcmp0 (contents, expected) == 0)
+        return;
+
+      g_usleep (1000);
+    }
+
+  /* the expected contents never appeared */
+  g_assert_cmpstr (contents, ==, expected);
+}
+
 static void
 make_directory (const gchar *dir, const gchar *name)
 {
@@ -1010,8 +1034,12 @@ test_if_etag (DavFixture *f, gconstpointer user_data)
 
   {
     g_autofree gchar *path = g_build_filename (f->dir, "etag.txt", NULL);
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+    g_autoptr(GFile) file = NULL;
+    g_autoptr(GFileInfo) info = NULL;
+
+    wait_file_contents (path, "data");
+    file = g_file_new_for_path (path);
+    info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
     etag = g_strdup (g_file_info_get_etag (info));
     g_assert_nonnull (etag);
@@ -1312,6 +1340,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "matched",
                                 "If-Match", if_match, NULL),
                     ==, SOUP_STATUS_OK);
+  wait_file_contents (path, "matched");
 
   /* the write happened, the etag changed with it */
   {
@@ -1344,6 +1373,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "star",
                                 "If-Match", "*", NULL),
                     ==, SOUP_STATUS_OK);
+  wait_file_contents (path, "star");
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing.txt", "data",
                                 "If-Match", "*", NULL),
                     ==, SOUP_STATUS_PRECONDITION_FAILED);
@@ -1377,12 +1407,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "written",
                                 "If-None-Match", "\"not-the-etag\"", NULL),
                     ==, SOUP_STATUS_OK);
-  {
-    g_autofree gchar *contents = NULL;
-
-    g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
-    g_assert_cmpstr (contents, ==, "written");
-  }
+  wait_file_contents (path, "written");
 }
 
 static void
