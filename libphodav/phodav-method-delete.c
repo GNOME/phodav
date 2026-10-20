@@ -20,6 +20,7 @@
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-priv.h"
+#include "phodav-utils.h"
 
 static gint
 error_to_status (GError *err)
@@ -83,9 +84,16 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
   g_autoptr(GHashTable) mstatus = NULL;
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
+  DepthType depth;
 
-  /* depth = depth_from_string(soup_message_headers_get_one (msg->request_headers, "Depth")); */
-  /* must be == infinity with collection */
+  /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
+   * client must not submit any other depth */
+  if (!depth_from_string (soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Depth"), &depth) ||
+      depth != DEPTH_INFINITY)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
 
   status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)

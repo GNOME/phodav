@@ -1507,6 +1507,47 @@ test_lock_refresh_forms (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_NO_CONTENT);
 }
 
+static void
+test_depth_headers (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *dest = g_build_path ("/", f->base_uri, "depth-dest.txt", NULL);
+
+  /* an invalid Depth is rejected with 400 by every method using it */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", PROPFIND_ALLPROP,
+                                "Depth", "2", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", LOCK_EXCLUSIVE,
+                                "Depth", "bogus", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* only the depths 0 and infinity are valid for LOCK (RFC 4918 section 10.2) */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", LOCK_EXCLUSIVE,
+                                "Depth", "1", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* ... and for COPY and MOVE (RFC 4918 section 9.8.3) */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/hello.txt", NULL,
+                                "Destination", dest, "Depth", "1", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, "Depth", "1", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* DELETE acts with depth infinity only (RFC 4918 section 9.6.1) */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* nothing was modified by the rejected requests */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* a missing Depth header defaults to infinity */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_CREATED);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1519,6 +1560,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
+  g_test_add ("/dav/depth-headers", DavFixture, NULL, dav_fixture_setup, test_depth_headers, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);

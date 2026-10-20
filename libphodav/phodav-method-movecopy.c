@@ -72,11 +72,10 @@ end:
 }
 
 static gint
-do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar *dest_path, GCancellable *cancellable, GError **err)
+do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gboolean overwrite;
-  DepthType depth;
   gint status = SOUP_STATUS_PRECONDITION_FAILED;
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
@@ -84,61 +83,49 @@ do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar 
   gboolean retry = FALSE;
   gboolean exists;
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
   overwrite = !!g_strcmp0 (
     soup_message_headers_get_one (request_headers, "Overwrite"), "F");
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
   exists = g_file_query_exists (dest, cancellable);
 
+  /* the request was validated to be depth 0 or infinity */
 again:
-  switch (depth)
+  copy
+    ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
+    : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
+
+  if (overwrite && !retry &&
+      (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
+       g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
+      phodav_delete_file (dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
-    case DEPTH_INFINITY:
-    case DEPTH_ZERO:
-      {
-        copy
-          ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
-          : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
-
-        if (overwrite && !retry &&
-            (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
-             g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
-            phodav_delete_file (dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
-          {
-            g_clear_error (&error);
-            retry = TRUE;
-            goto again;
-          }
-        else if (!overwrite &&
-                 g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-          {
-            g_clear_error (&error);
-            goto end;
-          }
-        else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
-          {
-            g_clear_error (&error);
-            if (copy)
-              {
-                if (depth == DEPTH_INFINITY)
-                  do_copy_r (file, dest, flags, cancellable, &error);
-                else
-                  g_file_make_directory_with_parents (dest, cancellable, &error);
-              }
-          }
-        else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-          {
-            status = SOUP_STATUS_CONFLICT;
-            g_clear_error (&error);
-            goto end;
-          }
-
-        break;
-      }
-
-    default:
-      g_warn_if_reached ();
+      g_clear_error (&error);
+      retry = TRUE;
+      goto again;
+    }
+  else if (!overwrite &&
+           g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    {
+      g_clear_error (&error);
+      goto end;
+    }
+  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
+    {
+      g_clear_error (&error);
+      if (copy)
+        {
+          if (depth == DEPTH_INFINITY)
+            do_copy_r (file, dest, flags, cancellable, &error);
+          else
+            g_file_make_directory_with_parents (dest, cancellable, &error);
+        }
+    }
+  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    {
+      status = SOUP_STATUS_CONFLICT;
+      g_clear_error (&error);
+      goto end;
     }
 
   if (error)
@@ -158,10 +145,22 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
+  DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
-  dest = soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Destination");
+  /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
+   * are valid for COPY and MOVE, an invalid depth must be rejected
+   * with 400 */
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth) ||
+      depth == DEPTH_ONE)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
+  dest = soup_message_headers_get_one (request_headers, "Destination");
   if (!dest)
     goto end;
   dest_uri = g_uri_parse (dest, SOUP_HTTP_URI_FLAGS, NULL);
@@ -204,7 +203,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, file, dest_file, udest,
+  status = do_movecopy_file (msg, file, dest_file, udest, depth,
                              cancellable, err);
 
 end:

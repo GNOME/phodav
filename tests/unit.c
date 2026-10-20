@@ -107,19 +107,26 @@ test_path_has_dot_dot_segment (void)
 static void
 test_depth (void)
 {
-  g_assert_cmpint (depth_from_string (NULL), ==, DEPTH_INFINITY);
-  g_assert_cmpint (depth_from_string ("0"), ==, DEPTH_ZERO);
-  g_assert_cmpint (depth_from_string ("1"), ==, DEPTH_ONE);
-  g_assert_cmpint (depth_from_string ("infinity"), ==, DEPTH_INFINITY);
+  DepthType depth = DEPTH_ZERO;
+
+  /* a missing Depth header defaults to infinity (RFC 4918 section 9.1) */
+  g_assert_true (depth_from_string (NULL, &depth));
+  g_assert_cmpint (depth, ==, DEPTH_INFINITY);
+  g_assert_true (depth_from_string ("0", &depth));
+  g_assert_cmpint (depth, ==, DEPTH_ZERO);
+  g_assert_true (depth_from_string ("1", &depth));
+  g_assert_cmpint (depth, ==, DEPTH_ONE);
+  g_assert_true (depth_from_string ("infinity", &depth));
+  g_assert_cmpint (depth, ==, DEPTH_INFINITY);
 
   g_assert_cmpstr (depth_to_string (DEPTH_ZERO), ==, "0");
   g_assert_cmpstr (depth_to_string (DEPTH_ONE), ==, "1");
   g_assert_cmpstr (depth_to_string (DEPTH_INFINITY), ==, "infinity");
 
-  /* invalid values are rejected with a warning and map to infinity */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "Invalid depth: 2");
-  g_assert_cmpint (depth_from_string ("2"), ==, DEPTH_INFINITY);
-  g_test_assert_expected_messages ();
+  /* invalid values are rejected, the caller answers with 400 */
+  g_assert_false (depth_from_string ("2", &depth));
+  g_assert_false (depth_from_string ("Infinity", &depth));
+  g_assert_false (depth_from_string ("", &depth));
 }
 
 static void

@@ -25,7 +25,10 @@ G_BEGIN_DECLS
 void remove_trailing (gchar *str, gchar c);
 gboolean path_has_dot_dot_segment (const gchar *path);
 
-DepthType depth_from_string (const gchar *depth);
+/* parse a Depth header value: a missing header defaults to DEPTH_INFINITY
+ * (RFC 4918 section 9.1); returns FALSE for a syntactically invalid
+ * value, which the caller must reject with 400 */
+gboolean depth_from_string (const gchar *depth, DepthType *out);
 const gchar *depth_to_string (DepthType depth);
 guint timeout_from_string (const gchar *timeout);
 

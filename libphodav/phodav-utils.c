@@ -128,20 +128,49 @@ davdoc_free (DavDoc *dd)
   g_free (dd->path);
 }
 
-DepthType
-depth_from_string (const gchar *depth)
+gboolean
+depth_from_string (const gchar *depth, DepthType *out)
 {
   if (!depth)
-    return DEPTH_INFINITY;
+    {
+      /* RFC 4918 section 9.1: a request without a Depth header is
+       * treated as if "infinity" was submitted */
+      *out = DEPTH_INFINITY;
+      return TRUE;
+    }
   else if (g_strcmp0 (depth, "0") == 0)
-    return DEPTH_ZERO;
+    {
+      *out = DEPTH_ZERO;
+      return TRUE;
+    }
   else if (g_strcmp0 (depth, "1") == 0)
-    return DEPTH_ONE;
+    {
+      *out = DEPTH_ONE;
+      return TRUE;
+    }
   else if (g_strcmp0 (depth, "infinity") == 0)
-    return DEPTH_INFINITY;
+    {
+      *out = DEPTH_INFINITY;
+      return TRUE;
+    }
 
-  g_warning ("Invalid depth: %s", depth);
-  return DEPTH_INFINITY;
+  g_debug ("Invalid depth: %s", depth);
+  return FALSE;
+}
+
+gboolean
+path_is_covered (const gchar *path, const gchar *root)
+{
+  gsize len = strlen (root);
+
+  if (g_strcmp0 (path, root) == 0)
+    return TRUE;
+
+  /* a lock on the root covers everything */
+  if (g_strcmp0 (root, "/") == 0)
+    return path[0] == '/';
+
+  return g_str_has_prefix (path, root) && path[len] == '/';
 }
 
 guint
@@ -168,21 +197,6 @@ depth_to_string (DepthType depth)
     return "1";
 
   g_return_val_if_reached (NULL);
-}
-
-gboolean
-path_is_covered (const gchar *path, const gchar *root)
-{
-  gsize len = strlen (root);
-
-  if (g_strcmp0 (path, root) == 0)
-    return TRUE;
-
-  /* a lock on the root covers everything */
-  if (g_strcmp0 (root, "/") == 0)
-    return path[0] == '/';
-
-  return g_str_has_prefix (path, root) && path[len] == '/';
 }
 
 void

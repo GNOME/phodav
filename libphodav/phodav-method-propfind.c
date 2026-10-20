@@ -741,7 +741,12 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth))
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
   if (!request_body || !request_body->length)
     {
       /* Win kludge: http://code.google.com/p/sabredav/wiki/Windows */

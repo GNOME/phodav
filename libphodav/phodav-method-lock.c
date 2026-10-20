@@ -147,11 +147,13 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageBody *request_body;
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
-  timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
-
-  if (depth != DEPTH_ZERO && depth != DEPTH_INFINITY)
+  /* RFC 4918 section 10.2: only the depths 0 and infinity are valid
+   * for a LOCK, and an invalid depth must be rejected */
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth) ||
+      depth == DEPTH_ONE)
     goto end;
+
+  timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
 
   request_body = soup_server_message_get_request_body (msg);
   if (!request_body->length)
