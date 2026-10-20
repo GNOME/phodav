@@ -102,6 +102,7 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
   gint status = SOUP_STATUS_NOT_FOUND;
   g_autoptr(GFileInfo) info = NULL;
   const gchar *etag;
+  const gchar *content_type;
   SoupMessageHeaders *response_headers;
   const gchar *method;
 
@@ -145,8 +146,12 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
       soup_message_headers_append (response_headers, "ETag", tmp);
     }
 
+  /* special files may have no content type, do not leave the
+   * Content-Type header unset */
+  content_type = g_file_info_get_content_type (info);
   soup_message_headers_set_content_type (response_headers,
-                                         g_file_info_get_content_type (info), NULL);
+                                         content_type ? content_type : "application/octet-stream",
+                                         NULL);
 
   method = soup_server_message_get_method (msg);
   if (method == SOUP_METHOD_GET)
