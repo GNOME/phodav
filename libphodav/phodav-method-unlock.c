@@ -43,7 +43,8 @@ phodav_method_unlock (PathHandler *handler, SoupServerMessage *msg, const gchar 
   gchar *token = remove_brackets (
     soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Lock-Token"));
 
-  g_return_val_if_fail (token != NULL, SOUP_STATUS_BAD_REQUEST);
+  if (!token)
+    goto end;
 
   lock = server_path_get_lock (handler_get_server (handler), path, token);
   if (!lock)
