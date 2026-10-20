@@ -184,6 +184,15 @@ test_http_time_to_string (void)
   g_assert_null (http_time_to_string ((guint64) G_MAXINT64));
 }
 
+/* set a header to an HTTP date, without leaking the formatted string */
+static void
+set_http_date_header (SoupMessageHeaders *headers, const gchar *name, guint64 time)
+{
+  g_autofree gchar *date = http_time_to_string (time);
+
+  soup_message_headers_replace (headers, name, date);
+}
+
 static void
 test_http_request_not_modified (void)
 {
@@ -197,7 +206,7 @@ test_http_request_not_modified (void)
   g_assert_false (http_request_not_modified (headers, "xyz", 1000));
 
   /* If-None-Match takes precedence over If-Modified-Since */
-  soup_message_headers_replace (headers, "If-Modified-Since", http_time_to_string (1000));
+  set_http_date_header (headers, "If-Modified-Since", 1000);
   g_assert_false (http_request_not_modified (headers, "xyz", 1000));
   g_assert_true (http_request_not_modified (headers, "abc", 2000));
 
@@ -212,8 +221,91 @@ test_http_request_not_modified (void)
   g_assert_false (http_request_not_modified (headers, "xyz", 1000));
 
   /* without a modification time, the date cannot be checked */
-  soup_message_headers_replace (headers, "If-Modified-Since", http_time_to_string (1000));
+  set_http_date_header (headers, "If-Modified-Since", 1000);
   g_assert_false (http_request_not_modified (headers, "xyz", 0));
+}
+
+static void
+test_http_range (void)
+{
+  g_autoptr(SoupMessageHeaders) headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+  guint64 first = 0, last = 0;
+
+  /* no Range header: the whole representation is served */
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
+
+  soup_message_headers_replace (headers, "Range", "bytes=0-9");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  g_assert_cmpuint (first, ==, 0);
+  g_assert_cmpuint (last, ==, 9);
+
+  /* an open-ended range goes to the end, the unit is case-insensitive */
+  soup_message_headers_replace (headers, "Range", "BYTES=10-");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  g_assert_cmpuint (first, ==, 10);
+  g_assert_cmpuint (last, ==, 99);
+
+  /* a last byte beyond the end is clamped to it */
+  soup_message_headers_replace (headers, "Range", "bytes=90-200");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  g_assert_cmpuint (first, ==, 90);
+  g_assert_cmpuint (last, ==, 99);
+
+  /* a suffix range covers the last bytes */
+  soup_message_headers_replace (headers, "Range", "bytes=-10");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  g_assert_cmpuint (first, ==, 90);
+  g_assert_cmpuint (last, ==, 99);
+
+  /* a suffix longer than the representation covers it entirely */
+  soup_message_headers_replace (headers, "Range", "bytes=-200");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  g_assert_cmpuint (first, ==, 0);
+  g_assert_cmpuint (last, ==, 99);
+
+  /* a first byte at or beyond the end, or an empty suffix, is
+   * unsatisfiable, RFC 9110 section 14.1.1 */
+  soup_message_headers_replace (headers, "Range", "bytes=100-");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_UNSATISFIABLE);
+  soup_message_headers_replace (headers, "Range", "bytes=100-200");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_UNSATISFIABLE);
+  soup_message_headers_replace (headers, "Range", "bytes=-0");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_UNSATISFIABLE);
+
+  /* invalid, multi-range or unknown-unit requests are ignored */
+  const gchar *ignored[] = { "bytes=9-2", "bytes=a-b", "bytes=5", "bytes=", "bytes=-5x", "bytes=0-4x", "bytes=0-9,20-29", "items=0-9" };
+
+  for (guint i = 0; i < G_N_ELEMENTS (ignored); i++)
+    {
+      soup_message_headers_replace (headers, "Range", ignored[i]);
+      g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
+    }
+
+  /* an empty representation has no satisfiable range */
+  soup_message_headers_replace (headers, "Range", "bytes=0-");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 0, &first, &last), ==, HTTP_RANGE_NONE);
+
+  /* If-Range with the current etag applies the range, RFC 9110 13.1.5 */
+  soup_message_headers_replace (headers, "Range", "bytes=0-9");
+  soup_message_headers_replace (headers, "If-Range", "\"abc\"");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+
+  /* a weak or other etag does not match */
+  soup_message_headers_replace (headers, "If-Range", "W/\"abc\"");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
+  soup_message_headers_replace (headers, "If-Range", "\"xyz\"");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
+
+  /* a date applies the range when the representation was not
+   * modified after it */
+  set_http_date_header (headers, "If-Range", 1000);
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_PARTIAL);
+  set_http_date_header (headers, "If-Range", 999);
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
+
+  /* an unparseable If-Range is not a date either */
+  soup_message_headers_replace (headers, "If-Range", "garbage");
+  g_assert_cmpint (http_request_range (headers, "abc", 1000, 100, &first, &last), ==, HTTP_RANGE_NONE);
 }
 
 static void
@@ -836,6 +928,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/etag-header-matches", test_etag_header_matches);
   g_test_add_func ("/utils/http-time-to-string", test_http_time_to_string);
   g_test_add_func ("/utils/http-not-modified", test_http_request_not_modified);
+  g_test_add_func ("/utils/http-range", test_http_range);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
 

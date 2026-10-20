@@ -277,6 +277,131 @@ http_request_not_modified (SoupMessageHeaders *headers,
   return FALSE;
 }
 
+/* does the If-Range precondition hold for the current representation,
+ * i.e. may a client range be applied to it? RFC 9110 section 13.1.5 */
+static gboolean
+if_range_matches (const gchar *if_range, const gchar *etag, guint64 mtime)
+{
+  g_autoptr(GDateTime) date = NULL;
+  gsize len;
+
+  if (*if_range == '"' || g_str_has_prefix (if_range, "W/"))
+    {
+      /* an entity-tag is compared strongly, a weak one never matches */
+      if (g_str_has_prefix (if_range, "W/"))
+        return FALSE;
+
+      len = strlen (if_range);
+      return etag != NULL &&
+             len >= 2 && if_range[0] == '"' && if_range[len - 1] == '"' &&
+             strlen (etag) == len - 2 && strncmp (etag, if_range + 1, len - 2) == 0;
+    }
+
+  date = soup_date_time_new_from_http_string (if_range);
+  if (!date)
+    return FALSE;
+
+  /* a date matches when the representation was not modified after it */
+  return mtime != 0 && (gint64) mtime <= g_date_time_to_unix (date);
+}
+
+HttpRangeType
+http_request_range (SoupMessageHeaders *headers,
+                    const gchar *etag,
+                    guint64 mtime,
+                    guint64 size,
+                    guint64 *first,
+                    guint64 *last)
+{
+  const gchar *range, *if_range, *p;
+  g_autofree gchar *spec = NULL;
+  gchar *end;
+  guint64 v;
+
+  range = soup_message_headers_get_one (headers, "Range");
+  if (!range)
+    return HTTP_RANGE_NONE;
+
+  /* a zero-length representation has no satisfiable range, but
+   * serving its empty body is friendlier than 416 */
+  if (size == 0)
+    return HTTP_RANGE_NONE;
+
+  /* the range only applies while the client still holds the
+   * representation it ranges into */
+  if_range = soup_message_headers_get_one (headers, "If-Range");
+  if (if_range && !if_range_matches (if_range, etag, mtime))
+    return HTTP_RANGE_NONE;
+
+  /* an unknown range unit is ignored, RFC 9110 section 14.2 */
+  if (g_ascii_strncasecmp (range, "bytes=", 6) != 0)
+    {
+      g_debug ("ignoring the unsupported Range unit: %s", range);
+      return HTTP_RANGE_NONE;
+    }
+
+  spec = g_strstrip (g_strdup (range + 6));
+
+  /* only single ranges are served, a request for more falls back
+   * to the whole representation */
+  if (strchr (spec, ',') != NULL)
+    {
+      g_debug ("ignoring the multi-range request: %s", range);
+      return HTTP_RANGE_NONE;
+    }
+
+  if (spec[0] == '-')
+    {
+      /* a suffix range: the last @v bytes */
+      v = g_ascii_strtoull (spec + 1, &end, 10);
+      if (end == spec + 1 || *end != '\0')
+        return HTTP_RANGE_NONE;
+
+      /* RFC 9110 section 14.1.1 */
+      if (v == 0)
+        return HTTP_RANGE_UNSATISFIABLE;
+
+      *first = size > v ? size - v : 0;
+      *last = size - 1;
+      return HTTP_RANGE_PARTIAL;
+    }
+
+  v = g_ascii_strtoull (spec, &end, 10);
+  if (end == spec || *end != '-')
+    return HTTP_RANGE_NONE;
+
+  *first = v;
+
+  p = end + 1;
+  if (*p == '\0')
+    {
+      /* to the end of the representation */
+      *last = size - 1;
+    }
+  else
+    {
+      v = g_ascii_strtoull (p, &end, 10);
+      if (end == p || *end != '\0')
+        return HTTP_RANGE_NONE;
+
+      /* a last byte below the first one is invalid, ignore the
+       * whole header, RFC 9110 section 14.1.1 */
+      if (v < *first)
+        return HTTP_RANGE_NONE;
+
+      *last = v;
+    }
+
+  if (*first >= size)
+    return HTTP_RANGE_UNSATISFIABLE;
+
+  /* a last byte beyond the end is clamped to it */
+  if (*last >= size)
+    *last = size - 1;
+
+  return HTTP_RANGE_PARTIAL;
+}
+
 guint
 timeout_from_string (const gchar *timeout)
 {

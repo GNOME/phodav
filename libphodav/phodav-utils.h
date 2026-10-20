@@ -49,6 +49,27 @@ gboolean http_request_not_modified (SoupMessageHeaders *headers,
                                     const gchar *etag,
                                     guint64 mtime);
 
+/* how does a Range request header apply to the current
+ * representation? RFC 9110 section 14 */
+typedef enum
+{
+  HTTP_RANGE_NONE,          /* no usable range: serve it all */
+  HTTP_RANGE_PARTIAL,       /* serve @first to @last, inclusive */
+  HTTP_RANGE_UNSATISFIABLE, /* there is no such byte: answer 416 */
+} HttpRangeType;
+
+/* evaluate a Range request header against the representation
+ * validated by @etag and @mtime and of length @size: the range only
+ * applies when an If-Range precondition holds. Returns the bytes to
+ * serve in @first/@last (inclusive) when returning
+ * HTTP_RANGE_PARTIAL. */
+HttpRangeType http_request_range (SoupMessageHeaders *headers,
+                                  const gchar *etag,
+                                  guint64 mtime,
+                                  guint64 size,
+                                  guint64 *first,
+                                  guint64 *last);
+
 typedef struct _DavDoc DavDoc;
 
 struct _DavDoc

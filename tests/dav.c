@@ -582,6 +582,116 @@ test_get_conditional (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_get_range (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *weak = NULL;
+
+  /* hello.txt holds "Hello, phodav!\n" (15 bytes) */
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL, NULL);
+  g_set_str (&etag, soup_message_headers_get_one (soup_message_get_response_headers (msg), "ETag"));
+  g_assert_nonnull (etag);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Accept-Ranges"), ==, "bytes");
+  weak = g_strdup_printf ("W/%s", etag);
+
+  /* a satisfiable range is answered with the slice and a
+   * Content-Range of the whole representation, RFC 9110 14.2 */
+  g_clear_object (&msg);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "Range", "bytes=0-4", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_PARTIAL_CONTENT);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 5);
+  g_assert_cmpmem (g_bytes_get_data (body, NULL), 5, "Hello", 5);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Range"), ==, "bytes 0-4/15");
+
+  /* open-ended and suffix ranges */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "Range", "bytes=7-", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_PARTIAL_CONTENT);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 8);
+  g_assert_cmpmem (g_bytes_get_data (body, NULL), 8, "phodav!\n", 8);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Range"), ==, "bytes 7-14/15");
+
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "Range", "bytes=-7", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_PARTIAL_CONTENT);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 7);
+  g_assert_cmpmem (g_bytes_get_data (body, NULL), 7, "hodav!\n", 7);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Range"), ==, "bytes 8-14/15");
+
+  /* a last byte beyond the end is clamped to it */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "Range", "bytes=0-100", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_PARTIAL_CONTENT);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, HELLO_LENGTH);
+  g_assert_cmpmem (g_bytes_get_data (body, NULL), HELLO_LENGTH, HELLO_CONTENT, HELLO_LENGTH);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Range"), ==, "bytes 0-14/15");
+
+  /* a first byte at or beyond the end is unsatisfiable, and the
+   * actual length is reported, RFC 9110 section 14.2 */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/hello.txt", NULL, &body,
+                     "Range", "bytes=15-", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 0);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Range"), ==, "bytes */15");
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=-0", NULL),
+                    ==, SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE);
+
+  /* invalid, multi-range or unknown-unit requests fall back to the
+   * whole representation */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=5-2", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=0-4,10-14", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "items=0-4", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* If-Range applies the range only while the client holds the
+   * current representation, RFC 9110 section 13.1.5 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=0-4",
+                                "If-Range", etag, NULL),
+                    ==, SOUP_STATUS_PARTIAL_CONTENT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=0-4",
+                                "If-Range", "\"not-the-etag\"", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=0-4",
+                                "If-Range", weak, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* Range is ignored for HEAD, which describes the whole file */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL,
+                                "Range", "bytes=0-4", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* an empty file has no satisfiable range, its empty body is
+   * served unchanged */
+  write_file (f->dir, "empty.txt", "");
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_GET, "/empty.txt", NULL, &body,
+                     "Range", "bytes=0-", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 0);
+}
+
+static void
 test_put (DavFixture *f, gconstpointer user_data)
 {
   g_autofree gchar *path = g_build_filename (f->dir, "new.txt", NULL);
@@ -1759,6 +1869,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/options", DavFixture, NULL, dav_fixture_setup, test_options, dav_fixture_teardown);
   g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
   g_test_add ("/dav/get-conditional", DavFixture, NULL, dav_fixture_setup, test_get_conditional, dav_fixture_teardown);
+  g_test_add ("/dav/get-range", DavFixture, NULL, dav_fixture_setup, test_get_range, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);

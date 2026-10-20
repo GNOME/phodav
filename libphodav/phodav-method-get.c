@@ -133,6 +133,11 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
       /* the listing is generated on the fly, it must not be cached */
       soup_message_headers_append (soup_server_message_get_response_headers (msg),
                                    "Cache-Control", "no-cache");
+      /* a listing has no ranges: take the header over, so that
+       * libsoup does not apply its own partial-content handling to
+       * the generated page */
+      if (soup_server_message_get_method (msg) == SOUP_METHOD_GET)
+        soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
       soup_server_message_set_response (msg, "text/html; charset=utf-8",
                                         SOUP_MEMORY_TAKE,
                                         g_string_free_and_steal (listing), len);
@@ -182,12 +187,38 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
                                          content_type ? content_type : "application/octet-stream",
                                          NULL);
 
+  /* byte ranges are supported on files, RFC 9110 section 14.4 */
+  soup_message_headers_append (response_headers, "Accept-Ranges", "bytes");
+
   method = soup_server_message_get_method (msg);
   if (method == SOUP_METHOD_GET)
     {
       GMappedFile *mapping;
       g_autoptr(GBytes) buffer = NULL;
       g_autofree gchar *path = g_file_get_path (file);
+      guint64 size = (guint64) g_file_info_get_size (info);
+      guint64 first = 0, last = 0;
+      HttpRangeType range;
+
+      range = http_request_range (soup_server_message_get_request_headers (msg),
+                                  etag, mtime, size, &first, &last);
+
+      /* the range has been evaluated here: take the request header
+       * over, so that libsoup does not apply its own partial-content
+       * handling on top of the answer (it ignores the If-Range
+       * precondition, and answers unsatisfiable ranges with 200) */
+      soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
+
+      /* there is no satisfiable byte in the representation,
+       * RFC 9110 section 14.2 */
+      if (range == HTTP_RANGE_UNSATISFIABLE)
+        {
+          g_autofree gchar *content_range = g_strdup_printf ("bytes */%" G_GUINT64_FORMAT, size);
+
+          soup_message_headers_append (response_headers, "Content-Range", content_range);
+          status = SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE;
+          goto end;
+        }
 
       mapping = g_mapped_file_new (path, FALSE, NULL);
       if (!mapping)
@@ -200,8 +231,31 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
                                            g_mapped_file_get_length (mapping),
                                            (GDestroyNotify) g_mapped_file_unref,
                                            mapping);
-      soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
-      status = SOUP_STATUS_OK;
+
+      /* the file may have changed since it was queried, do not
+       * serve bytes out of the content which is actually mapped */
+      if (range == HTTP_RANGE_PARTIAL && last >= (guint64) g_bytes_get_size (buffer))
+        range = HTTP_RANGE_NONE;
+
+      if (range == HTTP_RANGE_PARTIAL)
+        {
+          g_autoptr(GBytes) slice = g_bytes_new_from_bytes (buffer, first, last - first + 1);
+          g_autofree gchar *content_range =
+            g_strdup_printf ("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%" G_GUINT64_FORMAT,
+                             first, last, size);
+
+          soup_message_body_append_bytes (soup_server_message_get_response_body (msg), slice);
+          soup_message_headers_append (response_headers, "Content-Range", content_range);
+          status = SOUP_STATUS_PARTIAL_CONTENT;
+        }
+      else
+        {
+          /* an empty file has no content to append, libsoup refuses
+           * empty bodies */
+          if (g_bytes_get_size (buffer) > 0)
+            soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
+          status = SOUP_STATUS_OK;
+        }
     }
   else if (method == SOUP_METHOD_HEAD)
     {
