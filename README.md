@@ -48,6 +48,16 @@ contribution!
 
     git clone https://gitlab.gnome.org/GNOME/phodav.git
 
+The sources are formatted with clang-format and linted with
+[gobject-linter](https://github.com/bilelmoussaoui/gobject-linter);
+both are run by [pre-commit](https://pre-commit.com) hooks:
+
+    cargo install gobject-linter   # Rust tool, not managed by pre-commit
+    pre-commit install
+
+Note that Jujutsu does not run Git hooks: `jj` users should run
+`pre-commit run --all-files` before pushing instead.
+
 Please report bugs and open merge requests on GitLab:
 https://gitlab.gnome.org/GNOME/phodav/
 

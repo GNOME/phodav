@@ -1,0 +1,31 @@
+# pre-commit hooks for phodav
+#
+# Install the hooks with:  pre-commit install
+# Run them manually with:  pre-commit run --all-files
+#
+# gobject-linter is a Rust tool and is not managed by pre-commit;
+# install it separately with:  cargo install gobject-linter
+#
+# Note that Jujutsu does not run Git hooks: jj users should run
+# `pre-commit run --all-files` instead (see README.md).
+repos:
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    # keep in sync with the version used to format the sources and
+    # with the CI "formatting" job (Fedora 44 ships clang-format 22)
+    rev: v22.1.8
+    hooks:
+      - id: clang-format
+        # the same set of files as the CI "formatting" job checks
+        files: ^(libphodav|bin|tests)/.*\.[ch]$
+  - repo: local
+    hooks:
+      - id: gobject-linter
+        name: gobject-linter
+        description: GObject/C linter
+        entry: gobject-linter
+        language: system
+        # the linter analyses the whole project (some rules are
+        # cross-file) and only takes a directory argument, so it is
+        # always run on the project root instead of the staged files
+        pass_filenames: false
+        always_run: true
