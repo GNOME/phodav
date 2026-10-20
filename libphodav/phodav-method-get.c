@@ -40,7 +40,8 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 
   e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
                                  cancellable, err);
-  g_return_val_if_fail (e != NULL, NULL);
+  if (e == NULL)
+    return NULL;
 
   entries = g_ptr_array_new_with_free_func (g_free);
   while (1)
@@ -53,9 +54,9 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 
       dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
-      escaped = g_markup_printf_escaped ("%s%s",
-                                         g_file_info_get_name (info), dir ? "/" : "");
-      g_ptr_array_add (entries, escaped);
+      /* remember the directory entries by their trailing slash */
+      g_ptr_array_add (entries, g_strdup_printf ("%s%s",
+                                                 g_file_info_get_name (info), dir ? "/" : ""));
       g_object_unref (info);
     }
   g_file_enumerator_close (e, cancellable, NULL);
@@ -72,9 +73,22 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
   g_free (escaped);
   for (i = 0; i < entries->len; i++)
     {
-      g_string_append_printf (listing, "<a href=\"%s\">%s</a><br/>\r\n",
-                              (gchar *) entries->pdata[i],
-                              (gchar *) entries->pdata[i]);
+      const gchar *entry = g_ptr_array_index (entries, i);
+      gsize len = strlen (entry);
+      gboolean dir = len > 0 && entry[len - 1] == '/';
+      g_autofree gchar *base = NULL;
+      g_autofree gchar *href = NULL;
+      g_autofree gchar *line = NULL;
+
+      /* the href must be URI escaped, the label XML escaped, or names
+       * with "?", "&", spaces... would produce broken links */
+      base = g_strdup (entry);
+      if (dir)
+        base[strlen (base) - 1] = '\0';
+      href = g_uri_escape_string (base, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
+      line = g_markup_printf_escaped ("<a href=\"%s%s\">%s</a><br/>\r\n",
+                                      href, dir ? "/" : "", base);
+      g_string_append (listing, line);
     }
   g_string_append (listing, "</p></body>\r\n</html>\r\n");
 
@@ -101,7 +115,17 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
       GString *listing;
       gsize len;
 
-      listing = get_directory_listing (file, cancellable, err);
+      listing = get_directory_listing (file, cancellable, &error);
+      if (!listing)
+        {
+          /* the directory disappeared or cannot be read since the
+           * query above, answer with the mapped status */
+          status = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
+                     ? SOUP_STATUS_NOT_FOUND
+                     : SOUP_STATUS_FORBIDDEN;
+          goto end;
+        }
+
       len = listing->len;
       soup_server_message_set_response (msg, "text/html; charset=utf-8",
                                         SOUP_MEMORY_TAKE,

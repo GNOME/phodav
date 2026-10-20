@@ -1251,6 +1251,37 @@ test_if_malformed (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_OK);
 }
 
+static void
+test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *text = NULL;
+
+  /* names which need escaping in the href and in the label */
+  write_file (f->dir, "sp ace.txt", "space\n");
+  write_file (f->dir, "que?ry#hash.txt", "query\n");
+  write_file (f->dir, "amp&and.txt", "amp\n");
+  write_file (f->dir, "tag<le>.txt", "tag\n");
+  make_directory (f->dir, "fold er");
+
+  msg = dav_request (f, SOUP_METHOD_GET, "/", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  text = g_strndup (g_bytes_get_data (body, NULL), g_bytes_get_size (body));
+
+  /* the hrefs are URI escaped... */
+  g_assert_nonnull (strstr (text, "href=\"sp%20ace.txt\""));
+  g_assert_nonnull (strstr (text, "href=\"que%3Fry%23hash.txt\""));
+  g_assert_nonnull (strstr (text, "href=\"amp&amp;and.txt\""));
+  g_assert_nonnull (strstr (text, "href=\"fold%20er/\""));
+
+  /* ... and the labels are XML escaped */
+  g_assert_nonnull (strstr (text, ">sp ace.txt</a>"));
+  g_assert_nonnull (strstr (text, ">que?ry#hash.txt</a>"));
+  g_assert_nonnull (strstr (text, ">amp&amp;and.txt</a>"));
+  g_assert_nonnull (strstr (text, ">tag&lt;le&gt;.txt</a>"));
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1259,6 +1290,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add ("/dav/options", DavFixture, NULL, dav_fixture_setup, test_options, dav_fixture_teardown);
   g_test_add ("/dav/get", DavFixture, NULL, dav_fixture_setup, test_get, dav_fixture_teardown);
+  g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
