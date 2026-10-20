@@ -119,6 +119,53 @@ get_test_path (const TestCase *test)
   return test_path;
 }
 
+/* PROPPATCH on the virtual directories: the root forwards dead
+ * property removal to its real root, the other directories refuse
+ * with a per-property error in the multistatus response */
+static void
+test_proppatch (void)
+{
+  const gchar *body = "<D:propertyupdate xmlns:D=\"DAV:\"><D:remove><D:prop>"
+                      "<user.phodav-test/>"
+                      "</D:prop></D:remove></D:propertyupdate>";
+  g_autoptr(GBytes) bytes = g_bytes_new (body, strlen (body));
+
+  struct
+  {
+    const gchar *path;
+    const gchar *status; /* the per-property status in the response */
+  } cases[] = {
+    { "/", "200" },
+    { "/virtual", "403" },
+  };
+  guint i;
+
+  for (i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autofree gchar *uri = g_build_path ("/", server_uri, cases[i].path, NULL);
+      g_autoptr(SoupMessage) msg = soup_message_new ("PROPPATCH", uri);
+      g_autoptr(GError) error = NULL;
+      GInputStream *in;
+
+      soup_message_set_request_body_from_bytes (msg, NULL, bytes);
+      in = soup_session_send (session, msg, NULL, &error);
+      g_assert_no_error (error);
+      g_assert_cmpint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+
+      /* the per-property status is reported inside the response body */
+      {
+        gchar buf[4096];
+        gssize n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+
+        g_assert_no_error (error);
+        g_assert_cmpint (n, >, 0);
+        buf[n] = '\0';
+        g_assert_nonnull (strstr (buf, cases[i].status));
+      }
+      g_object_unref (in);
+    }
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -229,6 +276,8 @@ main (gint argc, gchar *argv[])
       g_test_add_data_func (test_path, &tests[i], test_generic);
       g_free (test_path);
     }
+
+  g_test_add_func ("/virtual-dir/proppatch", test_proppatch);
 
   gint res = g_test_run ();
   g_object_unref (session);

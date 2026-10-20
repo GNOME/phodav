@@ -1,5 +1,6 @@
 tests_sources = [
   'virtual-dir.c',
+  'virtual-dir-file.c',
 ]
 
 server = executable('virtual-dir-server',
@@ -44,9 +45,31 @@ endif
 test('chezdav',
      executable('test-chezdav',
                 sources : 'chezdav.c',
+                include_directories : incdir,
                 dependencies : deps),
      depends : chezdav,
      env : chezdav_env)
+
+# unit test for the write queue used by spice-webdavd
+output_queue_test = executable('test-output-queue',
+                               sources : ['output-queue.c'] + output_queue_sources,
+                               include_directories : [incdir, bin_inc],
+                               dependencies : deps)
+test('test-output-queue', output_queue_test)
+
+# functional test of the spice-webdavd daemon, over a FIFO standing in
+# for the virtio port (mkfifo is not available on Windows)
+if host_machine.system() != 'windows'
+  webdavd_env = ['SPICE_WEBDAVD=' + spice_webdavd.full_path()]
+  test('test-spice-webdavd',
+       executable('test-spice-webdavd',
+                  sources : 'spice-webdavd.c',
+                  include_directories : incdir,
+                  dependencies : deps),
+       depends : spice_webdavd,
+       env : webdavd_env,
+       timeout : 60)
+endif
 
 # run the litmus compliance suite; litmus is not packaged everywhere
 # (Fedora retired it), so build it from source as an optional subproject

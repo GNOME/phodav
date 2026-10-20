@@ -357,6 +357,162 @@ test_chezdav (gconstpointer data)
     }
 }
 
+/* run chezdav with the given arguments, waiting for it to exit and
+ * returning its exit status, with the output it produced */
+static gint
+run_chezdav (const gchar *const *args, gchar **stdout_str, gchar **stderr_str)
+{
+  const gchar *chezdav = g_getenv ("CHEZDAV");
+  g_autoptr(GPtrArray) argv = NULL;
+  g_autoptr(GSubprocess) proc = NULL;
+  g_autoptr(GError) error = NULL;
+  guint i;
+
+  if (!chezdav)
+    chezdav = "bin/chezdav";
+
+  argv = g_ptr_array_new ();
+  g_ptr_array_add (argv, (gchar *) chezdav);
+  for (i = 0; args[i]; i++)
+    g_ptr_array_add (argv, (gchar *) args[i]);
+  if (g_getenv ("CHEZDAV_TEST_NO_MDNS"))
+    g_ptr_array_add (argv, (gchar *) "--no-mdns");
+  g_ptr_array_add (argv, NULL);
+
+  proc = g_subprocess_newv ((const gchar *const *) argv->pdata,
+                            G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE,
+                            &error);
+  g_assert_no_error (error);
+
+  g_subprocess_communicate_utf8 (proc, NULL, NULL, stdout_str, stderr_str, &error);
+  g_assert_no_error (error);
+
+  return g_subprocess_get_exit_status (proc);
+}
+
+static void
+test_cli (void)
+{
+  /* --version prints the version and exits successfully */
+  {
+    g_autofree gchar *out = NULL;
+    g_autofree gchar *err = NULL;
+
+    g_assert_cmpint (run_chezdav ((const gchar *[]){ "--version", NULL }, &out, &err), ==, 0);
+    g_assert_nonnull (strstr (out, "phodav"));
+  }
+
+  /* the argument and option handling errors */
+  const struct
+  {
+    const gchar *args[6];
+    const gchar *message;
+  } cases[] = {
+    { { "--bogus", NULL }, "Option parsing failed" },
+    { { "extra-arg", NULL }, "Unsupported extra arguments" },
+    { { "--local", "--public", NULL }, "mutually exclusive" },
+    { { "--local", "--port", "8099", "--htdigest", "/nonexistent", NULL }, "Failed to open htdigest" },
+    /* the port of the running test server is already in use */
+    { { "--local", "--port", G_STRINGIFY (PORT), "--path", ".", NULL }, "Listen failed" },
+  };
+  guint i;
+
+  for (i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autofree gchar *out = NULL;
+      g_autofree gchar *err = NULL;
+
+      g_assert_cmpint (run_chezdav (cases[i].args, &out, &err), ==, 1);
+      g_assert_nonnull (strstr (err, cases[i].message));
+    }
+}
+
+/* the option defaults: serving the home directory on all interfaces,
+ * with a realm derived from the user name */
+static void
+test_defaults (void)
+{
+  const gchar *chezdav = g_getenv ("CHEZDAV");
+  g_autoptr(GSubprocessLauncher) launcher = NULL;
+  g_autoptr(GSubprocess) proc = NULL;
+  g_autoptr(GSocketClient) client = NULL;
+  g_autoptr(GSocketConnection) connection = NULL;
+  g_autoptr(SoupSession) session = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *home = NULL;
+  g_autofree gchar *port_str = NULL;
+  g_autofree gchar *uri = NULL;
+  g_autoptr(GError) error = NULL;
+  guint i;
+  guint16 port = PORT + 1;
+
+  if (!chezdav)
+    chezdav = "bin/chezdav";
+
+  /* serve a temporary home directory, so that the test does not
+   * depend on the contents of the real one */
+  home = g_dir_make_tmp ("chezdav-home-XXXXXX", &error);
+  g_assert_no_error (error);
+  create_test_file (home, "test.txt");
+
+  launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE);
+  g_subprocess_launcher_setenv (launcher, "HOME", home, TRUE);
+
+  {
+    g_autoptr(GPtrArray) argv = g_ptr_array_new ();
+
+    port_str = g_strdup_printf ("%u", port);
+    g_ptr_array_add (argv, (gchar *) chezdav);
+    g_ptr_array_add (argv, (gchar *) "--port");
+    g_ptr_array_add (argv, port_str);
+    if (g_getenv ("CHEZDAV_TEST_NO_MDNS"))
+      g_ptr_array_add (argv, (gchar *) "--no-mdns");
+    g_ptr_array_add (argv, NULL);
+
+    proc = g_subprocess_launcher_spawnv (launcher, (const gchar *const *) argv->pdata, &error);
+    g_assert_no_error (error);
+  }
+
+  /* wait for the server to listen */
+  client = g_socket_client_new ();
+  for (i = 0; i < 100; i++)
+    {
+      connection = g_socket_client_connect_to_host (client, "127.0.0.1", port, NULL, NULL);
+      if (connection)
+        break;
+      g_usleep (100 * 1000);
+    }
+  g_assert_nonnull (connection);
+
+  /* the home directory is served */
+  session = soup_session_new ();
+  uri = g_strdup_printf ("http://127.0.0.1:%u/", port);
+  msg = soup_message_new ("PROPFIND", uri);
+  soup_message_headers_append (soup_message_get_request_headers (msg), "Depth", "0");
+  {
+    g_autoptr(GBytes) body = soup_session_send_and_read (session, msg, NULL, &error);
+
+    g_assert_no_error (error);
+    g_assert_nonnull (body);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  }
+
+  /* SIGINT shuts the server down cleanly */
+#ifdef G_OS_UNIX
+  g_subprocess_send_signal (proc, SIGINT);
+#else
+  g_subprocess_force_exit (proc);
+#endif
+  g_subprocess_wait (proc, NULL, &error);
+  g_assert_no_error (error);
+#ifdef G_OS_UNIX
+  g_assert_true (g_subprocess_get_if_exited (proc));
+  g_assert_cmpint (g_subprocess_get_exit_status (proc), ==, 0);
+#endif
+
+  delete_dir (home);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -373,10 +529,12 @@ main (gint argc, gchar *argv[])
 
   create_test_file (share_dir, "test.txt");
 
-  /* user1 and user2 belong to the server realm, "other" to another one */
+  /* user1 and user2 belong to the server realm, "other" to another one;
+   * the first line is invalid and skipped with a warning */
   htdigest = g_build_filename (work_dir, "htdigest", NULL);
   line = htdigest_line ("user1", REALM, "password1");
-  contents = line;
+  contents = g_strconcat ("invalid-line-without-colons\n", line, NULL);
+  g_free (line);
   line = htdigest_line ("user2", REALM, "password2");
   tmp = g_strconcat (contents, line, NULL);
   g_free (line);
@@ -431,7 +589,12 @@ main (gint argc, gchar *argv[])
       g_test_add_data_func (test_path, &tests[i], test_chezdav);
     }
 
-  gint res = g_test_run ();
+  gint res;
+
+  g_test_add_func ("/chezdav/cli", test_cli);
+  g_test_add_func ("/chezdav/defaults", test_defaults);
+
+  res = g_test_run ();
 
   stop_server ();
   g_object_unref (server);

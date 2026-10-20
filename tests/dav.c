@@ -1054,6 +1054,193 @@ test_readonly (DavFixture *f, gconstpointer user_data)
   }
 }
 
+static void
+test_server_properties (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *root = NULL;
+  g_autoptr(GFile) root_file = NULL;
+  g_autoptr(SoupServer) server = NULL;
+  gboolean readonly;
+
+  /* every property can be read back */
+  g_object_get (f->phodav,
+                "root", &root,
+                "root-file", &root_file,
+                "server", &server,
+                "read-only", &readonly,
+                NULL);
+
+  g_assert_cmpstr (root, ==, f->dir);
+  g_assert_nonnull (root_file);
+  g_assert_true (SOUP_IS_SERVER (server));
+  g_assert_false (readonly);
+
+  /* the soup server is the one the requests are served on */
+  g_assert_true (server == phodav_server_get_soup_server (f->phodav));
+}
+
+static void
+test_propfind_quota (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GBytes) body = NULL;
+  g_autofree gchar *text = NULL;
+  gsize size;
+
+  /* the quota properties report the disk usage of the file */
+  msg = dav_request (f, "PROPFIND", "/hello.txt",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<D:quota-used-bytes/><D:quota-available-bytes/>"
+                     "</D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+
+  {
+    const gchar *data = g_bytes_get_data (body, &size);
+
+    text = g_strndup (data, size);
+  }
+
+  /* the usage of hello.txt is reported as the allocated blocks, and
+   * some space is available */
+  {
+    g_autofree gchar *used = NULL;
+    const gchar *pos = strstr (text, "<D:quota-used-bytes>");
+
+    g_assert_nonnull (pos);
+    pos += strlen ("<D:quota-used-bytes>");
+    used = g_strndup (pos, strcspn (pos, "<"));
+    g_assert_cmpuint (g_ascii_strtoull (used, NULL, 10), >, 0);
+  }
+  {
+    g_autofree gchar *available = NULL;
+    const gchar *pos = strstr (text, "<D:quota-available-bytes>");
+
+    g_assert_nonnull (pos);
+    pos += strlen ("<D:quota-available-bytes>");
+    available = g_strndup (pos, strcspn (pos, "<"));
+    g_assert_cmpuint (g_ascii_strtoull (available, NULL, 10), >, 0);
+  }
+
+  /* on a directory, the usage includes its contents */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPFIND", "/dir",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<D:quota-used-bytes/>"
+                     "</D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+
+  g_clear_pointer (&text, g_free);
+  {
+    const gchar *data = g_bytes_get_data (body, &size);
+
+    text = g_strndup (data, size);
+  }
+  g_assert_nonnull (strstr (text, "<D:quota-used-bytes>"));
+}
+
+static void
+test_lock_bad_request (DavFixture *f, gconstpointer user_data)
+{
+  /* an unknown lock scope */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:bogus/></D:lockscope>"
+                                "<D:locktype><D:write/></D:locktype></D:lockinfo>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* an unknown lock type */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope>"
+                                "<D:locktype><D:bogus/></D:locktype></D:lockinfo>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* an empty body is only valid for refreshing a held lock */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", NULL,
+                                "If", "(malformed", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt", NULL,
+                                "If", "(<opaquelocktoken:not-a-held-lock>)", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* a lock body which is not lockinfo at all */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:wrong xmlns:D=\"DAV:\"/>", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+}
+
+static void
+test_unlock_no_token (DavFixture *f, gconstpointer user_data)
+{
+  /* the lock token is mandatory */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* ... and it must be bracketed */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/hello.txt", NULL,
+                                "Lock-Token", "opaquelocktoken:not-bracketed", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+}
+
+static void
+test_locked_parent (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GBytes) body = NULL;
+
+  /* lock a file inside the directory */
+  msg = dav_request (f, "LOCK", "/dir/inner.txt", LOCK_EXCLUSIVE, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+
+  /* modifications of the locked file are rejected without the token */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/inner.txt", "data", NULL),
+                    ==, SOUP_STATUS_LOCKED);
+
+  /* deleting the directory removes the locked member with it */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dir", NULL, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "dir", NULL);
+
+    g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+  }
+
+  /* deleting something which does not exist */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/nonexistent", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_if_malformed (DavFixture *f, gconstpointer user_data)
+{
+  const gchar *headers[] = {
+    "(<no-close",
+    "([",
+    "([\"etag",
+    "([\"etag\"",
+    "(\"etag\")",
+    "Not",
+  };
+  guint i;
+
+  for (i = 0; i < G_N_ELEMENTS (headers); i++)
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL,
+                                  "If", headers[i], NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* the file is still there */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1079,6 +1266,13 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
+  g_test_add ("/dav/if-malformed", DavFixture, NULL, dav_fixture_setup, test_if_malformed, dav_fixture_teardown);
+
+  g_test_add ("/dav/server-properties", DavFixture, NULL, dav_fixture_setup, test_server_properties, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/quota", DavFixture, NULL, dav_fixture_setup, test_propfind_quota, dav_fixture_teardown);
+  g_test_add ("/dav/lock/bad-request", DavFixture, NULL, dav_fixture_setup, test_lock_bad_request, dav_fixture_teardown);
+  g_test_add ("/dav/unlock/no-token", DavFixture, NULL, dav_fixture_setup, test_unlock_no_token, dav_fixture_teardown);
+  g_test_add ("/dav/locked-parent", DavFixture, NULL, dav_fixture_setup, test_locked_parent, dav_fixture_teardown);
 
   g_test_add ("/dav/readonly", DavFixture, GINT_TO_POINTER (1), dav_fixture_setup, test_readonly, dav_fixture_teardown);
 

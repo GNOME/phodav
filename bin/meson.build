@@ -9,15 +9,16 @@ if conf.has('WITH_AVAHI')
   avahi_common += files('avahi-common.c')
 endif
 
+output_queue_sources = files('output-queue.c', 'output-queue.h')
+bin_inc = include_directories('.')
+
 sources = [
   'spice-webdavd.c',
-  'output-queue.c',
-  'output-queue.h'
 ]
 
-executable(
+spice_webdavd = executable(
   'spice-webdavd',
-  sources + avahi_common,
+  sources + output_queue_sources + avahi_common,
   install_dir : sbindir,
   include_directories : incdir,
   dependencies : win32_deps + avahi_deps + deps,
