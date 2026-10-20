@@ -78,8 +78,6 @@ get_realm (void)
   return g_strdup_printf ("%s\'s public share", g_get_user_name ());
 }
 
-gchar *htdigest = NULL;
-
 /* returns a table of user -> digest for the given realm */
 static GHashTable *
 load_htdigest (const gchar *filename, const gchar *realm, GError **error)
@@ -127,8 +125,10 @@ main (gint argc, gchar *argv[])
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GOptionContext) context = NULL;
-  const gchar *path = NULL;
-  const gchar *realm = NULL;
+  /* the parsed string and filename options are owned copies */
+  g_autofree gchar *path = NULL;
+  g_autofree gchar *realm = NULL;
+  g_autofree gchar *htdigest = NULL;
   g_autoptr(GMainLoop) mainloop = NULL;
 
   gint version = 0;
@@ -180,7 +180,7 @@ main (gint argc, gchar *argv[])
     public = 1; // default
 
   if (!path)
-    path = g_get_home_dir ();
+    path = g_strdup (g_get_home_dir ());
 
   if (!realm)
     realm = get_realm ();
