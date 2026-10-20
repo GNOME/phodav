@@ -35,6 +35,10 @@ guint timeout_from_string (const gchar *timeout);
 /* is @path the tree rooted at @root, or one of its members? */
 gboolean path_is_covered (const gchar *path, const gchar *root);
 
+/* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
+ * match the current @etag of the resource, which exists per @exists? */
+gboolean etag_header_matches (const gchar *header, const gchar *etag, gboolean exists);
+
 typedef struct _DavDoc DavDoc;
 
 struct _DavDoc

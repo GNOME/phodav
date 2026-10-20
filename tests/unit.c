@@ -148,6 +148,32 @@ test_path_is_covered (void)
 }
 
 static void
+test_etag_header_matches (void)
+{
+  /* RFC 9110 section 13.1: a list of quoted entity tags compared
+   * weakly, or a star for any existing representation */
+  g_assert_true (etag_header_matches ("\"abc\"", "abc", TRUE));
+  g_assert_true (etag_header_matches ("W/\"abc\"", "abc", TRUE));
+  g_assert_true (etag_header_matches ("\"xyz\", \"abc\"", "abc", TRUE));
+  g_assert_true (etag_header_matches ("*", NULL, TRUE));
+  g_assert_true (etag_header_matches ("*", "abc", TRUE));
+
+  g_assert_false (etag_header_matches ("\"abc\"", "abd", TRUE));
+  g_assert_false (etag_header_matches ("\"abc\"", "ab", TRUE));
+  g_assert_false (etag_header_matches ("\"abc\"", NULL, TRUE));
+  g_assert_false (etag_header_matches ("\"\"", "abc", TRUE));
+  g_assert_false (etag_header_matches ("", "abc", TRUE));
+
+  /* unquoted values are malformed, but compared leniently */
+  g_assert_true (etag_header_matches ("abc", "abc", TRUE));
+  g_assert_false (etag_header_matches ("abc", "abd", TRUE));
+
+  /* the star matches any existing representation only */
+  g_assert_false (etag_header_matches ("*", NULL, FALSE));
+  g_assert_false (etag_header_matches ("*", "abc", FALSE));
+}
+
+static void
 test_timeout (void)
 {
   g_assert_cmpuint (timeout_from_string (NULL), ==, 0);
@@ -763,6 +789,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/dot-dot-segment", test_path_has_dot_dot_segment);
   g_test_add_func ("/utils/depth", test_depth);
   g_test_add_func ("/utils/path-is-covered", test_path_is_covered);
+  g_test_add_func ("/utils/etag-header-matches", test_etag_header_matches);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
 

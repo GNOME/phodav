@@ -106,47 +106,6 @@ method_put_got_chunk (SoupServerMessage *msg,
   put_context_abort (ctx);
 }
 
-/* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
- * match the current @etag of the resource, which exists per @exists? */
-static gboolean
-etag_header_matches (const gchar *header, const gchar *etag, gboolean exists)
-{
-  g_auto(GStrv) etags = NULL;
-
-  if (!g_strcmp0 (header, "*"))
-    return exists;
-
-  if (!etag)
-    return FALSE;
-
-  /* a comma separated list of quoted entity tags; the comparison is
-   * weak, so the weakness markers are ignored. (GIO etags do not
-   * contain commas, splitting on them is unambiguous.) */
-  etags = g_strsplit (header, ",", -1);
-  for (guint i = 0; etags[i]; i++)
-    {
-      const gchar *h = g_strstrip (etags[i]);
-      gsize len = strlen (h);
-
-      if (g_str_has_prefix (h, "W/"))
-        {
-          h += 2;
-          len -= 2;
-        }
-
-      if (len >= 2 && h[0] == '"' && h[len - 1] == '"')
-        {
-          h++;
-          len -= 2;
-        }
-
-      if (strlen (etag) == len && strncmp (etag, h, len) == 0)
-        return TRUE;
-    }
-
-  return FALSE;
-}
-
 static gint
 put_start (SoupServerMessage *msg, GFile *file, GFileOutputStream **output, GCancellable *cancellable, GError **err)
 {
