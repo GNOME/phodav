@@ -67,6 +67,19 @@ formatting:
     - clang-format --version
     - find libphodav bin tests -name '*.[ch]' -print0 | xargs -0 clang-format --dry-run -Werror
 
+gobject-linter:
+  stage: build
+  # The tree-sitter based GObject/C linter, from its own upstream image.
+  # The rules are configured in .gobject-linter.toml, which makes every
+  # violation fail the job; the same configuration is enforced by the
+  # pre-commit hooks. The image has a non-shell entrypoint, which the
+  # runner has to override.
+  image:
+    name: ghcr.io/bilelmoussaoui/gobject-linter:latest
+    entrypoint: [""]
+  script:
+    - gobject-linter
+
 warnings:
   stage: build
   before_script:

@@ -117,25 +117,25 @@ struct _PathHandler
   GFile *file;
 };
 
-PhodavServer *G_GNUC_PURE
+PhodavServer *
 handler_get_server (PathHandler *handler)
 {
   return handler->self;
 }
 
-GFile *G_GNUC_PURE
+GFile *
 handler_get_file (PathHandler *handler)
 {
   return handler->file;
 }
 
-GCancellable *G_GNUC_PURE
+GCancellable *
 handler_get_cancellable (PathHandler *handler)
 {
   return handler->self->cancellable;
 }
 
-gboolean G_GNUC_PURE
+gboolean
 handler_get_readonly (PathHandler *handler)
 {
   return handler->self->readonly;

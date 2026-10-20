@@ -76,10 +76,10 @@ typedef gboolean (*PathCb) (const gchar *key,
                             Path *path,
                             gpointer data);
 
-GFile *handler_get_file (PathHandler *handler);
-GCancellable *handler_get_cancellable (PathHandler *handler);
-PhodavServer *handler_get_server (PathHandler *handler);
-gboolean handler_get_readonly (PathHandler *handler);
+GFile *handler_get_file (PathHandler *handler) G_GNUC_PURE;
+GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
+PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
+gboolean handler_get_readonly (PathHandler *handler) G_GNUC_PURE;
 
 gboolean server_foreach_parent_path (PhodavServer *server,
                                      const gchar *path,
