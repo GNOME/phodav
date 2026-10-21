@@ -25,6 +25,10 @@ sources = [
   'phodav-virtual-dir.c'
 ]
 
+# the same list, as file objects usable from the other
+# subdirectories, for the fuzzing build in tests/fuzz
+libphodav_sources = files(sources)
+
 libphodav_inc = include_directories('.')
 
 # the private symbols are needed by the unit tests, so build them as

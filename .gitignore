@@ -2,3 +2,7 @@
 /subprojects/litmus/
 /subprojects/packagecache/
 /subprojects/.wraplock
+
+# libFuzzer crash and leak reports
+/crash-*
+/leak-*

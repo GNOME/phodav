@@ -1,0 +1,1 @@
+P<D:propfind xmlns:D="DAV:"><D:prop><D:getcontentlength/><D:getetag/><D:resourcetype/><D:displayname/><D:getlastmodified/><D:creationdate/><D:supportedlock/><D:lockdiscovery/><D:quota-available-bytes/></D:prop></D:propfind>

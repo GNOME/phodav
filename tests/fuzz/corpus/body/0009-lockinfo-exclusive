@@ -1,0 +1,1 @@
+T<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>fuzz</D:owner></D:lockinfo>

@@ -148,6 +148,27 @@ sanitizers:
     - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_sanitize=address,undefined build-sanitize
     - meson test -C build-sanitize --print-errorlogs
 
+fuzzing:
+  stage: test
+  needs: []
+  variables:
+    # meson would otherwise pick gcc, which does not implement libFuzzer
+    CC: clang
+  before_script:
+    # the address sanitizer catches the memory errors during the fuzzing
+    - dnf install -y --nogpgcheck $DEPENDENCIES clang
+  script:
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=disabled -Dfuzzing=enabled -Db_sanitize=address build-fuzz
+    # the seed corpora run as smoke tests
+    - meson test -C build-fuzz fuzz-request fuzz-body --print-errorlogs
+    # then fuzz for a bounded time, from copies of the corpora which
+    # libFuzzer extends with the new inputs it finds; the leaks of
+    # the whole process would drown the actual findings
+    - cp -r tests/fuzz/corpus/request build-fuzz/corpus-request
+    - cp -r tests/fuzz/corpus/body build-fuzz/corpus-body
+    - ./build-fuzz/tests/fuzz/fuzz-request -max_total_time=90 -detect_leaks=0 -rss_limit_mb=2560 build-fuzz/corpus-request
+    - ./build-fuzz/tests/fuzz/fuzz-body -max_total_time=90 -detect_leaks=0 -rss_limit_mb=2560 build-fuzz/corpus-body
+
 coverage:
   extends: .litmus
   stage: test

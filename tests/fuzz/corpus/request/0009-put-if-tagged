@@ -1,0 +1,7 @@
+PUT /test HTTP/1.1
+Host: fuzz
+If: <http://127.0.0.1/test> (Not <DAV:no-lock>)
+Content-Length: 12
+Connection: close
+
+new contents

@@ -1,0 +1,1 @@
+P<D:propfind xmlns:D="DAV:"><D:prop><user.fuzz/><x2:foo xmlns:x2="urn:fuzz"/></D:prop></D:propfind>

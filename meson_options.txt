@@ -24,6 +24,11 @@ option('litmus',
        type : 'feature',
        description : 'Run the litmus WebDAV compliance test suite')
 
+option('fuzzing',
+       type : 'feature',
+       value : 'disabled',
+       description : 'Build libFuzzer targets for the request parsers')
+
 option('build-id',
        type : 'integer',
        value : 0,

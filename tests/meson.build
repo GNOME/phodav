@@ -104,3 +104,5 @@ endif
 
 summary({'litmus compliance tests' : litmus.found()},
         section : 'Configuration')
+
+subdir('fuzz')

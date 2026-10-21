@@ -1,0 +1,1 @@
+S<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><user.fuzz>value</user.fuzz></D:prop></D:set></D:propertyupdate>
