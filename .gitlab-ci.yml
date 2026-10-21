@@ -122,6 +122,43 @@ build_win:
     expire_in: 1 week
     when: always
 
+test_win:
+  stage: test
+  needs: []
+  variables:
+    # the g_strerror() of the mingw GLib converts the message with the
+    # console charset: without $LANG it queries the console output code
+    # page, which fails under Wine without a console, and the warning
+    # it emits is fatal to the g_test programs
+    LANG: C.UTF-8
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES wine mingw64-gsettings-desktop-schemas
+    # the tests connect with a SoupSession, which resolves the proxies
+    # through GLib: the gnome resolver of the mingw glib-networking
+    # reads the org.gnome.system.proxy schema and aborts when no
+    # compiled schema can be found. Compile the schemas of the mingw
+    # sysroot, like an installed Windows system would have them.
+    - WINEDLLOVERRIDES="mscoree,mshtml=" wine64 /usr/x86_64-w64-mingw32/sys-root/mingw/bin/glib-compile-schemas.exe /usr/x86_64-w64-mingw32/sys-root/mingw/share/glib-2.0/schemas
+  script:
+    # wine runs the cross-compiled tests, as the executable wrapper
+    # of an additional machine file (see build-aux/wine-exe-wrapper.meson)
+    - mkdir w64-test && cd w64-test
+    - mingw64-meson --cross-file ../build-aux/wine-exe-wrapper.meson -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=disabled
+    - ninja
+    # the mingw DLLs and the freshly built ones must be on the DLL
+    # search path; WINEDLLOVERRIDES keeps the first wine run from
+    # trying to install wine-mono and wine-gecko; wine is slower
+    # than a native run, give the tests more time
+    - export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
+    - export WINEPATH="Z:\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;$(winepath -w "$(pwd)/libphodav");$(winepath -w "$(pwd)/bin")"
+    - meson test --print-errorlogs --timeout-multiplier 2
+  artifacts:
+    when: on_failure
+    paths:
+      - w64-test/meson-logs/*.txt
+    expire_in: 1 week
+
 .litmus:
   before_script:
     - dnf install -y --nogpgcheck $DEPENDENCIES $LITMUS_DEPENDENCIES
