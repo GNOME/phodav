@@ -1,3 +1,9 @@
+/* The version node is named after the libphodav 1.0 days, which
+ * predate the libphodav-3.0 soname: the name cannot be cleaned up
+ * now, it is part of the ABI. The exported symbols are tagged with
+ * it, and the programs linked against libphodav-3.0.so.0 record it
+ * in their version requirements; renaming the node would keep them
+ * from loading ("version `LIBPHODAV1_0.0' not found"). */
 LIBPHODAV1_0.0 {
     global:
         phodav_server_get_soup_server;
