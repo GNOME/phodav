@@ -223,7 +223,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
 
     if (!try_add_lock (handler_get_server (handler), path, new_lock))
       {
-        g_warning ("lock failed");
+        g_debug ("lock failed");
         status = SOUP_STATUS_LOCKED;
         goto end;
       }

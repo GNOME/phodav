@@ -168,7 +168,7 @@ locks_submitted_has (GList *locks, DAVLock *lock)
         return TRUE;
     }
 
-  g_message ("missing lock: %s %s", lock->path->path, lock->token);
+  g_debug ("missing lock: %s %s", lock->path->path, lock->token);
 
   return FALSE;
 }

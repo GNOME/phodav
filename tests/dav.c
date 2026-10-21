@@ -1313,10 +1313,8 @@ test_lock (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_LOCKED);
 
   /* a second exclusive lock is refused */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "lock failed");
   g_assert_cmpuint (dav_status (f, "LOCK", "/locked.txt", LOCK_EXCLUSIVE, NULL),
                     ==, SOUP_STATUS_LOCKED);
-  g_test_assert_expected_messages ();
 
   /* the lock can be discovered with PROPFIND */
   msg = dav_request (f, "PROPFIND", "/locked.txt",
@@ -1932,11 +1930,9 @@ test_lock_tree_conflict (DavFixture *f, gconstpointer user_data)
 
   /* an exclusive depth-infinity lock on the collection conflicts with
    * the lock held on the member (RFC 4918 section 7.4) */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "lock failed");
   g_assert_cmpuint (dav_status (f, "LOCK", "/dir", LOCK_EXCLUSIVE,
                                 "Depth", "infinity", NULL),
                     ==, SOUP_STATUS_LOCKED);
-  g_test_assert_expected_messages ();
 
   /* a depth-0 lock does not cover the member and is allowed */
   {

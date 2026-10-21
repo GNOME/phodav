@@ -556,8 +556,7 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
-/* look for the lock with @token on @path or any of its parents,
- * without logging when it is not found */
+/* look for the lock with @token on @path or any of its parents */
 DAVLock *
 server_path_lookup_lock (PhodavServer *self, const gchar *path, const gchar *token)
 {
@@ -574,7 +573,7 @@ server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
   DAVLock *lock = server_path_lookup_lock (self, path, token);
 
   if (!lock)
-    g_message ("Invalid lock token %s for %s", token, path);
+    g_debug ("Invalid lock token %s for %s", token, path);
 
   return lock;
 }
