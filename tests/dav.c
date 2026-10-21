@@ -929,6 +929,11 @@ test_propfind_errors (DavFixture *f, gconstpointer user_data)
   /* unexpected root element */
   g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", "<unexpected/>", "Depth", "0", NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
+  /* an empty prop element names no property, it is malformed too */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt",
+                                "<D:propfind xmlns:D=\"DAV:\"><D:prop/></D:propfind>",
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
   /* missing resource */
   g_assert_cmpuint (dav_status (f, "PROPFIND", "/missing.txt", PROPFIND_ALLPROP, "Depth", "0", NULL),
                     ==, SOUP_STATUS_NOT_FOUND);
@@ -1026,6 +1031,22 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
     missing_doc = parse_multistatus (missing_body);
     g_assert_cmpuint (prop_status (f, missing_doc, "/missing.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
   }
+
+  /* a body without any set or remove instruction is malformed, it
+   * would produce an empty multistatus response otherwise */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"/>", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* instructions outside of the DAV namespace are not recognized,
+   * the body names no property either */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "*should not be reached*");
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAv:\"><D:set><D:prop>"
+                                "<user.phodav-test>value</user.phodav-test>"
+                                "</D:prop></D:set></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_test_assert_expected_messages ();
 }
 
 /* take an exclusive write lock, returns the Lock-Token header value */

@@ -702,6 +702,8 @@ end:
 static gboolean
 parse_prop (xmlNodePtr node, GHashTable *props)
 {
+  gboolean found = FALSE;
+
   for (node = node->children; node; node = node->next)
     {
       if (!xml_node_is_element (node))
@@ -709,9 +711,10 @@ parse_prop (xmlNodePtr node, GHashTable *props)
 
       // only interested in ns&name
       g_hash_table_add (props, node);
+      found = TRUE;
     }
 
-  return TRUE;
+  return found;
 }
 
 static PropFind *
@@ -738,7 +741,11 @@ parse_propfind (xmlNodePtr xml)
       else if (xml_node_has_name (node, "prop"))
         {
           pf->type = PROPFIND_PROP;
-          parse_prop (node, pf->props);
+          /* a prop element without any property is a malformed
+           * request (RFC 4918 section 9.1), it would produce an
+           * empty multistatus response otherwise */
+          if (!parse_prop (node, pf->props))
+            g_clear_pointer (&pf, propfind_free);
           goto end;
         }
     }
@@ -786,7 +793,10 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
 
       pf = parse_propfind (doc.root);
       if (!pf)
-        goto end;
+        {
+          status = SOUP_STATUS_BAD_REQUEST;
+          goto end;
+        }
     }
 
   ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");

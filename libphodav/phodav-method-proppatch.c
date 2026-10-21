@@ -183,6 +183,16 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
         }
     }
 
+  /* a body without any set or remove instruction (or with none in
+   * the DAV namespace) names no property to report: it is a
+   * malformed request (RFC 4918 section 9.9), the multistatus
+   * response would be empty otherwise */
+  if (!props)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
   g_hash_table_insert (mstatus, g_strdup (path),
                        response_new (props, 0));
 
