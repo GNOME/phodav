@@ -76,6 +76,18 @@ vdir_fixture_teardown (VdirFixture *f, gconstpointer user_data)
   g_free (f->dir);
 }
 
+/* query the current etag of @file */
+static gchar *
+query_etag (GFile *file)
+{
+  g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+  g_assert_nonnull (info);
+  g_assert_nonnull (g_file_info_get_etag (info));
+
+  return g_strdup (g_file_info_get_etag (info));
+}
+
 static void
 test_names (VdirFixture *f, gconstpointer user_data)
 {
@@ -207,6 +219,11 @@ test_query_info (VdirFixture *f, gconstpointer user_data)
   g_assert_no_error (error);
   g_assert_cmpint (g_file_info_get_file_type (info), ==, G_FILE_TYPE_DIRECTORY);
   g_assert_cmpstr (g_file_info_get_name (info), ==, "virtual");
+
+  /* the validators let a client check whether its cached listing of
+   * the directory is still current */
+  g_assert_cmpuint (g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED), >, 0);
+  g_assert_nonnull (g_file_info_get_etag (info));
   g_clear_pointer (&info, g_object_unref);
 
   /* filesystem attributes of the root come from the real root;
@@ -344,7 +361,19 @@ test_real_child (VdirFixture *f, gconstpointer user_data)
   g_assert_no_error (error);
 
   real = g_file_new_for_path (subdir);
-  g_assert_true (phodav_virtual_dir_attach_real_child (dir, real));
+
+  /* attaching a child changes the validators of the parent */
+  {
+    g_autofree gchar *etag = query_etag (G_FILE (dir));
+    g_autofree gchar *etag_after = NULL;
+
+    g_usleep (2000); /* the timestamps have a microsecond resolution */
+
+    g_assert_true (phodav_virtual_dir_attach_real_child (dir, real));
+
+    etag_after = query_etag (G_FILE (dir));
+    g_assert_cmpstr (etag_after, !=, etag);
+  }
 
   /* attaching the same child twice fails */
   g_assert_false (phodav_virtual_dir_attach_real_child (dir, real));

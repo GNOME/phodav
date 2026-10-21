@@ -32,6 +32,10 @@ struct _PhodavVirtualDir
 
   /* TODO: we could store just the base name and build up the path when needed */
   gchar *path;
+
+  /* when the set of children last changed, in microseconds since
+   * the epoch: the modification time and etag reported by query_info() */
+  gint64 mtime_us;
 };
 
 static void phodav_virtual_dir_file_interface_init (GFileIface *iface);
@@ -114,6 +118,14 @@ virtual_dir_dummy_new (void)
   return G_FILE (dummy);
 }
 
+/* the content of a virtual directory is its set of children: its
+ * modification time is the last time that set changed */
+static void
+virtual_dir_touch (PhodavVirtualDir *self)
+{
+  self->mtime_us = g_get_real_time ();
+}
+
 static gchar *
 phodav_virtual_dir_get_basename (GFile *file)
 {
@@ -162,7 +174,18 @@ phodav_virtual_dir_query_info (GFile *file,
   g_file_info_set_display_name (info, base);
   g_free (base);
   g_file_info_set_file_type (info, G_FILE_TYPE_DIRECTORY);
-  /* TODO: set more attributes? e.g. etag, time*, access* */
+
+  /* the validators let the clients check whether their cached
+   * listing of the directory is still current */
+  g_file_info_set_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED,
+                                    (guint64) (self->mtime_us / G_USEC_PER_SEC));
+  g_file_info_set_attribute_uint32 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC,
+                                    (guint32) (self->mtime_us % G_USEC_PER_SEC));
+  {
+    g_autofree gchar *etag = g_strdup_printf ("vdir%" G_GINT64_FORMAT, self->mtime_us);
+
+    g_file_info_set_attribute_string (info, G_FILE_ATTRIBUTE_ETAG_VALUE, etag);
+  }
 
   return info;
 }
@@ -616,6 +639,7 @@ phodav_virtual_dir_new_root (void)
   root = g_object_new (PHODAV_TYPE_VIRTUAL_DIR, NULL);
   root->path = g_strdup ("/");
   root->dummy = FALSE;
+  virtual_dir_touch (root);
   return root;
 }
 
@@ -650,6 +674,9 @@ phodav_virtual_dir_root_set_real (PhodavVirtualDir *root,
     root->real_root = g_file_new_for_path (real_root_path);
   else
     root->real_root = NULL;
+
+  /* the real children come and go with the real root */
+  virtual_dir_touch (root);
 }
 
 /**
@@ -742,6 +769,8 @@ phodav_virtual_dir_new_dir (PhodavVirtualDir *root,
   file = g_object_new (PHODAV_TYPE_VIRTUAL_DIR, NULL);
   file->path = g_strdup (path);
   file->dummy = FALSE;
+  virtual_dir_touch (file);
+  virtual_dir_touch (parent);
   parent->children = g_list_prepend (parent->children, g_object_ref (file));
   g_object_weak_ref (G_OBJECT (parent), parent_gone_cb, file);
   /* weak ref to parent allows us to remove all subdirectories by dropping the last ref to parent */
@@ -788,5 +817,6 @@ phodav_virtual_dir_attach_real_child (PhodavVirtualDir *parent,
   g_free (base);
 
   parent->children = g_list_prepend (parent->children, g_object_ref (child));
+  virtual_dir_touch (parent);
   return TRUE;
 }

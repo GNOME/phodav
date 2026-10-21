@@ -166,6 +166,42 @@ test_proppatch (void)
     }
 }
 
+/* PROPFIND reports the validators of the virtual directories, so
+ * that the clients can validate their cached listings of them */
+static void
+test_propfind_validators (void)
+{
+  const gchar *body = "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                      "<D:getetag/><D:getlastmodified/>"
+                      "</D:prop></D:propfind>";
+  g_autoptr(GBytes) bytes = g_bytes_new (body, strlen (body));
+  g_autofree gchar *uri = g_build_path ("/", server_uri, "virtual", NULL);
+  g_autoptr(SoupMessage) msg = soup_message_new ("PROPFIND", uri);
+  g_autoptr(GError) error = NULL;
+  GInputStream *in;
+
+  soup_message_headers_append (soup_message_get_request_headers (msg), "Depth", "0");
+  soup_message_set_request_body_from_bytes (msg, NULL, bytes);
+  in = soup_session_send (session, msg, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+
+  {
+    gchar buf[4096];
+    gssize n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+
+    g_assert_no_error (error);
+    g_assert_cmpint (n, >, 0);
+    buf[n] = '\0';
+
+    /* both properties are answered, without any per-property error */
+    g_assert_nonnull (strstr (buf, "<D:getetag>"));
+    g_assert_nonnull (strstr (buf, "<D:getlastmodified>"));
+    g_assert_null (strstr (buf, "404"));
+  }
+  g_object_unref (in);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -278,6 +314,7 @@ main (gint argc, gchar *argv[])
     }
 
   g_test_add_func ("/virtual-dir/proppatch", test_proppatch);
+  g_test_add_func ("/virtual-dir/propfind-validators", test_propfind_validators);
 
   gint res = g_test_run ();
   g_object_unref (session);
