@@ -84,7 +84,6 @@ void xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size);
 gboolean xml_node_is_element (xmlNodePtr node);
 gboolean xml_node_has_name (xmlNodePtr node, const gchar *name);
 gboolean xml_node_has_name_ns (xmlNodePtr node, const gchar *name, const gchar *ns_href);
-gboolean xml_node_has_ns (xmlNodePtr node, const gchar *ns_href);
 void xml_node_debug (xmlNodePtr node);
 gchar *xml_node_get_xattr_name (xmlNodePtr node, const gchar *prefix);
 

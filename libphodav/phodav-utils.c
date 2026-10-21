@@ -434,7 +434,7 @@ xml_node_debug (xmlNodePtr node)
   g_debug ("%s ns:%s", node->name, node->ns ? (gchar *) node->ns->href : "");
 }
 
-gboolean
+static gboolean
 xml_node_has_ns (xmlNodePtr node, const gchar *ns_href)
 {
   return node->ns && node->ns->href &&
