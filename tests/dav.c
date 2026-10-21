@@ -1568,6 +1568,12 @@ test_if_malformed (DavFixture *f, gconstpointer user_data)
     "([\"etag\"",
     "(\"etag\")",
     "Not",
+    /* unclosed token ref: '<' without '>' (accept_ref NULL path) */
+    "(<urn:uuid:no-closing-angle",
+    /* etag bracket without opening quote */
+    "([no-quote])",
+    /* tagged-list form with no condition list after the URI */
+    "<http://localhost/path>",
   };
   guint i;
 
@@ -1575,6 +1581,20 @@ test_if_malformed (DavFixture *f, gconstpointer user_data)
     g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL,
                                   "If", headers[i], NULL),
                       ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* tagged-list with a valid URI but a malformed condition */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL,
+                                "If", "<http://localhost/hello.txt> ([",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* a backslash-escaped quote inside an etag condition: this is valid
+   * syntax (exercises the escape path in accept_etag), but the etag
+   * does not match any file, so the condition fails with 412 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", NULL,
+                                "If", "([\"escaped\\\"quote\"])",
+                                NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
 
   /* the file is still there */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
