@@ -799,6 +799,67 @@ test_move_copy (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_CONFLICT);
 }
 
+/* Regression tests for the path traversal fix: encoded slashes and
+ * dot-dot segments in the Destination header must be rejected so that
+ * COPY/MOVE cannot write outside the shared directory. */
+static void
+test_movecopy_path_traversal (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *parent_dir = g_path_get_dirname (f->dir);
+
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/source.txt", "data", NULL),
+                    ==, SOUP_STATUS_CREATED);
+
+  /* encoded slashes survive GLib dot-segment removal and would
+   * resolve outside the root once decoded: they must be rejected */
+  {
+    g_autofree gchar *bad = g_strconcat (f->base_uri, "x%2f..%2f..%2fpwned.txt", NULL);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/source.txt", NULL,
+                                  "Destination", bad, NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/source.txt", NULL,
+                                  "Destination", bad, NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+  }
+
+  /* upper-case %2F variant */
+  {
+    g_autofree gchar *bad = g_strconcat (f->base_uri, "x%2F..%2Fpwned.txt", NULL);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/source.txt", NULL,
+                                  "Destination", bad, NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+  }
+
+  /* dot-dot segments in a raw Destination path: GLib resolves them
+   * during URI parsing before phodav sees the path, but phodav has
+   * a defense-in-depth check with path_has_dot_dot_segment(); the
+   * encoded-slash cases above are the real attack vector because
+   * %2F is not a segment separator for the URI parser */
+
+  /* an unparseable Destination URI */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/source.txt", NULL,
+                                "Destination", "not-a-valid-uri", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* no file was created outside the shared directory */
+  {
+    g_autofree gchar *escaped = g_build_filename (parent_dir, "pwned.txt", NULL);
+
+    g_assert_false (g_file_test (escaped, G_FILE_TEST_EXISTS));
+  }
+  {
+    g_autofree gchar *escaped = g_build_filename (parent_dir, "outside.txt", NULL);
+
+    g_assert_false (g_file_test (escaped, G_FILE_TEST_EXISTS));
+  }
+
+  /* the source file is still there */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/source.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+}
+
 static void
 test_delete (DavFixture *f, gconstpointer user_data)
 {
@@ -2004,6 +2065,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
+  g_test_add ("/dav/movecopy-path-traversal", DavFixture, NULL, dav_fixture_setup, test_movecopy_path_traversal, dav_fixture_teardown);
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);
 
   g_test_add ("/dav/propfind/allprop", DavFixture, NULL, dav_fixture_setup, test_propfind_allprop, dav_fixture_teardown);
