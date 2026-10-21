@@ -106,6 +106,7 @@ static-analysis:
 
 build_win:
   stage: build
+  image: fedora:45
   before_script:
     - rm -f /etc/rpm/macros.image-language-conf
     - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
