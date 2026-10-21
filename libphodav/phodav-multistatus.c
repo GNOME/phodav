@@ -90,7 +90,7 @@ set_response_multistatus (SoupServerMessage *msg,
   xmlNodePtr root;
   GHashTableIter iter;
   Response *resp;
-  gchar *path, *text;
+  gchar *path;
   xmlNsPtr ns;
 
   root = xmlNewNode (NULL, BAD_CAST "multistatus");
@@ -101,14 +101,25 @@ set_response_multistatus (SoupServerMessage *msg,
   while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
     {
       xmlNodePtr response;
-      GUri *new_uri;
 
       response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-      new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), path, SOUP_HTTP_URI_FLAGS, NULL);
-      text = g_uri_to_string (new_uri);
-      xmlNewChild (response, ns, BAD_CAST "href", BAD_CAST text);
-      g_free (text);
-      g_uri_unref (new_uri);
+
+      /* the key is the decoded resource path: escape it byte-wise
+       * for the href, where a client would otherwise parse the
+       * characters of the names as URI delimiters ("?" starts a
+       * query, "#" a fragment...). libxml2 escapes the XML special
+       * characters of the text on its own, when the document is
+       * serialized. */
+      g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
+                                                      G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
+      g_autoptr(GUri) new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), escaped,
+                                                      SOUP_HTTP_URI_FLAGS, NULL);
+      g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
+      xmlNodePtr href = xmlNewChild (response, ns, BAD_CAST "href", NULL);
+
+      /* xmlNewText() takes the raw name: the XML special characters
+       * are escaped when the document is serialized */
+      xmlAddChild (href, xmlNewText (BAD_CAST text));
 
       if (resp->props)
         add_propstat (response, ns, msg, path, resp->props);

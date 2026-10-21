@@ -39,8 +39,9 @@ phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancel
           if (!info)
             break;
           g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
-          g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
-          g_autofree gchar *del_path = g_build_path ("/", path, escape, NULL);
+          /* the multistatus keys are the decoded resource paths, the
+           * hrefs are escaped when the response is built */
+          g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
           phodav_delete_file (del_path, del, mstatus, cancellable);
         }
 

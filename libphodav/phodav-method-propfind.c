@@ -669,9 +669,10 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
         break;
 
       g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
-      g_autofree gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
       stat = propfind_populate (handler, child, path, pf, info, ns);
-      g_hash_table_insert (path_resp, g_build_path ("/", path, escape, NULL),
+      /* the multistatus keys are the decoded resource paths, the
+       * hrefs are escaped when the response is built */
+      g_hash_table_insert (path_resp, g_build_path ("/", path, g_file_info_get_name (info), NULL),
                            response_new (stat, 0));
     }
 

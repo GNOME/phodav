@@ -365,7 +365,8 @@ parse_multistatus (GBytes *body)
   return doc;
 }
 
-/* find the <D:response> element of a multistatus for @path, NULL if missing */
+/* find the <D:response> element of a multistatus for the resource at
+ * @path, NULL if missing */
 static xmlNodePtr
 find_response (DavFixture *f, xmlDocPtr doc, const gchar *path)
 {
@@ -379,16 +380,21 @@ find_response (DavFixture *f, xmlDocPtr doc, const gchar *path)
     {
       xmlNodePtr href = find_child (node, "href");
       g_autofree gchar *content = NULL;
+      g_autofree gchar *decoded = NULL;
 
       if (g_strcmp0 ((gchar *) node->name, "response") != 0 || !href)
         continue;
 
       content = node_content (href);
 
-      /* the href is the full request URI, with the base stripped it
-       * compares equal to the request path */
-      if (g_str_has_prefix (content, f->base_uri) &&
-          g_strcmp0 (content + base_len, path) == 0)
+      if (!g_str_has_prefix (content, f->base_uri))
+        continue;
+
+      /* the href is the full request URI with its path escaped: with
+       * the base stripped and the path unescaped, it compares equal
+       * to the request path */
+      decoded = g_uri_unescape_string (content + base_len, "/");
+      if (decoded && g_strcmp0 (decoded, path) == 0)
         return node;
     }
 
@@ -1053,6 +1059,78 @@ test_propfind_dedup (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
   doc = parse_multistatus (body);
   g_assert_cmpuint (count_prop (f, doc, "/hello.txt", "displayname"), ==, 2);
+}
+
+/* Regression test for the multistatus href escaping: the names are
+ * URI-escaped in the hrefs, and a client can fetch the resources
+ * they report. The markup escaping which used to be applied to the
+ * names reported "amp&amp;and.txt" for a file named "amp&and.txt",
+ * which cannot be fetched, and left a "?" or a "#" raw in the
+ * href, where a client parses them as the query or the fragment
+ * separator. */
+static void
+test_propfind_escaping (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  gsize base_len = strlen (f->base_uri);
+  static const struct
+  {
+    const gchar *name;    /* the resource path */
+    const gchar *escaped; /* its form in an href */
+  } cases[] = {
+    { "/hello.txt", "/hello.txt" },
+    { "/dir", "/dir" },
+    { "/sp ace.txt", "/sp%20ace.txt" },
+    { "/amp&and.txt", "/amp&and.txt" },
+    { "/100%.txt", "/100%25.txt" },
+    { "/fold er", "/fold%20er" },
+#ifndef G_OS_WIN32
+    /* the names with ? or angle brackets cannot exist on Windows */
+    { "/que?ry#hash.txt", "/que%3Fry%23hash.txt" },
+    { "/tag<le>.txt", "/tag%3Cle%3E.txt" },
+#endif
+  };
+
+  write_file (f->dir, "sp ace.txt", "space\n");
+  write_file (f->dir, "amp&and.txt", "amp\n");
+  write_file (f->dir, "100%.txt", "percent\n");
+  make_directory (f->dir, "fold er");
+#ifndef G_OS_WIN32
+  write_file (f->dir, "que?ry#hash.txt", "query\n");
+  write_file (f->dir, "tag<le>.txt", "tag\n");
+#endif
+
+  msg = dav_request (f, "PROPFIND", "/", PROPFIND_ALLPROP, &body, "Depth", "1", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  /* the base URI ends with "/", keep the "/" starting the path */
+  if (base_len > 0 && f->base_uri[base_len - 1] == '/')
+    base_len--;
+
+  for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      xmlNodePtr response = find_response (f, doc, cases[i].name);
+      g_autofree gchar *content = NULL;
+      g_autoptr(SoupMessage) get = NULL;
+      g_autoptr(GBytes) get_body = NULL;
+      g_autoptr(GError) error = NULL;
+
+      /* the resource is reported, with its name URI-escaped in
+       * the href */
+      g_assert_nonnull (response);
+      content = node_content (find_child (response, "href"));
+      g_assert_cmpstr (content + base_len, ==, cases[i].escaped);
+
+      /* the reported href fetches the resource it names */
+      get = soup_message_new (SOUP_METHOD_GET, content);
+      g_assert_nonnull (get);
+      get_body = soup_session_send_and_read (f->session, get, NULL, &error);
+      g_assert_no_error (error);
+      g_assert_cmpuint (soup_message_get_status (get), ==, SOUP_STATUS_OK);
+    }
 }
 
 static void
@@ -2258,6 +2336,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/propfind/prop", DavFixture, NULL, dav_fixture_setup, test_propfind_prop, dav_fixture_teardown);
   g_test_add ("/dav/propfind/propname", DavFixture, NULL, dav_fixture_setup, test_propfind_propname, dav_fixture_teardown);
   g_test_add ("/dav/propfind/dedup", DavFixture, NULL, dav_fixture_setup, test_propfind_dedup, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/escaping", DavFixture, NULL, dav_fixture_setup, test_propfind_escaping, dav_fixture_teardown);
   g_test_add ("/dav/propfind/empty-body", DavFixture, NULL, dav_fixture_setup, test_propfind_empty_body, dav_fixture_teardown);
   g_test_add ("/dav/propfind/errors", DavFixture, NULL, dav_fixture_setup, test_propfind_errors, dav_fixture_teardown);
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
