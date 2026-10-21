@@ -123,8 +123,56 @@ test_names (VdirFixture *f, gconstpointer user_data)
   g_assert_null (g_file_get_uri (G_FILE (dir)));
   g_assert_null (g_file_get_parse_name (G_FILE (dir)));
   g_assert_null (g_file_dup (G_FILE (dir)));
-  g_assert_null (g_file_get_relative_path (G_FILE (f->root), G_FILE (dir)));
-  g_assert_false (g_file_has_prefix (G_FILE (dir), G_FILE (f->root)));
+
+  /* the prefix and relative path operations work on the virtual paths */
+  {
+    g_autofree gchar *relative = g_file_get_relative_path (G_FILE (f->root), G_FILE (dir));
+
+    g_assert_cmpstr (relative, ==, "virtual");
+  }
+  g_assert_null (g_file_get_relative_path (G_FILE (dir), G_FILE (f->root)));
+  g_assert_true (g_file_has_prefix (G_FILE (dir), G_FILE (f->root)));
+  g_assert_false (g_file_has_prefix (G_FILE (f->root), G_FILE (dir)));
+
+  /* a directory does not prefix itself, and a partial segment does
+   * not match either */
+  g_assert_null (g_file_get_relative_path (G_FILE (dir), G_FILE (dir)));
+  g_assert_false (g_file_has_prefix (G_FILE (dir), G_FILE (dir)));
+  {
+    g_autoptr(PhodavVirtualDir) other = NULL;
+
+    other = phodav_virtual_dir_new_dir (f->root, "/virtualx", &error);
+    g_assert_no_error (error);
+    g_assert_null (g_file_get_relative_path (G_FILE (dir), G_FILE (other)));
+    g_assert_false (g_file_has_prefix (G_FILE (other), G_FILE (dir)));
+    g_assert_false (g_file_has_prefix (G_FILE (dir), G_FILE (other)));
+  }
+
+  /* the relative path crosses several levels */
+  {
+    g_autoptr(PhodavVirtualDir) sub = NULL;
+    g_autofree gchar *from_root = NULL;
+    g_autofree gchar *from_dir = NULL;
+
+    sub = phodav_virtual_dir_new_dir (f->root, "/virtual/nested", &error);
+    g_assert_no_error (error);
+    g_assert_true (g_file_has_prefix (G_FILE (sub), G_FILE (dir)));
+    g_assert_false (g_file_has_prefix (G_FILE (dir), G_FILE (sub)));
+
+    from_root = g_file_get_relative_path (G_FILE (f->root), G_FILE (sub));
+    g_assert_cmpstr (from_root, ==, "virtual/nested");
+    from_dir = g_file_get_relative_path (G_FILE (dir), G_FILE (sub));
+    g_assert_cmpstr (from_dir, ==, "nested");
+  }
+
+  /* two placeholders for a missing path are equal, and can be hashed */
+  {
+    g_autoptr(GFile) missing = g_file_get_child (G_FILE (dir), "missing");
+    g_autoptr(GFile) missing2 = g_file_resolve_relative_path (G_FILE (dir), "missing");
+
+    g_assert_true (g_file_equal (missing, missing2));
+    g_assert_cmpint (g_file_hash (missing), ==, g_file_hash (missing2));
+  }
 
   child = g_file_get_child_for_display_name (G_FILE (dir), "new", &error);
   g_assert_null (child);

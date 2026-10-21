@@ -370,14 +370,21 @@ static guint
 phodav_virtual_dir_hash (GFile *file)
 {
   PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
-  return g_str_hash (self->path);
+
+  /* keep in sync with phodav_virtual_dir_equal(): the dummy
+   * directories have no path */
+  return self->path ? g_str_hash (self->path) : 0;
 }
 
 static gboolean
 phodav_virtual_dir_equal (GFile *file1,
                           GFile *file2)
 {
-  return file1 == file2;
+  /* the paths are unique among the live directories, so two
+   * directories with the same path are the same one; the dummy
+   * directories have no path, they are all equal */
+  return g_strcmp0 (PHODAV_VIRTUAL_DIR (file1)->path,
+                    PHODAV_VIRTUAL_DIR (file2)->path) == 0;
 }
 
 static gboolean
@@ -411,18 +418,60 @@ phodav_virtual_dir_get_parse_name (GFile *file)
   return NULL;
 }
 
+/* the remainder of @path once @prefix is taken away, or NULL when
+ * @path does not start with @prefix; the trailing separator of a
+ * root prefix ("/") is not matched a second time, so that it
+ * prefixes every path */
+static const gchar *
+match_path_prefix (const gchar *path,
+                   const gchar *prefix)
+{
+  gsize prefix_len = strlen (prefix);
+
+  if (!g_str_has_prefix (path, prefix))
+    return NULL;
+
+  if (prefix_len > 0 && prefix[prefix_len - 1] == '/')
+    prefix_len--;
+
+  return path + prefix_len;
+}
+
 static gboolean
 phodav_virtual_dir_prefix_matches (GFile *prefix,
                                    GFile *file)
 {
-  return FALSE; /* TODO */
+  PhodavVirtualDir *p = PHODAV_VIRTUAL_DIR (prefix);
+  PhodavVirtualDir *f = PHODAV_VIRTUAL_DIR (file);
+  const gchar *remainder;
+
+  /* the dummy directories have no path */
+  if (!p->path || !f->path)
+    return FALSE;
+
+  remainder = match_path_prefix (f->path, p->path);
+
+  return remainder != NULL && *remainder == '/';
 }
 
 static gchar *
 phodav_virtual_dir_get_relative_path (GFile *parent,
                                       GFile *descendant)
 {
-  return NULL; /* TODO */
+  PhodavVirtualDir *p = PHODAV_VIRTUAL_DIR (parent);
+  PhodavVirtualDir *d = PHODAV_VIRTUAL_DIR (descendant);
+  const gchar *remainder;
+
+  /* the dummy directories have no path */
+  if (!p->path || !d->path)
+    return NULL;
+
+  remainder = match_path_prefix (d->path, p->path);
+
+  if (remainder == NULL || *remainder != '/')
+    return NULL;
+
+  return g_strdup (remainder + 1);
 }
 
 static GFile *
