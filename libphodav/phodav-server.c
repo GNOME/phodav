@@ -756,9 +756,15 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
   /* got_headers() may have already rejected the request (oversized
-   * body, or a PUT which was handled there); do not overwrite its
-   * status with the result of the method handler */
+   * body, or a PUT refused before its upload was started); do not
+   * overwrite its status with the result of the method handler */
   if (soup_server_message_get_status (msg) != 0)
+    return;
+
+  /* a PUT which passed got_headers() streams its body to the file
+   * while it is received, and is answered from its got-body callback
+   * once the file is committed: it has no method handler here */
+  if (method == SOUP_METHOD_PUT)
     return;
 
   if (!(path && *path == '/'))

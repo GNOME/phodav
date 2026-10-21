@@ -278,24 +278,6 @@ authenticate_cb (SoupMessage *msg, SoupAuth *auth, gboolean retrying, gpointer u
   return FALSE;
 }
 
-/* the server replies to a PUT before its body is streamed to the file,
- * which is renamed into place only once the transfer is complete */
-static gboolean
-wait_for_file (const gchar *path)
-{
-  guint i;
-
-  for (i = 0; i < 500; i++)
-    {
-      if (g_file_test (path, G_FILE_TEST_EXISTS))
-        return TRUE;
-
-      g_usleep (10 * 1000);
-    }
-
-  return FALSE;
-}
-
 static void
 set_request_body (SoupMessage *msg)
 {
@@ -348,13 +330,13 @@ test_chezdav (gconstpointer data)
 
   if (test->method == SOUP_METHOD_PUT)
     {
-      /* the file must have been created if and only if the PUT succeeded */
+      /* the file must have been created if and only if the PUT
+       * succeeded: it is committed before the response is written */
       g_autofree gchar *local = g_build_filename (share_dir, "put.txt", NULL);
       if (test->status_code == SOUP_STATUS_CREATED)
         {
           g_autofree gchar *contents = NULL;
 
-          g_assert_true (wait_for_file (local));
           g_assert_true (g_file_get_contents (local, &contents, NULL, NULL));
           g_assert_cmpstr (contents, ==, test_put_data);
         }

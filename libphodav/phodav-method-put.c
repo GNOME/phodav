@@ -16,16 +16,19 @@ typedef struct _PutContext
   GFile *file;
   GFileOutputStream *output;
   guint64 written; /* bytes streamed to the file so far */
+  gint status;     /* the success status, answered once the file is committed */
+  gboolean done;   /* the outcome is decided: the file is committed or discarded */
 } PutContext;
 
 static PutContext *
-put_context_new (PathHandler *handler, GFile *file, GFileOutputStream *output)
+put_context_new (PathHandler *handler, GFile *file, GFileOutputStream *output, gint status)
 {
   PutContext *ctx = g_new0 (PutContext, 1);
 
   ctx->handler = handler;
   ctx->file = g_object_ref (file);
   ctx->output = g_object_ref (output);
+  ctx->status = status;
 
   return ctx;
 }
@@ -41,17 +44,23 @@ put_context_free (PutContext *ctx)
 /* the upload cannot be completed: the file content is incomplete.
  * The output stream of a g_file_replace() commits its content when
  * closed or finalized, so the partial file must be removed after
- * closing the stream. */
+ * closing the stream, rather than left behind: truncated, or empty
+ * when the body never made it. */
 static void
-put_context_abort (PutContext *ctx)
+put_context_discard (PutContext *ctx)
 {
   g_autoptr(GError) close_error = NULL;
   g_autoptr(GError) delete_error = NULL;
 
+  if (ctx->done)
+    return;
+  ctx->done = TRUE;
+
   if (!g_output_stream_close (G_OUTPUT_STREAM (ctx->output), NULL, &close_error))
     g_debug ("PUT: failed to close the partial file: %s", close_error->message);
 
-  if (!g_file_delete (ctx->file, NULL, &delete_error))
+  if (!g_file_delete (ctx->file, NULL, &delete_error) &&
+      !g_error_matches (delete_error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
     g_debug ("PUT: failed to remove the partial file: %s", delete_error->message);
 }
 
@@ -62,6 +71,11 @@ method_put_finished (SoupServerMessage *msg,
   PutContext *ctx = user_data;
 
   g_debug ("PUT finished %p", ctx->output);
+
+  /* the body was never fully received (the client hung up, or the
+   * connection was interrupted): discard the partial file, rather
+   * than committing it by finalizing the stream */
+  put_context_discard (ctx);
 
   put_context_free (ctx);
 }
@@ -93,7 +107,7 @@ method_put_got_chunk (SoupServerMessage *msg,
        * partial file, the client has to retry the upload from scratch */
       soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
       g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
-      put_context_abort (ctx);
+      put_context_discard (ctx);
 
       return;
     }
@@ -108,8 +122,46 @@ method_put_got_chunk (SoupServerMessage *msg,
 
       soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
       g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
-      put_context_abort (ctx);
+      put_context_discard (ctx);
     }
+}
+
+/* the whole body has been received and written to the file: close
+ * the output stream, which commits it to its final place, and answer
+ * the success status. This happens before the response is written,
+ * so that a client which sees a success knows its upload is durable;
+ * a failure to commit the file is answered with 500, and the partial
+ * file is discarded. */
+static void
+method_put_got_body (SoupServerMessage *msg,
+                     gpointer user_data)
+{
+  PutContext *ctx = user_data;
+  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
+  g_autoptr(GError) error = NULL;
+
+  /* the chunks are all written by now */
+  g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
+
+  /* the upload was already discarded by a got-chunk handler: keep
+   * the error status it set */
+  if (ctx->done)
+    return;
+
+  if (!g_output_stream_close (G_OUTPUT_STREAM (ctx->output), cancellable, &error))
+    {
+      g_warning ("PUT: failed to commit the uploaded file: %s", error->message);
+
+      put_context_discard (ctx);
+      soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+    }
+  else
+    {
+      ctx->done = TRUE;
+      soup_server_message_set_status (msg, ctx->status, NULL);
+    }
+
+  g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
 }
 
 static gint
@@ -224,14 +276,24 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
 
   g_debug ("PUT output %p", output);
   {
-    PutContext *ctx = put_context_new (handler, file, output);
+    PutContext *ctx = put_context_new (handler, file, output, status);
 
+    /* the request is answered from method_put_got_body(), once its
+     * whole body has been received and the file committed: answering
+     * here would tell a "Expect: 100-continue" client its upload
+     * succeeded before it even sent the body */
     g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), ctx);
+    g_signal_connect (msg, "got-body", G_CALLBACK (method_put_got_body), ctx);
     g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), ctx);
     g_object_unref (output); /* the context owns it now */
   }
 
+  g_clear_object (&file);
+  return;
+
 end:
+  /* the request is refused: answer right away, the client may still
+   * be sending its body, which is drained without being accumulated */
   soup_server_message_set_status (msg, status, NULL);
   g_clear_object (&file);
   g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));

@@ -57,7 +57,8 @@ elif get_option('fuzzing').enabled()
     'corpus/request/0022-fragment',
     'corpus/request/0023-query',
     'corpus/request/0024-unknown-method',
-    'corpus/request/0025-garbage')
+    'corpus/request/0025-garbage',
+    'corpus/request/0026-put-expect-continue')
 
   body_seeds = files(
     'corpus/body/0001-propfind-allprop',

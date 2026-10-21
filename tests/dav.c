@@ -69,27 +69,14 @@ write_file (const gchar *dir, const gchar *name, const gchar *contents)
   g_assert_true (g_file_set_contents (path, contents, -1, NULL));
 }
 
-/* the response to a PUT is sent as soon as the request is received,
- * while the body is still being streamed to the file: wait for the
- * expected contents to appear before reading the file back */
+/* the file of a PUT is committed before its response is written:
+ * once the client has seen the response, the content is settled */
 static void
-wait_file_contents (const gchar *path, const gchar *expected)
+assert_file_contents (const gchar *path, const gchar *expected)
 {
   g_autofree gchar *contents = NULL;
-  gint i;
 
-  for (i = 0; i < 500; i++)
-    {
-      g_clear_pointer (&contents, g_free);
-
-      if (g_file_get_contents (path, &contents, NULL, NULL) &&
-          g_strcmp0 (contents, expected) == 0)
-        return;
-
-      g_usleep (1000);
-    }
-
-  /* the expected contents never appeared */
+  g_assert_true (g_file_get_contents (path, &contents, NULL, NULL));
   g_assert_cmpstr (contents, ==, expected);
 }
 
@@ -1473,7 +1460,7 @@ test_if_etag (DavFixture *f, gconstpointer user_data)
     g_autoptr(GFile) file = NULL;
     g_autoptr(GFileInfo) info = NULL;
 
-    wait_file_contents (path, "data");
+    assert_file_contents (path, "data");
     file = g_file_new_for_path (path);
     info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
 
@@ -1826,7 +1813,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "matched",
                                 "If-Match", if_match, NULL),
                     ==, SOUP_STATUS_OK);
-  wait_file_contents (path, "matched");
+  assert_file_contents (path, "matched");
 
   /* the write happened, the etag changed with it */
   {
@@ -1858,7 +1845,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "star",
                                 "If-Match", "*", NULL),
                     ==, SOUP_STATUS_OK);
-  wait_file_contents (path, "star");
+  assert_file_contents (path, "star");
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing.txt", "data",
                                 "If-Match", "*", NULL),
                     ==, SOUP_STATUS_PRECONDITION_FAILED);
@@ -1891,7 +1878,7 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "written",
                                 "If-None-Match", "\"not-the-etag\"", NULL),
                     ==, SOUP_STATUS_OK);
-  wait_file_contents (path, "written");
+  assert_file_contents (path, "written");
 }
 
 static void
@@ -2189,6 +2176,113 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
 #endif
 }
 
+/* A client may ask with "Expect: 100-continue" (RFC 9110 section
+ * 10.1.1) whether the server accepts its upload before sending the
+ * body. The server must answer the final status only once the body
+ * has been received and the file committed: answering a success
+ * right away would tell such a client its upload succeeded before it
+ * sent the body at all, and the server would commit an empty file. */
+static void
+test_put_expect_continue (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "expect.txt", NULL);
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autoptr(GError) error = NULL;
+  GOutputStream *out;
+  GInputStream *in;
+  gchar buf[1024];
+  gssize n;
+
+  conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri), g_uri_get_port (uri), NULL, &error);
+  g_assert_no_error (error);
+
+  /* fail the reads which would hang, rather than wait forever */
+  g_socket_set_timeout (g_socket_connection_get_socket (conn), 2);
+
+  out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+  in = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+
+  {
+    const gchar *request =
+      "PUT /expect.txt HTTP/1.1\r\n"
+      "Host: localhost\r\n"
+      "Expect: 100-continue\r\n"
+      "Content-Length: 6\r\n"
+      "\r\n";
+
+    g_assert_true (g_output_stream_write_all (out, request, strlen (request), NULL, NULL, &error));
+    g_assert_no_error (error);
+  }
+
+  /* the server accepts the upload and waits for its body, it must
+   * not answer the final status before receiving it */
+  n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (n, >, 0);
+  buf[n > 0 ? n : 0] = '\0';
+  g_assert_true (g_str_has_prefix (buf, "HTTP/1.1 100"));
+
+  /* the client, allowed to continue, sends its body */
+  g_assert_true (g_output_stream_write_all (out, "expect", 6, NULL, NULL, &error));
+  g_assert_no_error (error);
+
+  /* the file is committed before the final response is written */
+  n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (n, >, 0);
+  buf[n > 0 ? n : 0] = '\0';
+  g_assert_true (g_str_has_prefix (buf, "HTTP/1.1 201"));
+
+  assert_file_contents (path, "expect");
+}
+
+/* an upload which is interrupted (the client hangs up before its
+ * whole body was sent) is discarded: the partial content must not
+ * be committed by the finalization of the stream */
+static void
+test_put_interrupted (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "interrupted.txt", NULL);
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autoptr(GError) error = NULL;
+  GOutputStream *out;
+
+  conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri), g_uri_get_port (uri), NULL, &error);
+  g_assert_no_error (error);
+
+  out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+
+  {
+    /* the body promises more than it delivers */
+    const gchar *request =
+      "PUT /interrupted.txt HTTP/1.1\r\n"
+      "Host: localhost\r\n"
+      "Content-Length: 100\r\n"
+      "\r\n"
+      "partial";
+
+    g_assert_true (g_output_stream_write_all (out, request, strlen (request), NULL, NULL, &error));
+    g_assert_no_error (error);
+  }
+
+  /* hang up mid-body */
+  g_assert_true (g_io_stream_close (G_IO_STREAM (conn), NULL, &error));
+  g_assert_no_error (error);
+
+  /* the server notices the hang up while handling the next request:
+   * its main context dispatches the pending connection events
+   * together, and the interrupted upload is discarded before the
+   * response of the request made here is written */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+
+  g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+}
+
 /* the server may cap the size of the PUT uploads: the requests over
  * the cap are refused with 413, and leave no partial file behind */
 static void
@@ -2204,7 +2298,7 @@ test_put_max_upload (DavFixture *f, gconstpointer user_data)
   /* an upload of exactly the limit is accepted */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/limited.txt", at_limit, NULL),
                     ==, SOUP_STATUS_CREATED);
-  wait_file_contents (limited, at_limit);
+  assert_file_contents (limited, at_limit);
 
   /* an upload with a Content-Length over the limit is refused as
    * soon as the headers are received, before anything is written */
@@ -2219,7 +2313,7 @@ test_put_max_upload (DavFixture *f, gconstpointer user_data)
   /* an existing resource is left untouched by the refusal */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", over_limit, NULL),
                     ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
-  wait_file_contents (hello, HELLO_CONTENT);
+  assert_file_contents (hello, HELLO_CONTENT);
 
   /* a chunked body has no Content-Length to check in advance: the
    * upload is cut off while it is streamed, and the partial file is
@@ -2258,7 +2352,7 @@ test_put_max_upload (DavFixture *f, gconstpointer user_data)
     g_assert_no_error (error);
     g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
 
-    wait_file_contents (chunked, at_limit);
+    assert_file_contents (chunked, at_limit);
   }
 }
 
@@ -2346,6 +2440,8 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/put-write-error", DavFixture, NULL, dav_fixture_setup, test_put_write_error, dav_fixture_teardown);
+  g_test_add ("/dav/put-expect-continue", DavFixture, NULL, dav_fixture_setup, test_put_expect_continue, dav_fixture_teardown);
+  g_test_add ("/dav/put-interrupted", DavFixture, NULL, dav_fixture_setup, test_put_interrupted, dav_fixture_teardown);
   g_test_add ("/dav/put-max-upload", DavFixture, GSIZE_TO_POINTER (16), dav_fixture_setup_max_upload, test_put_max_upload, dav_fixture_teardown);
   g_test_add ("/dav/depth-headers", DavFixture, NULL, dav_fixture_setup, test_depth_headers, dav_fixture_teardown);
   g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);

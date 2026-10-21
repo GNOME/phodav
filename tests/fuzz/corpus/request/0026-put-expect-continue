@@ -1,0 +1,7 @@
+PUT /test HTTP/1.1
+Host: fuzz
+Expect: 100-continue
+Content-Length: 12
+Connection: close
+
+new contents
