@@ -477,7 +477,12 @@ test_options (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
   g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "DAV"), ==, "1,2");
   g_assert_nonnull (soup_message_headers_get_one (soup_message_get_response_headers (msg), "MS-Author-Via"));
-  g_assert_nonnull (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Allow"));
+
+  /* the Allow header is generated from the method table: it must
+   * list every method of the table, comma separated, and nothing
+   * else */
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Allow"),
+                   ==, "GET, HEAD, PUT, PROPFIND, PROPPATCH, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK");
 }
 
 static void

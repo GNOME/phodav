@@ -738,6 +738,70 @@ request_started (SoupServer *server,
   g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
 }
 
+typedef struct _DavMethod DavMethod;
+
+/* the DAV methods handled by the server, in the order of the Allow
+ * header of the OPTIONS answer.
+ *
+ * The mutating methods, which modify the shared files, are answered
+ * with FORBIDDEN when the server is read-only. UNLOCK is not one of
+ * them: it only releases a lock, and does not modify the files.
+ *
+ * PUT has no handler: its body is streamed to the file from
+ * got_headers(), and the request is answered from its got-body
+ * callback, once the file is committed (its read-only refusal also
+ * happens there). It is listed like the other methods, so that the
+ * Allow header covers it. */
+struct _DavMethod
+{
+  const gchar *name;
+  gboolean mutating;
+  gint (*handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
+};
+
+static const DavMethod dav_methods[] = {
+  { "GET", FALSE, phodav_method_get },
+  { "HEAD", FALSE, phodav_method_get },
+  { "PUT", TRUE, NULL },
+  { "PROPFIND", FALSE, phodav_method_propfind },
+  { "PROPPATCH", TRUE, phodav_method_proppatch },
+  { "MKCOL", TRUE, phodav_method_mkcol },
+  { "DELETE", TRUE, phodav_method_delete },
+  { "MOVE", TRUE, phodav_method_movecopy },
+  { "COPY", TRUE, phodav_method_movecopy },
+  { "LOCK", TRUE, phodav_method_lock },
+  { "UNLOCK", FALSE, phodav_method_unlock },
+};
+
+static const DavMethod *
+dav_method_lookup (const gchar *method)
+{
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    if (g_strcmp0 (method, dav_methods[i].name) == 0)
+      return &dav_methods[i];
+
+  return NULL;
+}
+
+/* the comma separated names of the methods, for the Allow header */
+static gchar *
+dav_methods_allow (void)
+{
+  g_autoptr(GString) allow = g_string_sized_new (128);
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    {
+      if (i > 0)
+        g_string_append (allow, ", ");
+      g_string_append (allow, dav_methods[i].name);
+    }
+
+  return g_string_free_and_steal (g_steal_pointer (&allow));
+}
+
 static void
 server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
 {
@@ -793,48 +857,37 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
   soup_message_headers_set_content_type (response_headers,
                                          "text/xml", params);
 
-  if (handler->self->readonly &&
-      (method == SOUP_METHOD_PROPPATCH ||
-       method == SOUP_METHOD_MKCOL ||
-       method == SOUP_METHOD_DELETE ||
-       method == SOUP_METHOD_MOVE ||
-       method == SOUP_METHOD_COPY ||
-       method == SOUP_METHOD_LOCK))
-    status = SOUP_STATUS_FORBIDDEN;
-  else if (method == SOUP_METHOD_OPTIONS)
+  if (method == SOUP_METHOD_OPTIONS)
     {
+      g_autofree gchar *allow = dav_methods_allow ();
+
       soup_message_headers_append (response_headers, "DAV", "1,2");
 
       /* according to http://code.google.com/p/sabredav/wiki/Windows */
       soup_message_headers_append (response_headers, "MS-Author-Via", "DAV");
 
-      soup_message_headers_append (response_headers, "Allow",
-                                   "GET, HEAD, PUT, PROPFIND, PROPPATCH, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK");
+      soup_message_headers_append (response_headers, "Allow", allow);
       status = SOUP_STATUS_OK;
     }
-  else if (method == SOUP_METHOD_GET ||
-           method == SOUP_METHOD_HEAD)
-    status = phodav_method_get (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_PROPFIND)
-    status = phodav_method_propfind (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_PROPPATCH)
-    status = phodav_method_proppatch (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_MKCOL)
-    status = phodav_method_mkcol (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_DELETE)
-    status = phodav_method_delete (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_MOVE ||
-           method == SOUP_METHOD_COPY)
-    status = phodav_method_movecopy (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_LOCK)
-    status = phodav_method_lock (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_UNLOCK)
-    status = phodav_method_unlock (handler, msg, path, &err);
   else
     {
-      /* rather than warning, answer that the method is not implemented */
-      g_debug ("unsupported method %s", method);
-      status = SOUP_STATUS_NOT_IMPLEMENTED;
+      const DavMethod *m = dav_method_lookup (method);
+
+      if (m == NULL)
+        {
+          /* rather than warning, answer that the method is not implemented */
+          g_debug ("unsupported method %s", method);
+        }
+      else if (handler->self->readonly && m->mutating)
+        status = SOUP_STATUS_FORBIDDEN;
+      else if (m->handler == NULL)
+        {
+          /* only PUT, which is answered from its body callback and
+           * returns before the dispatch */
+          g_warn_if_reached ();
+        }
+      else
+        status = m->handler (handler, msg, path, &err);
     }
 
   soup_server_message_set_status (msg, status, NULL);
