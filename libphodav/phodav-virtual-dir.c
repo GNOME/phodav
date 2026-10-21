@@ -118,6 +118,12 @@ static gchar *
 phodav_virtual_dir_get_basename (GFile *file)
 {
   PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+
+  /* the virtual paths are slash-separated, like the request paths:
+   * the basename of the root is "/", on Windows too */
+  if (g_strcmp0 (self->path, "/") == 0)
+    return g_strdup ("/");
+
   return g_path_get_basename (self->path);
 }
 
