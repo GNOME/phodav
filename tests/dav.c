@@ -1512,6 +1512,27 @@ test_lock_bad_request (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
                                 "<D:wrong xmlns:D=\"DAV:\"/>", NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* empty lockscope element (no child element) */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope/>"
+                                "<D:locktype><D:write/></D:locktype></D:lockinfo>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* empty locktype element (no child element) */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope>"
+                                "<D:locktype/></D:lockinfo>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* lockscope with only text content, no child element */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/hello.txt",
+                                "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope>text</D:lockscope>"
+                                "<D:locktype><D:write/></D:locktype></D:lockinfo>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
 }
 
 static void
