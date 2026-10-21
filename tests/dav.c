@@ -988,6 +988,73 @@ test_propfind_propname (DavFixture *f, gconstpointer user_data)
   g_assert_null (find_child (find_child (propstat, "prop"), "getcontentlength")->children);
 }
 
+/* count how many times @name appears as a <prop> child across all
+ * propstat elements of the response for @path */
+static guint
+count_prop (DavFixture *f, xmlDocPtr doc, const gchar *path, const gchar *name)
+{
+  xmlNodePtr response = find_response (f, doc, path);
+  guint count = 0;
+
+  g_assert_nonnull (response);
+
+  for (xmlNodePtr ps = response->children; ps; ps = ps->next)
+    {
+      xmlNodePtr prop;
+
+      if (g_strcmp0 ((gchar *) ps->name, "propstat") != 0)
+        continue;
+
+      prop = find_child (ps, "prop");
+      if (!prop)
+        continue;
+
+      for (xmlNodePtr n = prop->children; n; n = n->next)
+        if (n->type == XML_ELEMENT_NODE && g_strcmp0 ((gchar *) n->name, name) == 0)
+          count++;
+    }
+
+  return count;
+}
+
+/* Duplicate properties in a PROPFIND <prop> element should be
+ * answered only once (the hash table deduplicates them with
+ * prop_node_hash / prop_node_equal). */
+static void
+test_propfind_dedup (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+
+  /* the same property listed twice in the same <prop> element */
+  msg = dav_request (f, "PROPFIND", "/hello.txt",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<D:getcontentlength/>"
+                     "<D:getcontentlength/>"
+                     "</D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  /* the property must appear exactly once in the response */
+  g_assert_cmpuint (count_prop (f, doc, "/hello.txt", "getcontentlength"), ==, 1);
+
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  g_clear_pointer (&doc, xmlFreeDoc);
+
+  /* properties with the same local name but different namespaces are
+   * distinct and must both appear */
+  msg = dav_request (f, "PROPFIND", "/hello.txt",
+                     "<D:propfind xmlns:D=\"DAV:\" xmlns:X=\"urn:test\">"
+                     "<D:prop><D:displayname/><X:displayname/></D:prop>"
+                     "</D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (count_prop (f, doc, "/hello.txt", "displayname"), ==, 2);
+}
+
 static void
 test_propfind_empty_body (DavFixture *f, gconstpointer user_data)
 {
@@ -2181,6 +2248,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/propfind/allprop", DavFixture, NULL, dav_fixture_setup, test_propfind_allprop, dav_fixture_teardown);
   g_test_add ("/dav/propfind/prop", DavFixture, NULL, dav_fixture_setup, test_propfind_prop, dav_fixture_teardown);
   g_test_add ("/dav/propfind/propname", DavFixture, NULL, dav_fixture_setup, test_propfind_propname, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/dedup", DavFixture, NULL, dav_fixture_setup, test_propfind_dedup, dav_fixture_teardown);
   g_test_add ("/dav/propfind/empty-body", DavFixture, NULL, dav_fixture_setup, test_propfind_empty_body, dav_fixture_teardown);
   g_test_add ("/dav/propfind/errors", DavFixture, NULL, dav_fixture_setup, test_propfind_errors, dav_fixture_teardown);
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
