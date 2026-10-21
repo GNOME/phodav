@@ -723,6 +723,12 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
            soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
+  /* got_headers() may have already rejected the request (oversized
+   * body, or a PUT which was handled there); do not overwrite its
+   * status with the result of the method handler */
+  if (soup_server_message_get_status (msg) != 0)
+    return;
+
   if (!(path && *path == '/'))
     {
       g_debug ("path must begin with /");

@@ -2016,6 +2016,15 @@ test_request_body_too_large (DavFixture *f, gconstpointer user_data)
     g_assert_nonnull (response);
     g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_BAD_REQUEST);
   }
+
+  /* a DELETE with an oversized Content-Length must be rejected
+   * with 413, not silently executed with the body discarded */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/hello.txt", big, NULL),
+                    ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+
+  /* the file must still exist */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
 }
 
 /* a PUT which fails mid-upload must not leave a partial file behind */
