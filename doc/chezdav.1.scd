@@ -21,7 +21,7 @@ different folder with the *-P* option.
 	Path to export.
 
 *-p*, *--port*=_PORT_
-	Port to listen from. By default, a port is allocated randomly.
+	Port to listen from. The default is 8080.
 
 *--local*
 	Listen on loopback interface only.
