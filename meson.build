@@ -5,7 +5,7 @@ project(
     '@0@/.tarball-version'.format(meson.project_source_root()),
     check : true
   ).stdout().strip(),
-  license : 'LGPLv2.1',
+  license : 'LGPL-2.1-or-later',
   meson_version : '>= 1.0',
 )
 
