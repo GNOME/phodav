@@ -14,50 +14,36 @@
 static gboolean
 do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
-  GFileEnumerator *e = NULL;
-  gboolean success = FALSE;
-  GFile *src_child = NULL;
-  GFile *dest_child = NULL;
+  g_autoptr(GFileEnumerator) e = NULL;
 
   if (!g_file_make_directory_with_parents (dest, cancellable, err))
-    goto end;
+    return FALSE;
 
   e = g_file_enumerate_children (src, "standard::*", G_FILE_QUERY_INFO_NONE,
                                  cancellable, err);
   if (!e)
-    goto end;
+    return FALSE;
 
   while (1)
     {
-      GFileInfo *info = g_file_enumerator_next_file (e, cancellable, err);
+      g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, err);
       if (!info)
         break;
 
-      src_child = g_file_get_child (src, g_file_info_get_name (info));
-      dest_child = g_file_get_child (dest, g_file_info_get_name (info));
+      g_autoptr(GFile) src_child = g_file_get_child (src, g_file_info_get_name (info));
+      g_autoptr(GFile) dest_child = g_file_get_child (dest, g_file_info_get_name (info));
       gboolean isdir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
-      g_object_unref (info);
 
       if (isdir)
         {
           if (!do_copy_r (src_child, dest_child, flags, cancellable, err))
-            goto end;
+            return FALSE;
         }
       else if (!g_file_copy (src_child, dest_child, flags, cancellable, NULL, NULL, err))
-        goto end;
-
-      g_clear_object (&src_child);
-      g_clear_object (&dest_child);
+        return FALSE;
     }
 
-  success = TRUE;
-
-end:
-  g_clear_object (&e);
-  g_clear_object (&src_child);
-  g_clear_object (&dest_child);
-
-  return success;
+  return TRUE;
 }
 
 static gint
