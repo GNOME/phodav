@@ -412,6 +412,7 @@ test_cli (void)
     { { "--bogus", NULL }, "Option parsing failed" },
     { { "extra-arg", NULL }, "Unsupported extra arguments" },
     { { "--local", "--public", NULL }, "mutually exclusive" },
+    { { "--max-upload", "-1", NULL }, "must not be negative" },
     { { "--local", "--port", "8099", "--htdigest", "/nonexistent", NULL }, "Failed to open htdigest" },
     /* the port of the running test server is already in use */
     { { "--local", "--port", G_STRINGIFY (PORT), "--path", ".", NULL }, "Listen failed" },

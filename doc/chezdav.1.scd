@@ -44,6 +44,11 @@ different folder with the *-P* option.
 *-r*, *--readonly*
 	Read-only access.
 
+*--max-upload*=_SIZE_
+	Refuse PUT uploads larger than SIZE bytes, answering them with 413 Request
+	Entity Too Large and discarding the partial file. By default, the upload
+	size is not limited.
+
 *-v*, *--verbose*
 	Verbosely print running information.
 

@@ -26,6 +26,7 @@ typedef struct _PutContext
   PathHandler *handler; /* borrowed, owned by the server */
   GFile *file;
   GFileOutputStream *output;
+  guint64 written; /* bytes streamed to the file so far */
 } PutContext;
 
 static PutContext *
@@ -83,6 +84,7 @@ method_put_got_chunk (SoupServerMessage *msg,
 {
   PutContext *ctx = user_data;
   GCancellable *cancellable = handler_get_cancellable (ctx->handler);
+  guint64 max_upload = handler_get_max_upload (ctx->handler);
   g_autoptr(GError) err = NULL;
   gsize bytes_written;
   gconstpointer data;
@@ -92,18 +94,33 @@ method_put_got_chunk (SoupServerMessage *msg,
 
   data = g_bytes_get_data (chunk, &data_length);
 
-  if (g_output_stream_write_all (G_OUTPUT_STREAM (ctx->output),
-                                 data, data_length,
-                                 &bytes_written, cancellable, &err))
-    return;
+  if (!g_output_stream_write_all (G_OUTPUT_STREAM (ctx->output),
+                                  data, data_length,
+                                  &bytes_written, cancellable, &err))
+    {
+      g_warning ("PUT: write error: %s", err->message);
 
-  g_warning ("PUT: write error: %s", err->message);
+      /* answer right away, ignore the remaining chunks and discard the
+       * partial file, the client has to retry the upload from scratch */
+      soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+      g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
+      put_context_abort (ctx);
 
-  /* answer right away, ignore the remaining chunks and discard the
-   * partial file, the client has to retry the upload from scratch */
-  soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-  g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
-  put_context_abort (ctx);
+      return;
+    }
+
+  ctx->written += data_length;
+
+  /* a chunked body has no Content-Length to check in advance: stop
+   * at the limit and discard the partial file, like a write error */
+  if (max_upload > 0 && ctx->written > max_upload)
+    {
+      g_debug ("PUT: upload over the %" G_GUINT64_FORMAT " bytes limit", max_upload);
+
+      soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+      g_signal_handlers_disconnect_by_func (msg, method_put_got_chunk, ctx);
+      put_context_abort (ctx);
+    }
 }
 
 static gint
@@ -179,16 +196,31 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
   GFile *file = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
   GFileOutputStream *output = NULL;
-  gint status;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  guint64 max_upload = handler_get_max_upload (handler);
+  gint status;
 
   g_debug ("%s %s HTTP/1.%d %s %s", soup_server_message_get_method (msg), path, soup_server_message_get_http_version (msg),
            soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
+  /* the request body is streamed to the file, or drained without
+   * being accumulated when the request is refused below and the
+   * client is still sending it */
+  soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+
   if (handler_get_readonly (handler))
     {
       status = SOUP_STATUS_FORBIDDEN;
+      goto end;
+    }
+
+  /* an upload which is over the limit is refused before anything is
+   * written to disk, RFC 9110 section 15.5.15; a chunked body has
+   * no Content-Length and is cut off while it is streamed */
+  if (max_upload > 0 && (guint64) soup_message_headers_get_content_length (request_headers) > max_upload)
+    {
+      status = SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE;
       goto end;
     }
 
@@ -202,7 +234,6 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
     goto end;
 
   g_debug ("PUT output %p", output);
-  soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
   {
     PutContext *ctx = put_context_new (handler, file, output);
 

@@ -49,6 +49,7 @@ struct _PhodavServer
   PathHandler *root_handler; /* weak ref */
   GHashTable *paths;
   gboolean readonly;
+  guint64 max_upload;
   gboolean constructing;
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
@@ -63,9 +64,10 @@ typedef enum
   PROP_ROOT_FILE,
   PROP_SERVER,
   PROP_READONLY,
+  PROP_MAX_UPLOAD,
 } PhodavServerProps;
 
-static GParamSpec *properties[PROP_READONLY + 1];
+static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
 
 static void server_callback (SoupServer *server,
                              SoupServerMessage *msg,
@@ -153,6 +155,12 @@ gboolean
 handler_get_readonly (PathHandler *handler)
 {
   return handler->self->readonly;
+}
+
+guint64
+handler_get_max_upload (PathHandler *handler)
+{
+  return handler->self->max_upload;
 }
 
 static PathHandler *
@@ -342,6 +350,10 @@ phodav_server_get_property (GObject *gobject,
     case PROP_READONLY:
       g_value_set_boolean (value, self->readonly);
       break;
+
+    case PROP_MAX_UPLOAD:
+      g_value_set_uint64 (value, self->max_upload);
+      break;
     }
 }
 
@@ -383,6 +395,10 @@ phodav_server_set_property (GObject *gobject,
 
     case PROP_READONLY:
       self->readonly = g_value_get_boolean (value);
+      break;
+
+    case PROP_MAX_UPLOAD:
+      self->max_upload = g_value_get_uint64 (value);
       break;
 
     case PROP_SERVER:
@@ -467,6 +483,23 @@ phodav_server_class_init (PhodavServerClass *klass)
                           FALSE,
                           G_PARAM_READWRITE |
                             G_PARAM_STATIC_STRINGS);
+
+  /**
+   * PhodavServer:max-upload:
+   *
+   * The maximum size of a PUT request body, in bytes. An upload
+   * which would be larger is refused with 413 Request Entity Too
+   * Large, and the file it was writing is discarded rather than
+   * left truncated. The default, 0, does not limit the uploads.
+   *
+   * Since: 3.1
+   **/
+  properties[PROP_MAX_UPLOAD] =
+    g_param_spec_uint64 ("max-upload",
+                         NULL, NULL,
+                         0, G_MAXUINT64, 0,
+                         G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, G_N_ELEMENTS (properties), properties);
 }

@@ -153,10 +153,16 @@ server_thread (gpointer data)
   return NULL;
 }
 
-static void
-dav_fixture_setup (DavFixture *f, gconstpointer user_data)
+/* the server options a test may set on the fixture server */
+typedef struct _DavOptions
 {
-  gboolean readonly = user_data != NULL;
+  gboolean readonly;
+  guint64 max_upload;
+} DavOptions;
+
+static void
+dav_fixture_setup_full (DavFixture *f, const DavOptions *options)
+{
   g_autoptr(GError) error = NULL;
   g_autoslist(GUri) uris = NULL;
 
@@ -175,7 +181,8 @@ dav_fixture_setup (DavFixture *f, gconstpointer user_data)
 
   f->phodav = g_object_new (PHODAV_TYPE_SERVER,
                             "root", f->dir,
-                            "read-only", readonly,
+                            "read-only", options->readonly,
+                            "max-upload", options->max_upload,
                             NULL);
 
   {
@@ -196,6 +203,24 @@ dav_fixture_setup (DavFixture *f, gconstpointer user_data)
   f->thread = g_thread_new ("dav-server", server_thread, f);
 
   f->session = soup_session_new ();
+}
+
+static void
+dav_fixture_setup (DavFixture *f, gconstpointer user_data)
+{
+  DavOptions options = { .readonly = user_data != NULL };
+
+  dav_fixture_setup_full (f, &options);
+}
+
+/* a fixture server which refuses the PUT uploads over the limit
+ * passed as the test user data */
+static void
+dav_fixture_setup_max_upload (DavFixture *f, gconstpointer user_data)
+{
+  DavOptions options = { .max_upload = GPOINTER_TO_SIZE (user_data) };
+
+  dav_fixture_setup_full (f, &options);
 }
 
 static void
@@ -1321,6 +1346,7 @@ test_server_properties (DavFixture *f, gconstpointer user_data)
   g_autoptr(GFile) root_file = NULL;
   g_autoptr(SoupServer) server = NULL;
   gboolean readonly;
+  guint64 max_upload;
 
   /* every property can be read back */
   g_object_get (f->phodav,
@@ -1328,12 +1354,14 @@ test_server_properties (DavFixture *f, gconstpointer user_data)
                 "root-file", &root_file,
                 "server", &server,
                 "read-only", &readonly,
+                "max-upload", &max_upload,
                 NULL);
 
   g_assert_cmpstr (root, ==, f->dir);
   g_assert_nonnull (root_file);
   g_assert_true (SOUP_IS_SERVER (server));
   g_assert_false (readonly);
+  g_assert_cmpuint (max_upload, ==, 0);
 
   /* the soup server is the one the requests are served on */
   g_assert_true (server == phodav_server_get_soup_server (f->phodav));
@@ -1894,6 +1922,79 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
 #endif
 }
 
+/* the server may cap the size of the PUT uploads: the requests over
+ * the cap are refused with 413, and leave no partial file behind */
+static void
+test_put_max_upload (DavFixture *f, gconstpointer user_data)
+{
+  gsize limit = GPOINTER_TO_SIZE (user_data);
+  g_autofree gchar *limited = g_build_filename (f->dir, "limited.txt", NULL);
+  g_autofree gchar *chunked = g_build_filename (f->dir, "chunked.txt", NULL);
+  g_autofree gchar *hello = g_build_filename (f->dir, "hello.txt", NULL);
+  g_autofree gchar *at_limit = g_strnfill (limit, 'x');
+  g_autofree gchar *over_limit = g_strnfill (limit + 1, 'x');
+
+  /* an upload of exactly the limit is accepted */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/limited.txt", at_limit, NULL),
+                    ==, SOUP_STATUS_CREATED);
+  wait_file_contents (limited, at_limit);
+
+  /* an upload with a Content-Length over the limit is refused as
+   * soon as the headers are received, before anything is written */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/over.txt", over_limit, NULL),
+                    ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+  {
+    g_autofree gchar *over = g_build_filename (f->dir, "over.txt", NULL);
+
+    g_assert_false (g_file_test (over, G_FILE_TEST_EXISTS));
+  }
+
+  /* an existing resource is left untouched by the refusal */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", over_limit, NULL),
+                    ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+  wait_file_contents (hello, HELLO_CONTENT);
+
+  /* a chunked body has no Content-Length to check in advance: the
+   * upload is cut off while it is streamed, and the partial file is
+   * discarded */
+  {
+    g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/chunked.txt", NULL);
+    g_autoptr(SoupMessage) msg = soup_message_new (SOUP_METHOD_PUT, uri);
+    g_autoptr(GBytes) body = g_bytes_new_take (g_strnfill (limit * 4, 'x'), limit * 4);
+    g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_bytes (body);
+    g_autoptr(GBytes) response = NULL;
+    g_autoptr(GError) error = NULL;
+
+    soup_message_set_request_body (msg, NULL, stream, -1);
+
+    /* the server may answer 413, or reset the connection while it is
+     * still receiving the body */
+    response = soup_session_send_and_read (f->session, msg, NULL, &error);
+    if (error == NULL)
+      g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+
+    g_assert_false (g_file_test (chunked, G_FILE_TEST_EXISTS));
+  }
+
+  /* a chunked upload which stays at the limit is accepted */
+  {
+    g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/chunked.txt", NULL);
+    g_autoptr(SoupMessage) msg = soup_message_new (SOUP_METHOD_PUT, uri);
+    g_autoptr(GBytes) body = g_bytes_new (at_limit, limit);
+    g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_bytes (body);
+    g_autoptr(GBytes) response = NULL;
+    g_autoptr(GError) error = NULL;
+
+    soup_message_set_request_body (msg, NULL, stream, -1);
+
+    response = soup_session_send_and_read (f->session, msg, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+
+    wait_file_contents (chunked, at_limit);
+  }
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1909,6 +2010,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/put-write-error", DavFixture, NULL, dav_fixture_setup, test_put_write_error, dav_fixture_teardown);
+  g_test_add ("/dav/put-max-upload", DavFixture, GSIZE_TO_POINTER (16), dav_fixture_setup_max_upload, test_put_max_upload, dav_fixture_teardown);
   g_test_add ("/dav/depth-headers", DavFixture, NULL, dav_fixture_setup, test_depth_headers, dav_fixture_teardown);
   g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);

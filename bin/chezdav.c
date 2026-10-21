@@ -39,6 +39,7 @@ static gint readonly;
 static gint port = 8080;
 static gint local = 0;
 static gint public = 0;
+static gint64 max_upload = 0;
 
 #ifdef WITH_AVAHI
 static gint nomdns = 0;
@@ -142,6 +143,7 @@ main (gint argc, gchar *argv[])
     { "htdigest", 'd', 0, G_OPTION_ARG_FILENAME, &htdigest, N_ ("Path to htdigest file"), NULL },
     { "realm", 0, 0, G_OPTION_ARG_STRING, &realm, N_ ("DIGEST realm"), NULL },
     { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
+    { "max-upload", 0, 0, G_OPTION_ARG_INT64, &max_upload, N_ ("Refuse uploads over SIZE bytes (0 for no limit)"), N_ ("SIZE") },
 #ifdef WITH_AVAHI
     { "no-mdns", 0, 0, G_OPTION_ARG_NONE, &nomdns, N_ ("Skip mDNS service announcement"), NULL },
 #endif
@@ -176,6 +178,9 @@ main (gint argc, gchar *argv[])
   if (local && public)
     my_error (_ ("--local and --public are mutually exclusive\n"));
 
+  if (max_upload < 0)
+    my_error (_ ("--max-upload must not be negative\n"));
+
   if (!local && !public)
     public = 1; // default
 
@@ -192,7 +197,10 @@ main (gint argc, gchar *argv[])
 #endif
 
   dav = phodav_server_new (path);
-  g_object_set (dav, "read-only", readonly, NULL);
+  g_object_set (dav,
+                "read-only", readonly,
+                "max-upload", (guint64) max_upload,
+                NULL);
 
   if (htdigest)
     {
