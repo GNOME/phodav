@@ -34,18 +34,6 @@
 #include "avahi-common.h"
 #endif
 
-static PhodavServer *dav;
-static gint verbose;
-static gint readonly;
-static gint port = 8080;
-static gint local = 0;
-static gint public = 0;
-static gint64 max_upload = 0;
-
-#ifdef WITH_AVAHI
-static gint nomdns = 0;
-#endif
-
 G_GNUC_PRINTF (1, 2)
 static void G_GNUC_NORETURN
 my_error (const gchar *format, ...)
@@ -154,6 +142,21 @@ main (gint argc, gchar *argv[])
   g_autoptr(GMainLoop) mainloop = NULL;
 
   gint version = 0;
+
+  /* the command line options, parsed in place by GOption: they are
+   * plain locals of main(), which outlives the option context */
+  gboolean verbose = FALSE;
+  gboolean readonly = FALSE;
+  gboolean local = FALSE;
+  gboolean public = FALSE;
+#ifdef WITH_AVAHI
+  gboolean nomdns = FALSE;
+#endif
+  gint port = 8080;
+  gint64 max_upload = 0;
+
+  g_autoptr(PhodavServer) dav = NULL;
+
   GOptionEntry entries[] = {
     { "version", 0, 0, G_OPTION_ARG_NONE, &version, N_ ("Print program version"), NULL },
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, N_ ("Be verbose"), NULL },
@@ -189,6 +192,10 @@ main (gint argc, gchar *argv[])
   if (!g_option_context_parse (context, &argc, &argv, &error))
     my_error (_ ("Option parsing failed: %s\n"), error->message);
 
+  /* be verbose: show the debug messages of the server */
+  if (verbose)
+    g_setenv ("G_MESSAGES_DEBUG", "all", FALSE);
+
   if (argc != 1)
     my_error (_ ("Unsupported extra arguments: %s ...\n"), argv[1]);
 
@@ -208,7 +215,7 @@ main (gint argc, gchar *argv[])
     my_error (_ ("--tls-key requires --tls-cert\n"));
 
   if (!local && !public)
-    public = 1; // default
+    public = TRUE; /* the default */
 
   if (!path)
     path = g_strdup (g_get_home_dir ());
@@ -278,39 +285,33 @@ main (gint argc, gchar *argv[])
     }
 
 #ifdef WITH_AVAHI
-  gchar *name = get_realm ();
+  g_autofree gchar *name = get_realm ();
   if (!nomdns && !avahi_client_start (name, port, local, tls_cert != NULL, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
   SoupServer *server = phodav_server_get_soup_server (dav);
-
-  gint res;
   SoupServerListenOptions listen_options = 0;
+  gboolean listening;
 
   /* with a certificate, the share is served over HTTPS */
   if (tls_cert)
     listen_options |= SOUP_SERVER_LISTEN_HTTPS;
 
+  /* public is set by default when local is not given */
   if (local)
-    res = soup_server_listen_local (server, port, listen_options, &error);
-  else if (public)
-    res = soup_server_listen_all (server, port, listen_options, &error);
+    listening = soup_server_listen_local (server, port, listen_options, &error);
   else
-    my_error (_ ("Internal error, should not happen\n"));
+    listening = soup_server_listen_all (server, port, listen_options, &error);
 
-  if (!res)
-    {
-      my_error (_ ("Listen failed: %s\n"), error->message);
-    }
+  if (!listening)
+    my_error (_ ("Listen failed: %s\n"), error->message);
 
   g_main_loop_run (mainloop);
 
 #ifdef WITH_AVAHI
   avahi_client_stop ();
-  g_free (name);
 #endif
-  g_object_unref (dav);
 
   g_message ("Bye");
 
