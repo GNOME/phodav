@@ -435,10 +435,7 @@ xml_node_to_string (xmlNodePtr root, xmlChar **mem, gint *size)
 
   doc = xmlNewDoc (BAD_CAST "1.0");
   xmlDocSetRootElement (doc, root);
-  // xmlReconciliateNs
   xmlDocDumpMemoryEnc (doc, mem, size, "utf-8");
-  /* FIXME: validate document? */
-  /*FIXME, pretty print?*/
   xmlFreeDoc (doc);
 }
 
