@@ -38,6 +38,13 @@ G_BEGIN_DECLS
  * is very narrow. If other projects find it handy as well, it could be
  * extended quite easily.
  *
+ * A #PhodavVirtualDir is not backed by a native file: g_file_is_native()
+ * returns %FALSE on it. Its location is identified with a URI of the
+ * "virtual" scheme, built from the virtual path, for example
+ * "virtual:///dir/file". These URIs identify the virtual directories,
+ * but they cannot be resolved back to a #GFile: no #GVfs is registered
+ * for the scheme.
+ *
  * Supported methods on virtual directories:
  * - GET
  * - PROPFIND

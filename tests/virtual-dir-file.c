@@ -117,13 +117,37 @@ test_names (VdirFixture *f, gconstpointer user_data)
   parent = g_file_get_parent (G_FILE (dir));
   g_assert_true (g_file_equal (parent, G_FILE (f->root)));
 
-  /* the operations which a virtual directory does not support */
-  g_assert_false (g_file_has_uri_scheme (G_FILE (dir), "file"));
+  /* a virtual directory is not native, but it has a location of its
+   * own: a virtual: URI built from its path, like the resource: URIs
+   * of a GResource */
   g_assert_false (g_file_is_native (G_FILE (dir)));
-  g_assert_null (g_file_get_uri_scheme (G_FILE (dir)));
-  g_assert_null (g_file_get_uri (G_FILE (dir)));
-  g_assert_null (g_file_get_parse_name (G_FILE (dir)));
-  g_assert_null (g_file_dup (G_FILE (dir)));
+  g_assert_false (g_file_has_uri_scheme (G_FILE (dir), "file"));
+  g_assert_true (g_file_has_uri_scheme (G_FILE (dir), "virtual"));
+
+  {
+    g_autofree gchar *scheme = g_file_get_uri_scheme (G_FILE (dir));
+    g_autofree gchar *uri = g_file_get_uri (G_FILE (dir));
+    g_autofree gchar *parse_name = g_file_get_parse_name (G_FILE (dir));
+
+    g_assert_cmpstr (scheme, ==, "virtual");
+    g_assert_cmpstr (uri, ==, "virtual:///virtual");
+    g_assert_cmpstr (parse_name, ==, "virtual:///virtual");
+  }
+
+  /* the root keeps its own URI, even when a real root is set */
+  {
+    g_autofree gchar *uri = g_file_get_uri (G_FILE (f->root));
+
+    g_assert_cmpstr (uri, ==, "virtual:///");
+  }
+
+  /* the duplicate is the same directory */
+  {
+    g_autoptr(GFile) dup = g_file_dup (G_FILE (dir));
+
+    g_assert_true (g_file_equal (dup, G_FILE (dir)));
+    g_assert_true (g_file_has_prefix (dup, G_FILE (f->root)));
+  }
 
   /* the prefix and relative path operations work on the virtual paths */
   {
@@ -166,6 +190,19 @@ test_names (VdirFixture *f, gconstpointer user_data)
     g_assert_cmpstr (from_dir, ==, "nested");
   }
 
+  /* the characters which are not allowed in a URI path are escaped
+   * in the URI, like the resource: URIs of a GResource */
+  {
+    g_autoptr(PhodavVirtualDir) sub = NULL;
+    g_autofree gchar *uri = NULL;
+
+    sub = phodav_virtual_dir_new_dir (f->root, "/virtual/with space", &error);
+    g_assert_no_error (error);
+
+    uri = g_file_get_uri (G_FILE (sub));
+    g_assert_cmpstr (uri, ==, "virtual:///virtual/with%20space");
+  }
+
   /* two placeholders for a missing path are equal, and can be hashed */
   {
     g_autoptr(GFile) missing = g_file_get_child (G_FILE (dir), "missing");
@@ -173,6 +210,11 @@ test_names (VdirFixture *f, gconstpointer user_data)
 
     g_assert_true (g_file_equal (missing, missing2));
     g_assert_cmpint (g_file_hash (missing), ==, g_file_hash (missing2));
+
+    /* a placeholder has no name and no location, like an invalid file */
+    g_assert_null (g_file_get_basename (missing));
+    g_assert_null (g_file_get_uri (missing));
+    g_assert_null (g_file_get_parse_name (missing));
   }
 
   child = g_file_get_child_for_display_name (G_FILE (dir), "new", &error);
@@ -248,6 +290,18 @@ test_query_info (VdirFixture *f, gconstpointer user_data)
     g_assert_true (g_file_set_attribute (G_FILE (f->root), G_FILE_ATTRIBUTE_TIME_MODIFIED,
                                          G_FILE_ATTRIBUTE_TYPE_UINT64, &mtime,
                                          G_FILE_QUERY_INFO_NONE, NULL, &error));
+    g_assert_no_error (error);
+  }
+
+  /* ... and so is a whole GFileInfo of them */
+  {
+    g_autoptr(GFileInfo) attributes = g_file_info_new ();
+    guint64 mtime = 0;
+
+    g_file_info_set_attribute (attributes, G_FILE_ATTRIBUTE_TIME_MODIFIED,
+                               G_FILE_ATTRIBUTE_TYPE_UINT64, &mtime);
+    g_assert_true (g_file_set_attributes_from_info (G_FILE (f->root), attributes,
+                                                    G_FILE_QUERY_INFO_NONE, NULL, &error));
     g_assert_no_error (error);
   }
 

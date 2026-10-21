@@ -120,6 +120,10 @@ phodav_virtual_dir_get_basename (GFile *file)
 {
   PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
 
+  /* the placeholder directories have no name, like an invalid file */
+  if (!self->path)
+    return NULL;
+
   /* the virtual paths are slash-separated, like the request paths:
    * the basename of the root is "/", on Windows too */
   if (g_strcmp0 (self->path, "/") == 0)
@@ -361,10 +365,17 @@ phodav_virtual_dir_resolve_relative_path (GFile *file,
   return virtual_dir_dummy_new ();
 }
 
+/* the URI scheme of the virtual locations */
+#define VIRTUAL_DIR_URI_SCHEME "virtual"
+
 static GFile *
 phodav_virtual_dir_dup (GFile *file)
 {
-  return NULL;
+  /* the identity of a virtual directory is its object: its path is
+   * unique among the live directories (see equal() below), and the
+   * children of a parent are kept in the parent, which cannot be
+   * rebuilt from the path alone */
+  return g_object_ref (file);
 }
 
 static guint
@@ -398,25 +409,38 @@ static gboolean
 phodav_virtual_dir_has_uri_scheme (GFile *file,
                                    const gchar *uri_scheme)
 {
-  return FALSE;
+  return g_ascii_strcasecmp (uri_scheme, VIRTUAL_DIR_URI_SCHEME) == 0;
 }
 
 static gchar *
 phodav_virtual_dir_get_uri_scheme (GFile *file)
 {
-  return NULL;
+  return g_strdup (VIRTUAL_DIR_URI_SCHEME);
 }
 
 static gchar *
 phodav_virtual_dir_get_uri (GFile *file)
 {
-  return NULL;
+  PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+
+  /* the placeholder directories have no location, like an
+   * invalid file */
+  if (!self->path)
+    return NULL;
+
+  {
+    g_autofree gchar *escaped = g_uri_escape_string (self->path,
+                                                     G_URI_RESERVED_CHARS_ALLOWED_IN_PATH,
+                                                     FALSE);
+
+    return g_strconcat (VIRTUAL_DIR_URI_SCHEME "://", escaped, NULL);
+  }
 }
 
 static gchar *
 phodav_virtual_dir_get_parse_name (GFile *file)
 {
-  return NULL;
+  return phodav_virtual_dir_get_uri (file);
 }
 
 /* the remainder of @path once @prefix is taken away, or NULL when
@@ -518,6 +542,12 @@ phodav_virtual_dir_set_attributes_from_info (GFile *file,
                                              GCancellable *cancellable,
                                              GError **error)
 {
+  PhodavVirtualDir *self = PHODAV_VIRTUAL_DIR (file);
+
+  if (self->real_root)
+    return g_file_set_attributes_from_info (self->real_root, info,
+                                            flags, cancellable, error);
+
   g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Operation not supported");
   return FALSE;
 }
@@ -535,8 +565,10 @@ phodav_virtual_dir_file_interface_init (GFileIface *iface)
   iface->enumerate_children = phodav_virtual_dir_enumerate_children;
   iface->resolve_relative_path = phodav_virtual_dir_resolve_relative_path;
 
-  /* GLib does not check if these functions are implemented or not, it simply calls them,
-   * so we need to provide these stubs to avoid crashes */
+  /* the location of a virtual directory is a virtual: URI built
+   * from its path, like the resource: URIs of a GResource: it
+   * identifies the directory, but there is no GVfs registered to
+   * resolve it back to a GFile */
   iface->dup = phodav_virtual_dir_dup;
   iface->hash = phodav_virtual_dir_hash;
   iface->equal = phodav_virtual_dir_equal;
