@@ -65,12 +65,9 @@ struct _DavDoc
 {
   xmlDocPtr doc;
   xmlNodePtr root;
-
-  GUri *target;
-  gchar *path;
 };
 
-gboolean davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const gchar *name);
+gboolean davdoc_parse (DavDoc *dd, SoupMessageBody *body, const gchar *name);
 void davdoc_free (DavDoc *dd);
 
 /* GLib auto cleanup support for the libxml2 tree types and DavDoc,

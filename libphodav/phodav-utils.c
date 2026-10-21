@@ -102,11 +102,10 @@ parse_xml (const gchar *data,
 }
 
 gboolean
-davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const gchar *name)
+davdoc_parse (DavDoc *dd, SoupMessageBody *body, const gchar *name)
 {
   xmlDocPtr doc;
   xmlNodePtr root;
-  GUri *uri;
 
   /* got_headers() refuses the oversized bodies while they are
    * received, the chunked ones included; refusing one here too is a
@@ -121,12 +120,8 @@ davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const g
   if (!doc)
     return FALSE;
 
-  uri = soup_server_message_get_uri (msg);
-
   dd->doc = doc;
   dd->root = root;
-  dd->target = uri;
-  dd->path = g_uri_unescape_string (g_uri_get_path (uri), "/");
 
   return TRUE;
 }
@@ -136,7 +131,6 @@ davdoc_free (DavDoc *dd)
 {
   if (dd->doc)
     xmlFreeDoc (dd->doc);
-  g_free (dd->path);
 }
 
 gboolean

@@ -771,7 +771,7 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
     }
   else
     {
-      if (!davdoc_parse (&doc, msg, request_body, "propfind"))
+      if (!davdoc_parse (&doc, request_body, "propfind"))
         {
           status = SOUP_STATUS_BAD_REQUEST;
           goto end;

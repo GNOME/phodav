@@ -136,7 +136,7 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
   g_autolist(LockSubmitted) submitted = NULL;
   gint status;
 
-  if (!davdoc_parse (&doc, msg, soup_server_message_get_request_body (msg), "propertyupdate"))
+  if (!davdoc_parse (&doc, soup_server_message_get_request_body (msg), "propertyupdate"))
     {
       status = SOUP_STATUS_BAD_REQUEST;
       goto end;

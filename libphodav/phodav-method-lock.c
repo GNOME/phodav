@@ -176,7 +176,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
       goto body;
     }
 
-  if (!davdoc_parse (&doc, msg, request_body, "lockinfo"))
+  if (!davdoc_parse (&doc, request_body, "lockinfo"))
     goto end;
 
   node = doc.root;
