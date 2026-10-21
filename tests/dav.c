@@ -493,10 +493,17 @@ test_get (DavFixture *f, gconstpointer user_data)
   {
     const gchar *type;
     GHashTable *params = NULL;
+    SoupMessageHeaders *response_headers = soup_message_get_response_headers (msg);
 
-    type = soup_message_headers_get_content_type (soup_message_get_response_headers (msg), &params);
+    type = soup_message_headers_get_content_type (response_headers, &params);
     g_assert_cmpstr (type, ==, "text/html");
     g_clear_pointer (&params, g_hash_table_unref);
+
+    /* the listing is not cacheable, must not be mistaken for another
+     * content type, and nothing is ever loaded from it */
+    g_assert_cmpstr (soup_message_headers_get_one (response_headers, "Cache-Control"), ==, "no-cache");
+    g_assert_cmpstr (soup_message_headers_get_one (response_headers, "X-Content-Type-Options"), ==, "nosniff");
+    g_assert_cmpstr (soup_message_headers_get_one (response_headers, "Content-Security-Policy"), ==, "default-src 'none'");
   }
 
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL, NULL), ==, SOUP_STATUS_OK);

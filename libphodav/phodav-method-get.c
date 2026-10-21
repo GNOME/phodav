@@ -32,9 +32,9 @@ compare_strings (gconstpointer a, gconstpointer b)
 static GString *
 get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 {
-  GString *listing;
+  g_autoptr(GFileEnumerator) e = NULL;
   g_autoptr(GPtrArray) entries = NULL;
-  GFileEnumerator *e;
+  GString *listing;
   gchar *escaped;
   gchar *name;
   gint i;
@@ -45,23 +45,26 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
     return NULL;
 
   entries = g_ptr_array_new_with_free_func (g_free);
-  while (1)
+
+  while (TRUE)
     {
-      GFileInfo *info = g_file_enumerator_next_file (e, cancellable, err);
+      GFileInfo *info;
       gboolean dir;
 
-      if (!info)
-        break;
+      /* the info is borrowed from the enumerator, and only valid
+       * until the next iteration */
+      if (!g_file_enumerator_iterate (e, &info, NULL, cancellable, err))
+        return NULL; /* the error is set: serve no partial listing */
+
+      if (info == NULL)
+        break; /* the end of the directory */
 
       dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
       /* remember the directory entries by their trailing slash */
       g_ptr_array_add (entries, g_strdup_printf ("%s%s",
                                                  g_file_info_get_name (info), dir ? "/" : ""));
-      g_object_unref (info);
     }
-  g_file_enumerator_close (e, cancellable, NULL);
-  g_clear_object (&e);
 
   g_ptr_array_sort (entries, compare_strings);
 
@@ -133,6 +136,13 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
       /* the listing is generated on the fly, it must not be cached */
       soup_message_headers_append (soup_server_message_get_response_headers (msg),
                                    "Cache-Control", "no-cache");
+      /* the page lists names taken from the shared folder, which
+       * must not be mistaken for another content type, and nothing
+       * is ever loaded from it */
+      soup_message_headers_append (soup_server_message_get_response_headers (msg),
+                                   "X-Content-Type-Options", "nosniff");
+      soup_message_headers_append (soup_server_message_get_response_headers (msg),
+                                   "Content-Security-Policy", "default-src 'none'");
       /* a listing has no ranges: take the header over, so that
        * libsoup does not apply its own partial-content handling to
        * the generated page */
