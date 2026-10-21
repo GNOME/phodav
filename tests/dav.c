@@ -2045,6 +2045,75 @@ test_put_max_upload (DavFixture *f, gconstpointer user_data)
   }
 }
 
+/* Send a raw HTTP request line directly over TCP, bypassing the
+ * SoupSession client which normalizes the request path.  Returns
+ * the HTTP status code from the response. */
+static guint
+raw_http_status (DavFixture *f, const gchar *request_line)
+{
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autoptr(GError) error = NULL;
+  GOutputStream *out;
+  GInputStream *in;
+  g_autofree gchar *request = NULL;
+  gchar buf[1024];
+  gssize n;
+  guint status = 0;
+
+  {
+    g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+
+    conn = g_socket_client_connect_to_host (client,
+                                            g_uri_get_host (uri),
+                                            g_uri_get_port (uri),
+                                            NULL, &error);
+  }
+  g_assert_no_error (error);
+
+  request = g_strdup_printf ("%s HTTP/1.0\r\nHost: localhost\r\n\r\n",
+                             request_line);
+  out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+  g_assert_true (g_output_stream_write_all (out, request, strlen (request),
+                                            NULL, NULL, &error));
+  g_assert_no_error (error);
+
+  in = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+  n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpint (n, >, 0);
+  buf[n] = '\0';
+
+  /* parse "HTTP/1.x NNN" */
+  if (g_str_has_prefix (buf, "HTTP/") && n > 12)
+    status = (guint) g_ascii_strtoull (buf + 9, NULL, 10);
+
+  return status;
+}
+
+/* The server validates that request paths start with '/' and are not
+ * absolute (e.g. //host/share on Windows).  These guards cannot be
+ * triggered through a SoupSession client because libsoup normalizes
+ * the request path before it reaches the server handler.  This test
+ * sends raw HTTP requests to bypass the client normalization and
+ * exercise the server-side guards directly. */
+static void
+test_request_path_validation (DavFixture *f, gconstpointer user_data)
+{
+  /* a request path which is absolute after the leading slash:
+   * g_path_is_absolute(path+1) would be TRUE */
+  g_assert_cmpuint (raw_http_status (f, "GET //etc/passwd"),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* PUT also validates its path in got_headers() */
+  g_assert_cmpuint (raw_http_status (f, "PUT //etc/passwd"),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* the normal server still works after the rejected requests */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -2092,6 +2161,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/locked-parent", DavFixture, NULL, dav_fixture_setup, test_locked_parent, dav_fixture_teardown);
 
   g_test_add ("/dav/readonly", DavFixture, GINT_TO_POINTER (1), dav_fixture_setup, test_readonly, dav_fixture_teardown);
+  g_test_add ("/dav/request-path-validation", DavFixture, NULL, dav_fixture_setup, test_request_path_validation, dav_fixture_teardown);
 
   return g_test_run ();
 }
