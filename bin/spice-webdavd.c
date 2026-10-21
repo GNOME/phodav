@@ -78,6 +78,8 @@ static GInputStream *mux_istream;
 static GOutputStream *mux_ostream;
 static OutputQueue *mux_queue;
 static GHashTable *clients;
+/* the ids of the mux clients, see add_client() */
+static gint64 mux_client_ids;
 static GSocketService *socket_service;
 #ifdef G_OS_UNIX
 static gint port_fd;
@@ -112,11 +114,19 @@ static Client *
 add_client (GSocketConnection *client_connection)
 {
   Client *client;
+
   client = g_new0 (Client, 1);
   client->ref_count = 1;
   client->client_connection = g_object_ref (client_connection);
-  // TODO: check if usage of this idiom is portable, or if we need to check collisions
-  client->mux.id = GPOINTER_TO_INT (client_connection);
+
+  /* the id only has to be unique among the live clients: the other
+   * end of the mux channel learns it from the data forwarded to it
+   * and echoes it back. A monotonically increasing counter cannot
+   * collide, unlike the connection pointer it replaces, which may
+   * be reused by a later connection (and does not even fit in an
+   * int on Win64). */
+  client->mux.id = ++mux_client_ids;
+
   g_hash_table_insert (clients, &client->mux.id, client);
   g_warn_if_fail (g_hash_table_lookup (clients, &client->mux.id));
 

@@ -27,8 +27,8 @@
  *   client -> daemon:  [gint64 connection id][guint16 size][data]
  *   daemon -> client:  [gint64 connection id][guint16 size][data]
  *
- * The connection id is chosen by the daemon (the address of its
- * GSocketConnection); the test learns it from the first frame that
+ * The connection id is chosen by the daemon (a monotonically
+ * increasing counter); the test learns it from the first frame that
  * the daemon pushes. */
 
 #define _XOPEN_SOURCE 600
