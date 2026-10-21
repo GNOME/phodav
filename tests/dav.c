@@ -1503,6 +1503,12 @@ test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
   g_autoptr(SoupMessage) msg = NULL;
   g_autofree gchar *text = NULL;
 
+#ifdef G_OS_WIN32
+  /* the names with ? or angle brackets cannot exist on Windows */
+  g_test_skip ("the file names are not valid on Windows");
+  return;
+#endif
+
   /* names which need escaping in the href and in the label */
   write_file (f->dir, "sp ace.txt", "space\n");
   write_file (f->dir, "que?ry#hash.txt", "query\n");

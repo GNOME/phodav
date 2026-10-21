@@ -161,10 +161,13 @@ test_query_info (VdirFixture *f, gconstpointer user_data)
   g_assert_cmpstr (g_file_info_get_name (info), ==, "virtual");
   g_clear_pointer (&info, g_object_unref);
 
-  /* filesystem attributes of the root come from the real root */
+  /* filesystem attributes of the root come from the real root;
+   * the filesystem type is not reported on Windows */
   info = g_file_query_filesystem_info (G_FILE (f->root), "filesystem::*", NULL, &error);
   g_assert_no_error (error);
+#ifndef G_OS_WIN32
   g_assert_true (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_FILESYSTEM_TYPE));
+#endif
   g_clear_pointer (&info, g_object_unref);
 
   /* a virtual directory has no filesystem of its own */
