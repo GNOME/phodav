@@ -16,6 +16,7 @@
  */
 #include "config.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <gio/gio.h>
@@ -554,7 +555,7 @@ unmap_drive (ServiceData *service_data)
   guint32 errn;
 
   g_mutex_lock (&service_data->mutex);
-  g_snprintf (local_name, MAX_DRIVE_LETTER_SIZE, "%c:", service_data->drive_letter);
+  snprintf (local_name, MAX_DRIVE_LETTER_SIZE, "%c:", service_data->drive_letter);
   errn = WNetCancelConnection2 (local_name, CONNECT_UPDATE_PROFILE, TRUE);
 
   if (errn == NO_ERROR)

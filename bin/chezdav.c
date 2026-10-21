@@ -17,11 +17,12 @@
 #include "config.h"
 
 #include <locale.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <glib.h>
 #include <glib/gi18n.h>
-#include <glib/gprintf.h>
 
 #include "libphodav/phodav.h"
 
@@ -51,11 +52,11 @@ my_error (const gchar *format, ...)
 {
   va_list args;
 
-  g_fprintf (stderr, PACKAGE_NAME ": ");
+  fprintf (stderr, "%s: ", PACKAGE_NAME);
   va_start (args, format);
-  g_vfprintf (stderr, format, args);
+  vfprintf (stderr, format, args);
   va_end (args);
-  g_fprintf (stderr, "\n");
+  fputc ('\n', stderr);
 
   exit (1);
 }
@@ -193,7 +194,7 @@ main (gint argc, gchar *argv[])
 
   if (version)
     {
-      g_printf (PACKAGE_STRING "\n");
+      printf (PACKAGE_STRING "\n");
       return 0;
     }
 
