@@ -351,8 +351,8 @@ end:
 static xmlNodePtr
 prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *_info, xmlNsPtr ns)
 {
-  GFile *file;
-  GFileInfo *info = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
   GCancellable *cancellable = handler_get_cancellable (handler);
@@ -366,7 +366,6 @@ prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFi
   file = g_file_get_child (handler_get_file (handler), path + 1);
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
-  g_object_unref (file);
 
   if (error)
     {
@@ -381,9 +380,6 @@ prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFi
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
-  if (info)
-    g_object_unref (info);
-
   PROP_SET_STATUS (node, status);
   return node;
 }
