@@ -121,6 +121,22 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupServerMessage *msg, const
   return g_strdup (g_hash_table_lookup (users, username));
 }
 
+/* Some TLS backends (GnuTLS) accept a certificate file without a
+ * private key at load time, while the server could then never
+ * complete a handshake; report the problem up front instead. */
+static void
+check_certificate_has_key (const gchar *filename)
+{
+  g_autofree gchar *contents = NULL;
+
+  if (!g_file_get_contents (filename, &contents, NULL, NULL))
+    return; /* the loading reports the reason */
+
+  /* matches every private key PEM header, encrypted or not */
+  if (strstr (contents, "PRIVATE KEY-----") == NULL)
+    my_error (_ ("--tls-cert contains no private key, pass it with --tls-key\n"));
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -130,6 +146,10 @@ main (gint argc, gchar *argv[])
   g_autofree gchar *path = NULL;
   g_autofree gchar *realm = NULL;
   g_autofree gchar *htdigest = NULL;
+  /* the TLS options: tls_cert is NULL when the server is plain HTTP;
+   * tls_key is only set when the private key is in a separate file */
+  g_autofree gchar *tls_cert = NULL;
+  g_autofree gchar *tls_key = NULL;
   g_autoptr(GMainLoop) mainloop = NULL;
 
   gint version = 0;
@@ -144,6 +164,8 @@ main (gint argc, gchar *argv[])
     { "realm", 0, 0, G_OPTION_ARG_STRING, &realm, N_ ("DIGEST realm"), NULL },
     { "readonly", 'r', 0, G_OPTION_ARG_NONE, &readonly, N_ ("Read-only access"), NULL },
     { "max-upload", 0, 0, G_OPTION_ARG_INT64, &max_upload, N_ ("Refuse uploads over SIZE bytes (0 for no limit)"), N_ ("SIZE") },
+    { "tls-cert", 0, 0, G_OPTION_ARG_FILENAME, &tls_cert, N_ ("Serve HTTPS, with the TLS certificate in CERT (which must include the private key, unless --tls-key is given)"), N_ ("CERT") },
+    { "tls-key", 0, 0, G_OPTION_ARG_FILENAME, &tls_key, N_ ("Path to the TLS private key, when it is not in the certificate file"), N_ ("KEY") },
 #ifdef WITH_AVAHI
     { "no-mdns", 0, 0, G_OPTION_ARG_NONE, &nomdns, N_ ("Skip mDNS service announcement"), NULL },
 #endif
@@ -181,6 +203,9 @@ main (gint argc, gchar *argv[])
   if (max_upload < 0)
     my_error (_ ("--max-upload must not be negative\n"));
 
+  if (tls_key && !tls_cert)
+    my_error (_ ("--tls-key requires --tls-cert\n"));
+
   if (!local && !public)
     public = 1; // default
 
@@ -196,7 +221,37 @@ main (gint argc, gchar *argv[])
   g_unix_signal_add (SIGINT, sighup_received, mainloop);
 #endif
 
-  dav = phodav_server_new (path);
+  if (tls_cert)
+    {
+      g_autoptr(GTlsCertificate) cert = NULL;
+      g_autoptr(SoupServer) soup = NULL;
+
+      /* the certificate may contain the private key, or it may be
+       * given separately */
+      if (tls_key)
+        cert = g_tls_certificate_new_from_files (tls_cert, tls_key, &error);
+      else
+        {
+          check_certificate_has_key (tls_cert);
+          cert = g_tls_certificate_new_from_file (tls_cert, &error);
+        }
+
+      if (!cert)
+        my_error (_ ("Failed to load the certificate: %s\n"), error->message);
+
+      /* a SoupServer with the certificate is injected, so that the
+       * shared folder is served over HTTPS */
+      soup = soup_server_new ("server-header", "PhodavServer",
+                              "tls-certificate", cert,
+                              NULL);
+      dav = g_object_new (PHODAV_TYPE_SERVER,
+                          "server", soup,
+                          "root", path,
+                          NULL);
+    }
+  else
+    dav = phodav_server_new (path);
+
   g_object_set (dav,
                 "read-only", readonly,
                 "max-upload", (guint64) max_upload,
@@ -223,17 +278,23 @@ main (gint argc, gchar *argv[])
 
 #ifdef WITH_AVAHI
   gchar *name = get_realm ();
-  if (!nomdns && !avahi_client_start (name, port, local, &error))
+  if (!nomdns && !avahi_client_start (name, port, local, tls_cert != NULL, &error))
     my_error (_ ("mDNS failed: %s\n"), error->message);
 #endif
 
   SoupServer *server = phodav_server_get_soup_server (dav);
 
   gint res;
+  SoupServerListenOptions listen_options = 0;
+
+  /* with a certificate, the share is served over HTTPS */
+  if (tls_cert)
+    listen_options |= SOUP_SERVER_LISTEN_HTTPS;
+
   if (local)
-    res = soup_server_listen_local (server, port, 0, &error);
+    res = soup_server_listen_local (server, port, listen_options, &error);
   else if (public)
-    res = soup_server_listen_all (server, port, 0, &error);
+    res = soup_server_listen_all (server, port, listen_options, &error);
   else
     my_error (_ ("Internal error, should not happen\n"));
 

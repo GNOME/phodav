@@ -41,6 +41,16 @@ if conf.has('WITH_AVAHI')
   # chezdav exits when there is no avahi daemon to announce to
   chezdav_env += 'CHEZDAV_TEST_NO_MDNS=1'
 endif
+# the HTTPS tests use the self-signed certificate of tests/tls
+chezdav_env += [
+  'CHEZDAV_TEST_CERT=' + meson.current_source_dir() / 'tls' / 'cert.pem',
+  'CHEZDAV_TEST_KEY=' + meson.current_source_dir() / 'tls' / 'key.pem',
+]
+# the mingw glib-networking under Wine rejects the GnuTLS priority it
+# builds its sessions with by default ("NORMAL:%COMPAT"), which fails
+# (and even hangs) every handshake; a plain priority works everywhere,
+# and is ignored by the other TLS backends
+chezdav_env += 'G_TLS_GNUTLS_PRIORITY=NORMAL'
 
 test('chezdav',
      executable('test-chezdav',

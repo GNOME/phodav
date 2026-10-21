@@ -20,7 +20,11 @@
  * credentials are accepted over HTTP.
  *
  * The htdigest file contains two users of the server realm and one
- * user of another realm, to exercise the file parsing too. */
+ * user of another realm, to exercise the file parsing too.
+ *
+ * The TLS support is tested the same way, with the self-signed
+ * certificate of tests/tls: the share is served over HTTPS, with
+ * the digest authentication on top. */
 
 #include <stdlib.h>
 #include <string.h>
@@ -35,15 +39,23 @@
 
 /* keep in sync with the virtual-dir tests, which listen on 8080 */
 #define PORT 8081
+/* the TLS test servers listen on their own ports */
+#define TLS_PORT (PORT + 2)
+#define TLS_COMBINED_PORT (PORT + 3)
 #define SERVER_URI "http://localhost:" G_STRINGIFY (PORT) "/"
 #define REALM "test"
 
 static gchar *share_dir;
 static gchar *work_dir;
+static gchar *htdigest_file;
 static GSubprocess *server;
 static gboolean server_exited;
 #ifdef G_OS_UNIX
 static pid_t server_pid;
+/* the TLS test servers, killed on fatal signals like the main one,
+ * so that they do not keep holding their ports */
+static pid_t tls_server_pids[4];
+static guint n_tls_servers;
 #endif
 
 static const gchar test_put_data[] = "test_put: test data";
@@ -123,6 +135,10 @@ fatal_signal_cb (gint sig)
 {
   if (server_pid > 0)
     kill (server_pid, SIGKILL);
+
+  /* the TLS test servers hold their own ports */
+  for (guint i = 0; i < n_tls_servers; i++)
+    kill (tls_server_pids[i], SIGKILL);
 
   signal (sig, SIG_DFL);
   raise (sig);
@@ -414,6 +430,8 @@ test_cli (void)
     { { "--local", "--public", NULL }, "mutually exclusive" },
     { { "--max-upload", "-1", NULL }, "must not be negative" },
     { { "--local", "--port", "8099", "--htdigest", "/nonexistent", NULL }, "Failed to open htdigest" },
+    { { "--tls-key", "key.pem", NULL }, "requires --tls-cert" },
+    { { "--tls-cert", "/nonexistent", NULL }, "Failed to load the certificate" },
     /* the port of the running test server is already in use */
     { { "--local", "--port", G_STRINGIFY (PORT), "--path", ".", NULL }, "Listen failed" },
   };
@@ -515,10 +533,347 @@ test_defaults (void)
   delete_dir (home);
 }
 
+/* stop a chezdav process, printing the output it produced for
+ * debugging purposes */
+static void
+stop_chezdav_process (GSubprocess *proc)
+{
+  g_autofree gchar *output = NULL;
+  g_autoptr(GError) error = NULL;
+
+#ifdef G_OS_UNIX
+  g_subprocess_send_signal (proc, SIGINT);
+#else
+  g_subprocess_force_exit (proc);
+#endif
+  g_subprocess_communicate_utf8 (proc, NULL, NULL, &output, NULL, &error);
+
+  if (error)
+    g_printerr ("Failed to wait for chezdav: %s\n", error->message);
+  else if (output && *output)
+    g_printerr ("chezdav output:\n%s", output);
+}
+
+/* run a chezdav server sharing the test directory over HTTPS with
+ * digest authentication, using @cert (and the private key @key when
+ * it is not included in the certificate file), and wait for it to
+ * listen; returns NULL after printing an error */
+static gboolean tls_server_exited;
+static GSubprocess *tls_wait_server; /* borrowed */
+
+static void
+tls_server_wait_cb (GObject *source_object, GAsyncResult *res, gpointer user_data)
+{
+  /* the previous server may exit while this one is started: only
+   * report the exit of the server being waited for */
+  if (user_data == tls_wait_server)
+    tls_server_exited = TRUE;
+}
+
+static GSubprocess *
+launch_tls_server (guint port, const gchar *cert, const gchar *key)
+{
+  const gchar *chezdav = g_getenv ("CHEZDAV");
+  g_autoptr(GPtrArray) args = NULL;
+  g_autoptr(GSocketClient) client = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *port_str = NULL;
+  GSubprocess *proc;
+  guint i;
+
+  if (!chezdav)
+    chezdav = "bin/chezdav";
+
+  port_str = g_strdup_printf ("%u", port);
+  args = g_ptr_array_new ();
+  g_ptr_array_add (args, (gchar *) chezdav);
+  g_ptr_array_add (args, (gchar *) "--local");
+  g_ptr_array_add (args, (gchar *) "--port");
+  g_ptr_array_add (args, port_str);
+  g_ptr_array_add (args, (gchar *) "--path");
+  g_ptr_array_add (args, share_dir);
+  g_ptr_array_add (args, (gchar *) "--htdigest");
+  g_ptr_array_add (args, htdigest_file);
+  g_ptr_array_add (args, (gchar *) "--realm");
+  g_ptr_array_add (args, (gchar *) REALM);
+  g_ptr_array_add (args, (gchar *) "--tls-cert");
+  g_ptr_array_add (args, (gchar *) cert);
+  if (key)
+    {
+      g_ptr_array_add (args, (gchar *) "--tls-key");
+      g_ptr_array_add (args, (gchar *) key);
+    }
+  if (g_getenv ("CHEZDAV_TEST_NO_MDNS"))
+    g_ptr_array_add (args, (gchar *) "--no-mdns");
+  g_ptr_array_add (args, NULL);
+
+  proc = g_subprocess_newv ((const gchar *const *) args->pdata,
+                            G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE,
+                            &error);
+  if (error)
+    {
+      g_printerr ("Failed to launch chezdav: %s\n", error->message);
+      return NULL;
+    }
+
+#ifdef G_OS_UNIX
+  {
+    const gchar *identifier = g_subprocess_get_identifier (proc);
+
+    if (identifier && n_tls_servers < G_N_ELEMENTS (tls_server_pids))
+      tls_server_pids[n_tls_servers++] = (pid_t) g_ascii_strtoll (identifier, NULL, 10);
+  }
+#endif
+
+  tls_wait_server = proc;
+  tls_server_exited = FALSE;
+  g_subprocess_wait_async (proc, NULL, tls_server_wait_cb, proc);
+
+  /* wait for the listener: a plain TCP connection succeeds without
+   * a TLS handshake */
+  client = g_socket_client_new ();
+  for (i = 0; i < 100; i++)
+    {
+      g_autoptr(GSocketConnection) connection =
+                  g_socket_client_connect_to_host (client, "127.0.0.1", port, NULL, NULL);
+
+      if (connection)
+        {
+          /* make sure the listener is our server, and not some leftover
+           * process that our server failed to replace (port in use) */
+          g_usleep (200 * 1000);
+          while (g_main_context_pending (NULL))
+            g_main_context_iteration (NULL, FALSE);
+
+          if (!tls_server_exited)
+            return proc;
+
+          g_printerr ("chezdav exited early with status %d, is something else listening on port %u?\n",
+                      g_subprocess_get_exit_status (proc), port);
+          break;
+        }
+
+      /* let the wait callback run, to notice an early exit */
+      while (g_main_context_pending (NULL))
+        g_main_context_iteration (NULL, FALSE);
+
+      if (tls_server_exited)
+        {
+          g_printerr ("chezdav exited early with status %d\n",
+                      g_subprocess_get_exit_status (proc));
+          break;
+        }
+
+      g_usleep (100 * 1000);
+    }
+
+  g_printerr ("chezdav did not start listening over TLS\n");
+  stop_chezdav_process (proc);
+  g_object_unref (proc);
+  return NULL;
+}
+
+/* send a GET request for the test file over HTTPS, with or without
+ * credentials, using a session which validates the server against
+ * @database; returns the response status, and its body in @body when
+ * not NULL */
+static guint
+https_get_test_file (SoupSession *session, guint port, gboolean with_credentials, gchar **body, GError **error)
+{
+  const AuthCase auth = { "user1", "password1", NULL, NULL, 0 };
+  g_autoptr(GBytes) bytes = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autofree gchar *uri = NULL;
+
+  uri = g_strdup_printf ("https://localhost:%u/test.txt", port);
+  msg = soup_message_new ("GET", uri);
+
+  if (with_credentials)
+    g_signal_connect (msg, "authenticate", G_CALLBACK (authenticate_cb), (gpointer) &auth);
+
+  bytes = soup_session_send_and_read (session, msg, NULL, error);
+  if (!bytes)
+    return 0;
+
+  if (body)
+    *body = g_strndup (g_bytes_get_data (bytes, NULL), g_bytes_get_size (bytes));
+
+  return soup_message_get_status (msg);
+}
+
+/* the share is served over HTTPS: the certificate is validated, and
+ * the digest authentication applies on top of it */
+static void
+test_tls (void)
+{
+  const gchar *cert = g_getenv ("CHEZDAV_TEST_CERT");
+  const gchar *key = g_getenv ("CHEZDAV_TEST_KEY");
+  g_autoptr(GSubprocess) proc = NULL;
+  g_autoptr(GTlsDatabase) database = NULL;
+  g_autoptr(SoupSession) session = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *uri = NULL;
+  g_autofree gchar *body = NULL;
+
+  if (!(cert && key && g_file_test (cert, G_FILE_TEST_EXISTS) && g_file_test (key, G_FILE_TEST_EXISTS)))
+    {
+      g_test_skip ("the TLS test certificate is not available");
+      return;
+    }
+
+  if (!g_tls_backend_supports_tls (g_tls_backend_get_default ()))
+    {
+      g_test_skip ("TLS support is not available");
+      return;
+    }
+
+  /* a certificate file without its private key is refused up front */
+  {
+    g_autofree gchar *out = NULL;
+    g_autofree gchar *err = NULL;
+
+    g_assert_cmpint (run_chezdav ((const gchar *[]){ "--tls-cert", cert, NULL }, &out, &err), ==, 1);
+    g_assert_nonnull (strstr (err, "contains no private key"));
+  }
+
+  proc = launch_tls_server (TLS_PORT, cert, key);
+  g_assert_nonnull (proc);
+
+  /* a stalled connection fails the request after a while, rather
+   * than hanging the test */
+  session = soup_session_new ();
+  g_object_set (session, "timeout", 10, NULL);
+
+  /* a plain HTTP request to the HTTPS listener is not served */
+  uri = g_strdup_printf ("http://localhost:%u/", TLS_PORT);
+  msg = soup_message_new ("GET", uri);
+  {
+    g_autoptr(GBytes) bytes = soup_session_send_and_read (session, msg, NULL, &error);
+
+    /* the connection is refused rather than answered */
+    if (!error)
+      g_assert_cmpuint (soup_message_get_status (msg), >=, 400);
+  }
+  g_clear_error (&error);
+
+  /* the server certificate is validated, with the test certificate
+   * as the only trust anchor */
+  database = g_tls_file_database_new (cert, &error);
+  g_assert_no_error (error);
+
+  g_clear_object (&session);
+  session = soup_session_new ();
+  g_object_set (session, "timeout", 10, "tls-database", database, NULL);
+
+  /* the digest authentication applies over TLS too; a request which
+   * cannot even complete its handshake means that the TLS stack of
+   * this environment is unusable (some mingw builds under Wine for
+   * example), which is not a phodav problem: skip the tests */
+  {
+    g_autoptr(GError) tls_error = NULL;
+    guint status = https_get_test_file (session, TLS_PORT, FALSE, NULL, &tls_error);
+
+    if (tls_error)
+      {
+        stop_chezdav_process (proc);
+        g_test_skip_printf ("the TLS handshake failed: %s", tls_error->message);
+        return;
+      }
+
+    g_assert_cmpuint (status, ==, SOUP_STATUS_UNAUTHORIZED);
+  }
+
+  /* with credentials, the file is served over TLS */
+  {
+    g_autoptr(GError) tls_error = NULL;
+
+    g_assert_cmpuint (https_get_test_file (session, TLS_PORT, TRUE, &body, &tls_error), ==, SOUP_STATUS_OK);
+    g_assert_no_error (tls_error);
+  }
+  g_assert_cmpstr (body, ==, "test data");
+
+  stop_chezdav_process (proc);
+}
+
+/* the certificate and its private key may also be given in a single
+ * PEM file */
+static void
+test_tls_combined (void)
+{
+  const gchar *cert = g_getenv ("CHEZDAV_TEST_CERT");
+  const gchar *key = g_getenv ("CHEZDAV_TEST_KEY");
+  g_autoptr(GSubprocess) proc = NULL;
+  g_autoptr(GTlsDatabase) database = NULL;
+  g_autoptr(SoupSession) session = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *combined = NULL;
+  g_autofree gchar *body = NULL;
+
+  if (!(cert && key && g_file_test (cert, G_FILE_TEST_EXISTS) && g_file_test (key, G_FILE_TEST_EXISTS)))
+    {
+      g_test_skip ("the TLS test certificate is not available");
+      return;
+    }
+
+  if (!g_tls_backend_supports_tls (g_tls_backend_get_default ()))
+    {
+      g_test_skip ("TLS support is not available");
+      return;
+    }
+
+  /* the certificate followed by its private key */
+  combined = g_build_filename (work_dir, "combined.pem", NULL);
+  {
+    g_autofree gchar *cert_data = NULL;
+    g_autofree gchar *key_data = NULL;
+    g_autofree gchar *data = NULL;
+
+    g_assert_true (g_file_get_contents (cert, &cert_data, NULL, NULL));
+    g_assert_true (g_file_get_contents (key, &key_data, NULL, NULL));
+    data = g_strconcat (cert_data, key_data, NULL);
+    g_assert_true (g_file_set_contents (combined, data, -1, NULL));
+  }
+
+  proc = launch_tls_server (TLS_COMBINED_PORT, combined, NULL);
+  g_assert_nonnull (proc);
+
+  database = g_tls_file_database_new (cert, &error);
+  g_assert_no_error (error);
+
+  session = soup_session_new ();
+  g_object_set (session, "timeout", 10, "tls-database", database, NULL);
+
+  /* like in test_tls, skip when the environment cannot complete a
+   * TLS handshake at all */
+  {
+    g_autoptr(GError) tls_error = NULL;
+    guint status = https_get_test_file (session, TLS_COMBINED_PORT, FALSE, NULL, &tls_error);
+
+    if (tls_error)
+      {
+        stop_chezdav_process (proc);
+        g_test_skip_printf ("the TLS handshake failed: %s", tls_error->message);
+        return;
+      }
+
+    g_assert_cmpuint (status, ==, SOUP_STATUS_UNAUTHORIZED);
+  }
+
+  {
+    g_autoptr(GError) tls_error = NULL;
+
+    g_assert_cmpuint (https_get_test_file (session, TLS_COMBINED_PORT, TRUE, &body, &tls_error), ==, SOUP_STATUS_OK);
+    g_assert_no_error (tls_error);
+  }
+  g_assert_cmpstr (body, ==, "test data");
+
+  stop_chezdav_process (proc);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
-  g_autofree gchar *htdigest = NULL;
   g_autofree gchar *contents = NULL;
   gchar *line, *tmp;
   g_autoptr(GError) error = NULL;
@@ -534,7 +889,7 @@ main (gint argc, gchar *argv[])
 
   /* user1 and user2 belong to the server realm, "other" to another one;
    * the first line is invalid and skipped with a warning */
-  htdigest = g_build_filename (work_dir, "htdigest", NULL);
+  htdigest_file = g_build_filename (work_dir, "htdigest", NULL);
   line = htdigest_line ("user1", REALM, "password1");
   contents = g_strconcat ("invalid-line-without-colons\n", line, NULL);
   g_free (line);
@@ -548,13 +903,13 @@ main (gint argc, gchar *argv[])
   g_free (line);
   g_free (contents);
   contents = tmp;
-  g_file_set_contents (htdigest, contents, -1, &error);
+  g_file_set_contents (htdigest_file, contents, -1, &error);
   g_assert_no_error (error);
 
 #ifdef G_OS_UNIX
   install_fatal_signal_handlers ();
 #endif
-  launch_server (htdigest);
+  launch_server (htdigest_file);
   wait_for_server ();
 
   /* the order matters: the PUT cases check that "put.txt" was created
@@ -595,6 +950,8 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/chezdav/cli", test_cli);
   g_test_add_func ("/chezdav/defaults", test_defaults);
+  g_test_add_func ("/chezdav/tls", test_tls);
+  g_test_add_func ("/chezdav/tls-combined", test_tls_combined);
 
   res = g_test_run ();
 
@@ -605,6 +962,7 @@ main (gint argc, gchar *argv[])
   delete_dir (work_dir);
   g_free (share_dir);
   g_free (work_dir);
+  g_free (htdigest_file);
 
   return res;
 }

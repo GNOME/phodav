@@ -49,6 +49,18 @@ different folder with the *-P* option.
 	Entity Too Large and discarding the partial file. By default, the upload
 	size is not limited.
 
+*--tls-cert*=_CERT_
+	Serve the share over HTTPS rather than plain HTTP, using the TLS
+	certificate in CERT. The file must be PEM formatted; it must contain the
+	private key too, unless it is given separately with *--tls-key*. Without
+	authentication, plain HTTP exposes the shared files and the DIGEST
+	credentials to anyone able to eavesdrop the network, so consider pairing
+	this option with *--htdigest*.
+
+*--tls-key*=_KEY_
+	Path to a PEM formatted TLS private key, when it is not included in the
+	certificate file. Requires *--tls-cert*.
+
 *-v*, *--verbose*
 	Verbosely print running information.
 

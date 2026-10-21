@@ -33,6 +33,7 @@ static GaEntryGroup *mdns_group;
 static const gchar *s_name;
 static guint s_port;
 static gboolean s_local;
+static gboolean s_tls;
 
 static gboolean
 ifaddr_is_loopback (struct ifaddrs *ifa)
@@ -109,7 +110,9 @@ mdns_register_service (void)
                                      s_local ? get_loopback_if_id () : AVAHI_IF_UNSPEC,
                                      AVAHI_PROTO_UNSPEC,
                                      0,
-                                     s_name, "_webdav._tcp",
+                                     s_name,
+                                     /* WebDAV over TLS is announced with its own service type */
+                                     s_tls ? "_webdavs._tcp" : "_webdav._tcp",
                                      NULL, NULL,
                                      s_port, &error,
                                      NULL);
@@ -180,7 +183,7 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 
 gboolean
-avahi_client_start (const gchar *name, guint port, gboolean local, GError **error)
+avahi_client_start (const gchar *name, guint port, gboolean local, gboolean tls, GError **error)
 {
   g_return_val_if_fail (mdns_client == NULL, FALSE);
 
@@ -188,6 +191,7 @@ avahi_client_start (const gchar *name, guint port, gboolean local, GError **erro
   s_name = name;
   s_port = port;
   s_local = local;
+  s_tls = tls;
 
   g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
   return ga_client_start (mdns_client, error);

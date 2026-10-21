@@ -7,7 +7,7 @@ GIO. It provides:
 
 * libphodav, a GObject WebDAV server library
 * chezdav, a small tool to share a directory (with optional digest
-  authentication)
+  authentication and TLS)
 * spice-webdavd, the Spice *webdav* daemon, which shares a folder
   between a host and its guests
 
