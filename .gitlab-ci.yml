@@ -221,13 +221,14 @@ coverage:
     - meson compile -C build-coverage
     - meson test -C build-coverage --print-errorlogs
     # the report covers the project sources only: the litmus subproject
-    # and the test programs themselves are excluded; --fail-under-line
-    # fails the job when the line coverage regresses below the minimum
+    # and the test programs themselves are excluded; the line and branch
+    # coverage minimums fail the job when they regress below them
     - mkdir -p build-coverage/meson-logs/coveragereport
     - gcovr -r . build-coverage
         --exclude subprojects
         --exclude tests
         --fail-under-line 90
+        --fail-under-branch 75
         --txt -
         --html-nested build-coverage/meson-logs/coveragereport/index.html
   artifacts:
