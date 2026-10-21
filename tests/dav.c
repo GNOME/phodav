@@ -2074,12 +2074,34 @@ test_request_body_too_large (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt", big, "Depth", "0", NULL),
                     ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
 
-  /* a chunked body has no Content-Length to check: it is refused
-   * when the handler parses it */
+  /* a small chunked body is parsed normally */
   {
     g_autoptr(SoupMessage) msg = NULL;
     g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/hello.txt", NULL);
-    g_autoptr(GBytes) request = g_bytes_new (big, strlen (big));
+    g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_data (PROPFIND_ALLPROP, -1, NULL);
+    g_autoptr(GBytes) response = NULL;
+    g_autoptr(GError) error = NULL;
+
+    msg = soup_message_new (SOUP_METHOD_PROPFIND, uri);
+    soup_message_headers_append (soup_message_get_request_headers (msg), "Depth", "0");
+    soup_message_set_request_body (msg, "application/xml", stream, -1);
+
+    response = soup_session_send_and_read (f->session, msg, NULL, &error);
+    g_assert_no_error (error);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  }
+
+  /* a chunked body has no Content-Length to check in advance: it is
+   * refused with 413 as soon as it grows over the limit, while it is
+   * still being received, and the rest is drained rather than
+   * accumulated */
+  {
+    g_autoptr(SoupMessage) msg = NULL;
+    g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/hello.txt", NULL);
+    /* several times the limit, so that the part received after the
+     * refusal is drained too */
+    g_autofree gchar *huge = g_strnfill (8 * 1024 * 1024, 'x');
+    g_autoptr(GBytes) request = g_bytes_new (huge, strlen (huge));
     g_autoptr(GInputStream) stream = NULL;
     g_autoptr(GBytes) response = NULL;
     g_autoptr(GError) error = NULL;
@@ -2092,7 +2114,7 @@ test_request_body_too_large (DavFixture *f, gconstpointer user_data)
     response = soup_session_send_and_read (f->session, msg, NULL, &error);
     g_assert_no_error (error);
     g_assert_nonnull (response);
-    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_BAD_REQUEST);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
   }
 
   /* a DELETE with an oversized Content-Length must be rejected

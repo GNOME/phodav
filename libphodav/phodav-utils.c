@@ -108,8 +108,9 @@ davdoc_parse (DavDoc *dd, SoupServerMessage *msg, SoupMessageBody *body, const g
   xmlNodePtr root;
   GUri *uri;
 
-  /* a chunked body has no Content-Length for got_headers() to check,
-   * refuse it here rather than parsing it */
+  /* got_headers() refuses the oversized bodies while they are
+   * received, the chunked ones included; refusing one here too is a
+   * last resort, do not parse it */
   if (body->length > PHODAV_MAX_REQUEST_BODY)
     {
       g_debug ("Refusing to parse the oversized request body (%" G_GOFFSET_FORMAT " bytes)", body->length);

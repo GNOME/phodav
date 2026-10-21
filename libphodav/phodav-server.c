@@ -651,6 +651,32 @@ server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *
   return d.conflict;
 }
 
+/* a body which is not delimited by a Content-Length cannot be
+ * checked before it is received: refuse it as soon as it grows over
+ * the parse limit, so that a client cannot make the server
+ * accumulate an unbounded request body in memory */
+static void
+got_chunk (SoupServerMessage *msg,
+           GBytes *chunk,
+           gpointer user_data)
+{
+  SoupMessageBody *body = soup_server_message_get_request_body (msg);
+
+  /* the accumulated length includes the chunk being signaled, the
+   * body is appended before the signal is emitted */
+  if (body->length <= PHODAV_MAX_REQUEST_BODY)
+    return;
+
+  g_debug ("refusing the oversized request body");
+
+  g_signal_handlers_disconnect_by_func (msg, got_chunk, user_data);
+
+  /* stop accumulating the rest of the body: it is drained, and the
+   * request is answered with 413 rather than parsed */
+  soup_message_body_set_accumulate (body, FALSE);
+  soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+}
+
 static void
 got_headers (SoupServerMessage *msg,
              gpointer user_data)
@@ -693,7 +719,13 @@ got_headers (SoupServerMessage *msg,
       g_debug ("refusing the oversized request body");
       soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
       soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+      return;
     }
+
+  /* a chunked body has no Content-Length to check in advance: watch
+   * it while it is received */
+  if (soup_message_headers_get_encoding (request_headers) == SOUP_ENCODING_CHUNKED)
+    g_signal_connect (msg, "got-chunk", G_CALLBACK (got_chunk), self);
 }
 
 static void
