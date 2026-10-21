@@ -27,8 +27,8 @@ struct _PhodavVirtualDir
 
   gboolean dummy;
   PhodavVirtualDir *parent;
-  GList *children;
-  GFile *real_root; /* only set for virtual root, otherwise NULL */
+  GHashTable *children; /* basename to GFile */
+  GFile *real_root;     /* only set for virtual root, otherwise NULL */
 
   /* TODO: we could store just the base name and build up the path when needed */
   gchar *path;
@@ -260,7 +260,13 @@ phodav_virtual_dir_enumerate_children (GFile *file,
   enumerator = g_object_new (PHODAV_TYPE_VIRTUAL_DIR_ENUMERATOR, "container", file, NULL);
   enumerator->attributes = g_strdup (attributes);
   enumerator->flags = flags;
-  enumerator->children = g_list_copy_deep (self->children, (GCopyFunc) g_object_ref, NULL);
+  {
+    /* a snapshot of the children, the table keeps changing with them */
+    GList *children = g_hash_table_get_values (self->children);
+
+    enumerator->children = g_list_copy_deep (children, (GCopyFunc) g_object_ref, NULL);
+    g_list_free (children);
+  }
   enumerator->current = enumerator->children;
   if (self->real_root)
     {
@@ -280,24 +286,7 @@ static GFile *
 phodav_virtual_dir_find_direct_child (PhodavVirtualDir *parent,
                                       const gchar *name)
 {
-  GFile *child;
-  GList *l;
-  gchar *base;
-
-  /* TODO: perhaps a hash table would be better? */
-  for (l = parent->children; l; l = l->next)
-    {
-      child = G_FILE (l->data);
-      base = g_file_get_basename (child);
-      if (g_strcmp0 (name, base) == 0)
-        {
-          g_free (base);
-          return child;
-        }
-      g_free (base);
-    }
-
-  return NULL;
+  return g_hash_table_lookup (parent->children, name);
 }
 
 /* recursively searches for a child of @parent given the relative @path.
@@ -597,7 +586,7 @@ phodav_virtual_dir_dispose (GObject *object)
     }
   self->dummy = TRUE;
   g_clear_object (&self->real_root);
-  g_clear_list (&self->children, g_object_unref);
+  g_clear_pointer (&self->children, g_hash_table_unref);
 
   G_OBJECT_CLASS (phodav_virtual_dir_parent_class)->dispose (object);
 }
@@ -621,6 +610,8 @@ phodav_virtual_dir_class_init (PhodavVirtualDirClass *klass)
 static void
 phodav_virtual_dir_init (PhodavVirtualDir *self)
 {
+  self->children = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                          g_free, g_object_unref);
 }
 
 /**
@@ -771,7 +762,7 @@ phodav_virtual_dir_new_dir (PhodavVirtualDir *root,
   file->dummy = FALSE;
   virtual_dir_touch (file);
   virtual_dir_touch (parent);
-  parent->children = g_list_prepend (parent->children, g_object_ref (file));
+  g_hash_table_insert (parent->children, g_steal_pointer (&base), g_object_ref (G_FILE (file)));
   g_object_weak_ref (G_OBJECT (parent), parent_gone_cb, file);
   /* weak ref to parent allows us to remove all subdirectories by dropping the last ref to parent */
   file->parent = parent;
@@ -814,9 +805,9 @@ phodav_virtual_dir_attach_real_child (PhodavVirtualDir *parent,
       g_free (base);
       return FALSE;
     }
-  g_free (base);
 
-  parent->children = g_list_prepend (parent->children, g_object_ref (child));
+  /* the table takes ownership of the name */
+  g_hash_table_insert (parent->children, base, g_object_ref (child));
   virtual_dir_touch (parent);
   return TRUE;
 }
