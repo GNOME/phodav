@@ -1171,11 +1171,10 @@ test_propfind_errors (DavFixture *f, gconstpointer user_data)
   /* missing resource */
   g_assert_cmpuint (dav_status (f, "PROPFIND", "/missing.txt", PROPFIND_ALLPROP, "Depth", "0", NULL),
                     ==, SOUP_STATUS_NOT_FOUND);
-  /* infinite depth is not supported, it is rejected with a warning */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "*should not be reached*");
+  /* infinite depth is not supported: RFC 4918 section 9.1 allows a
+   * server to refuse to walk the whole tree, with 403 */
   g_assert_cmpuint (dav_status (f, "PROPFIND", "/", PROPFIND_ALLPROP, "Depth", "infinity", NULL),
                     ==, SOUP_STATUS_FORBIDDEN);
-  g_test_assert_expected_messages ();
 }
 
 static void
@@ -1258,9 +1257,7 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
     g_autoptr(SoupMessage) missing_msg = NULL;
     g_autoptr(xmlDoc) missing_doc = NULL;
 
-    g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "failed to set property: *");
     missing_msg = dav_request (f, "PROPPATCH", "/missing.txt", PROPPATCH_SET, &missing_body, NULL);
-    g_test_assert_expected_messages ();
     g_assert_cmpuint (soup_message_get_status (missing_msg), ==, SOUP_STATUS_MULTI_STATUS);
     missing_doc = parse_multistatus (missing_body);
     g_assert_cmpuint (prop_status (f, missing_doc, "/missing.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
@@ -1273,14 +1270,12 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_BAD_REQUEST);
   /* instructions outside of the DAV namespace are not recognized,
    * the body names no property either */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "*should not be reached*");
   g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
                                 "<D:propertyupdate xmlns:D=\"DAv:\"><D:set><D:prop>"
                                 "<user.phodav-test>value</user.phodav-test>"
                                 "</D:prop></D:set></D:propertyupdate>",
                                 NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
-  g_test_assert_expected_messages ();
 }
 
 static void
@@ -2219,8 +2214,8 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
   signal (SIGXFSZ, SIG_IGN);
   g_assert_cmpint (setrlimit (RLIMIT_FSIZE, &limit), ==, 0);
 
-  /* the write failure is reported as a warning by the server */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "PUT: write error: *");
+  /* the write failure is answered with 500, and the file it was
+   * writing is discarded */
 
   uri = g_build_path ("/", f->base_uri, "/partial.txt", NULL);
   msg = soup_message_new (SOUP_METHOD_PUT, uri);
@@ -2235,7 +2230,6 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
     if (error == NULL)
       g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
   }
-  g_test_assert_expected_messages ();
 
   /* the partial file was discarded */
   g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
@@ -2246,10 +2240,8 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
     g_autofree gchar *data = g_strnfill (64, 'x');
     g_autofree gchar *hello = g_build_filename (f->dir, "hello.txt", NULL);
 
-    g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "PUT: write error: *");
     g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", data, NULL),
                       ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
-    g_test_assert_expected_messages ();
 
     g_assert_false (g_file_test (hello, G_FILE_TEST_EXISTS));
   }
@@ -2503,6 +2495,11 @@ test_request_path_validation (DavFixture *f, gconstpointer user_data)
 
   /* PUT also validates its path in got_headers() */
   g_assert_cmpuint (raw_http_status (f, "PUT //etc/passwd"),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
+  /* the streamed methods are validated like the other ones: a URI
+   * fragment is refused there too, not only by server_callback() */
+  g_assert_cmpuint (raw_http_status (f, "PUT /hello.txt#frag"),
                     ==, SOUP_STATUS_BAD_REQUEST);
 
   /* the normal server still works after the rejected requests */

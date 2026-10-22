@@ -101,8 +101,7 @@ method_put_got_chunk (SoupServerMessage *msg,
                                   data, data_length,
                                   &bytes_written, cancellable, &err))
     {
-      g_warning ("PUT: write error: %s", err->message);
-
+      g_debug ("PUT: write error: %s", err->message);
       /* answer right away, ignore the remaining chunks and discard the
        * partial file, the client has to retry the upload from scratch */
       soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
@@ -150,7 +149,7 @@ method_put_got_body (SoupServerMessage *msg,
 
   if (!g_output_stream_close (G_OUTPUT_STREAM (ctx->output), cancellable, &error))
     {
-      g_warning ("PUT: failed to commit the uploaded file: %s", error->message);
+      g_debug ("PUT: failed to commit the uploaded file: %s", error->message);
 
       put_context_discard (ctx);
       soup_server_message_set_status (msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
@@ -250,11 +249,8 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
    * client is still sending it */
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
 
-  if (handler_get_readonly (handler))
-    {
-      status = SOUP_STATUS_FORBIDDEN;
-      goto end;
-    }
+  /* the read-only refusal is enforced by the method dispatch, in
+   * got_headers(), before the upload is started */
 
   /* an upload which is over the limit is refused before anything is
    * written to disk, RFC 9110 section 15.5.15; a chunked body has

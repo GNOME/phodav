@@ -306,10 +306,8 @@ test_timeout (void)
   g_assert_cmpuint (timeout_from_string ("second-42"), ==, 42);
   g_assert_cmpuint (timeout_from_string ("Second-"), ==, 0);
 
-  /* invalid values are rejected with a critical */
-  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*should not be reached*");
+  /* an unrecognized value is treated like a missing header */
   g_assert_cmpuint (timeout_from_string ("later"), ==, 0);
-  g_test_assert_expected_messages ();
 }
 
 static void

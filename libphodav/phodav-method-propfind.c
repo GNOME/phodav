@@ -89,7 +89,9 @@ prop_resourcetype (PathHandler *handler, PropFind *pf, const gchar *path, GFileI
     xmlNewChild (node, ns, BAD_CAST "collection", NULL);
   else if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR)
     {
-      g_warn_if_reached ();
+      /* a special file is no DAV collection nor a document: the
+       * property is not found for it */
+      g_debug ("PROPFIND: %s is not a directory or a regular file", path);
       status = SOUP_STATUS_NOT_FOUND;
     }
 
@@ -369,7 +371,7 @@ prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFi
 
   if (error)
     {
-      g_warning ("Filesystem info error: %s", error->message);
+      g_debug ("PROPFIND: filesystem info of %s failed: %s", path, error->message);
       status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
       goto end;
     }
@@ -406,7 +408,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf, const gchar *path, GFileInf
                                   &disk_usage, NULL, NULL,
                                   &error))
     {
-      g_warning ("Filesystem info error: %s", error->message);
+      g_debug ("PROPFIND: disk usage of %s could not be measured: %s", path, error->message);
       status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
       goto end;
     }
@@ -631,7 +633,7 @@ propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHas
   if (err)
     {
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        g_warning ("queryinfo: %s", err->message);
+        g_debug ("PROPFIND: query of %s failed: %s", path, err->message);
       return SOUP_STATUS_NOT_FOUND;
     }
 
@@ -680,7 +682,7 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
 
 end:
   if (err && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
-    g_warning ("query: %s", err->message);
+    g_debug ("PROPFIND: listing of %s failed: %s", path, err->message);
 
   return status;
 }
@@ -736,7 +738,9 @@ parse_propfind (xmlNodePtr xml)
         }
     }
 
-  g_warn_if_reached ();
+  /* a body with no allprop, propname or prop element is malformed,
+   * like one with an empty prop: the caller rejects it with 400 */
+  g_debug ("PROPFIND: the request names no allprop, propname or prop element");
   g_clear_pointer (&pf, propfind_free);
 
 end:
@@ -788,22 +792,19 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
-  if (pf->type == PROPFIND_PROP ||
-      pf->type == PROPFIND_ALLPROP ||
-      pf->type == PROPFIND_PROPNAME)
-    {
-      if (depth == DEPTH_ZERO)
-        status = propfind_query_zero (handler, pf, path, mstatus, ns);
-      else if (depth == DEPTH_ONE)
-        status = propfind_query_one (handler, pf, path, mstatus, ns);
-      else
-        {
-          status = SOUP_STATUS_FORBIDDEN;
-          g_warn_if_reached ();
-        }
-    }
+  /* parse_propfind() only returns a PropFind with one of the three
+   * request types: only the depth decides how it is answered */
+  if (depth == DEPTH_ZERO)
+    status = propfind_query_zero (handler, pf, path, mstatus, ns);
+  else if (depth == DEPTH_ONE)
+    status = propfind_query_one (handler, pf, path, mstatus, ns);
   else
-    g_warn_if_reached ();
+    {
+      /* RFC 4918 section 9.1: a server may refuse to walk the whole
+       * tree of a depth-infinity PROPFIND */
+      g_debug ("PROPFIND: refusing the depth-infinity request on %s", path);
+      status = SOUP_STATUS_FORBIDDEN;
+    }
 
   if (status != SOUP_STATUS_OK)
     goto end;
@@ -811,7 +812,8 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   status = set_response_multistatus (msg, mstatus);
 
 end:
-  /* the responses use ns */
+  /* the parsed request and the responses are no longer needed */
+  g_clear_pointer (&pf, propfind_free);
   g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
     xmlFreeNs (ns);

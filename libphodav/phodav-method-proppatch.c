@@ -70,7 +70,7 @@ set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem,
 
   if (error)
     {
-      g_warning ("failed to set property: %s", error->message);
+      g_debug ("PROPPATCH: failed to set the property: %s", error->message);
       status = SOUP_STATUS_NOT_FOUND;
     }
 
@@ -161,7 +161,11 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
       else if (xml_node_has_name (node, "remove"))
         status = prop_set (msg, file, node, &attr, TRUE, cancellable);
       else
-        g_warn_if_reached ();
+        {
+          /* RFC 4918 section 12.13: a propertyupdate carries set and
+           * remove instructions, the other elements are ignored */
+          g_debug ("PROPPATCH: ignoring the <%s> element", (gchar *) node->name);
+        }
 
       if (attr)
         {

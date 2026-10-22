@@ -396,7 +396,9 @@ timeout_from_string (const gchar *timeout)
   if (g_ascii_strncasecmp (timeout, "Second-", 7) == 0)
     return g_ascii_strtoull (timeout + 7, NULL, 10);
 
-  g_return_val_if_reached (0);
+  g_debug ("invalid Timeout header: %s", timeout);
+
+  return 0;
 }
 
 const gchar *
