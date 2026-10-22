@@ -50,6 +50,12 @@
             <Component Id="CLibPhoDAV" Guid="*">
               <File Id='libphodav' Name='libphodav-3.0-0.dll' DiskId='1' Source='$(var.DESTDIR)/bin/libphodav-3.0-0.dll' KeyPath='yes'/>
             </Component>
+            <Component Id="CChezDAVAppPaths" Guid="*" Win64="$(var.Win64)">
+              <RegistryKey Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\chezdav.exe">
+                <RegistryValue Type="string" Value="[#chezdav]"/>
+                <RegistryValue Name="Path" Type="string" Value="[Dbindir]"/>
+              </RegistryKey>
+            </Component>
           </Directory>
           <Component Id="CDepsTxt" Guid="*">
             <File Id='depstxt' Name='deps.txt' DiskId='1' Source='deps.txt' KeyPath='yes'/>
@@ -63,6 +69,7 @@
       <ComponentGroupRef Id="CG.libxml2"/>
       <ComponentRef Id="CChezDAV"/>
       <ComponentRef Id="CLibPhoDAV"/>
+      <ComponentRef Id="CChezDAVAppPaths"/>
       <ComponentRef Id="CDepsTxt"/>
     </Feature>
 
