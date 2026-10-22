@@ -1367,6 +1367,28 @@ test_lock (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_delete_locked (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource (f, "/delete-locked.txt", "Second-3600");
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+
+  /* DELETE requires the token of the lock it removes */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/delete-locked.txt", NULL, NULL),
+                    ==, SOUP_STATUS_LOCKED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/delete-locked.txt", NULL,
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  /* RFC 4918 section 9.6.1: the lock is destroyed with the resource,
+   * the path can be written again without submitting the old token */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/delete-locked.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/delete-locked.txt", "data", NULL),
+                    ==, SOUP_STATUS_CREATED);
+}
+
+static void
 test_lock_double_slash (DavFixture *f, gconstpointer user_data)
 {
   /* empty path segments are skipped when the path is used as a key
@@ -1707,10 +1729,14 @@ test_locked_parent (DavFixture *f, gconstpointer user_data)
 {
   g_autoptr(SoupMessage) msg = NULL;
   g_autoptr(GBytes) body = NULL;
+  g_autofree gchar *token = NULL;
 
   /* lock a file inside the directory */
   msg = dav_request (f, "LOCK", "/dir/inner.txt", LOCK_EXCLUSIVE, &body, NULL);
   g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  token = g_strdup (soup_message_headers_get_one (
+    soup_message_get_response_headers (msg), "Lock-Token"));
+  g_assert_nonnull (token);
   g_clear_object (&msg);
   g_clear_pointer (&body, g_bytes_unref);
 
@@ -1727,6 +1753,11 @@ test_locked_parent (DavFixture *f, gconstpointer user_data)
 
     g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
   }
+
+  /* the lock of the deleted member is gone too */
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir/inner.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
 
   /* deleting something which does not exist */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/nonexistent", NULL, NULL),
@@ -2484,6 +2515,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
 
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
+  g_test_add ("/dav/delete-locked", DavFixture, NULL, dav_fixture_setup, test_delete_locked, dav_fixture_teardown);
   g_test_add ("/dav/lock-double-slash", DavFixture, NULL, dav_fixture_setup, test_lock_double_slash, dav_fixture_teardown);
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
   g_test_add ("/dav/lock/expiry", DavFixture, NULL, dav_fixture_setup, test_lock_expiry, dav_fixture_teardown);

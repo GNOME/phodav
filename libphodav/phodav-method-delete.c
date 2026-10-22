@@ -23,7 +23,7 @@ error_to_status (GError *err)
 }
 
 gint
-phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
+phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
 {
   g_autoptr(GFileEnumerator) e = NULL;
   g_autoptr(GError) error = NULL;
@@ -42,7 +42,7 @@ phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancel
           /* the multistatus keys are the decoded resource paths, the
            * hrefs are escaped when the response is built */
           g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
-          phodav_delete_file (del_path, del, mstatus, cancellable);
+          phodav_delete_file (server, del_path, del, mstatus, cancellable);
         }
 
       g_file_enumerator_close (e, cancellable, NULL);
@@ -52,13 +52,18 @@ phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancel
     g_warning ("DELETE: enumeration error: %s", error->message);
 
   g_autoptr(GError) del_error = NULL;
-  if (!g_file_delete (file, cancellable, &del_error) && mstatus)
+  if (!g_file_delete (file, cancellable, &del_error))
     {
-      status = error_to_status (del_error);
+      if (mstatus)
+        {
+          status = error_to_status (del_error);
 
-      g_hash_table_insert (mstatus, g_strdup (path),
-                           response_new (NULL, status));
+          g_hash_table_insert (mstatus, g_strdup (path),
+                               response_new (NULL, status));
+        }
     }
+  else
+    server_remove_locks (server, path);
 
   if (del_error)
     g_debug ("ignored del error: %s", del_error->message);
@@ -93,7 +98,7 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 
-  status = phodav_delete_file (path, file, mstatus, cancellable);
+  status = phodav_delete_file (handler_get_server (handler), path, file, mstatus, cancellable);
   if (status == SOUP_STATUS_NO_CONTENT)
     if (g_hash_table_size (mstatus) > 0)
       status = set_response_multistatus (msg, mstatus);
