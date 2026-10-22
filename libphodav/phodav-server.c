@@ -35,7 +35,7 @@ struct _PhodavServer
   SoupServer *server;
   GCancellable *cancellable;
   GFile *root_file;
-  PathHandler *root_handler; /* weak ref */
+  PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
   GHashTable *paths;
   gboolean readonly;
   guint64 max_upload;
@@ -57,6 +57,12 @@ typedef enum
 } PhodavServerProps;
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
+
+static void early_server_callback (SoupServer *server,
+                                   SoupServerMessage *msg,
+                                   const gchar *path,
+                                   GHashTable *query,
+                                   gpointer user_data);
 
 static void server_callback (SoupServer *server,
                              SoupServerMessage *msg,
@@ -250,6 +256,14 @@ update_root_handler (PhodavServer *self)
   if (!self->root_file || !self->server)
     return;
 
+  /* the early handler only tags the messages which libsoup routes
+   * to the phodav root handler, like the regular one below: a
+   * request routed to another handler of a user-provided
+   * #SoupServer, at a more specific path, runs neither of them */
+  soup_server_add_early_handler (self->server, "/",
+                                 early_server_callback,
+                                 NULL, NULL);
+
   handler = path_handler_new (self, self->root_file);
 
   soup_server_add_handler (self->server, "/",
@@ -275,10 +289,10 @@ phodav_server_constructed (GObject *gobject)
     self->server = soup_server_new ("server-header", "PhodavServer",
                                     NULL);
 
-  /* when a server was given at construction, the root handler is
-   * already registered on it */
-  if (!self->root_handler)
-    update_root_handler (self);
+  /* the root handlers are registered as soon as the root and the
+   * server are both known; the registration in set_property() may
+   * have happened already, registering again only replaces them */
+  update_root_handler (self);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
@@ -475,8 +489,12 @@ phodav_server_class_init (PhodavServerClass *klass)
    *
    * When constructing a #PhodavServer, an already configured
    * #SoupServer may be given, with listeners, TLS certificates or
-   * auth domains set up for example. When no server is provided, a
-   * new one is created.
+   * auth domains set up for example. phodav registers its DAV
+   * handlers at "/" only: the requests routed to another handler
+   * of @server, at a more specific path, are left to it, except
+   * the authenticated ones on a server with an auth domain, which
+   * phodav cannot tell the routing of. When no server is provided,
+   * a new one is created.
    *
    * Since: 3.1
    **/
@@ -747,9 +765,13 @@ dav_methods_allow (void)
 /* the DAV requests operate on the resources under the share root:
  * their path must be absolute (it begins with a "/"), but relative
  * to the root (no second "/" may follow the first one, or the path
- * would read as absolute on Windows too), and their URI must carry
- * no fragment. The dot segments were removed by libsoup already. A
- * request which does not qualify is answered with 400 BAD REQUEST. */
+ * would read as absolute on Windows too), carry no dot-dot segment,
+ * and their URI must carry no fragment. The dot segments are
+ * removed when the request URI is parsed, and the ones surviving
+ * the path decoding are refused by libsoup: checking them here too
+ * guards the traversal on its own, should the URI handling change.
+ * A request which does not qualify is answered with 400 BAD
+ * REQUEST. */
 static gboolean
 request_path_is_valid (SoupServerMessage *msg, const gchar *path)
 {
@@ -759,6 +781,8 @@ request_path_is_valid (SoupServerMessage *msg, const gchar *path)
     g_debug ("path must begin with /");
   else if (g_path_is_absolute (path + 1))
     g_debug ("path cannot be absolute: %s", path);
+  else if (path_has_dot_dot_segment (path))
+    g_debug ("path cannot contain dot-dot segments: %s", path);
   else if (!(uri && g_uri_get_fragment (uri) == NULL))
     g_debug ("using fragments in query is not supported");
   else
@@ -794,6 +818,21 @@ got_chunk (SoupServerMessage *msg,
   soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
 }
 
+/* the qdata key of the messages routed to the phodav root handler,
+ * set by its early handler */
+#define EARLY_HANDLER_KEY "phodav-early-handler"
+
+/* the early handler of the root path: it does no processing of its
+ * own, it only tags the message, so that got_headers() can tell
+ * the requests which libsoup will dispatch to the phodav root
+ * handler from the ones routed to another handler of a
+ * user-provided #SoupServer, at a more specific path. */
+static void
+early_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
+{
+  g_object_set_qdata (G_OBJECT (msg), g_quark_from_static_string (EARLY_HANDLER_KEY), GUINT_TO_POINTER (1));
+}
+
 static void
 got_headers (SoupServerMessage *msg,
              gpointer user_data)
@@ -805,14 +844,26 @@ got_headers (SoupServerMessage *msg,
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   const DavMethod *m = dav_method_lookup (method);
 
-  /* libsoup handlers ran first, the request may have been rejected
-   * already (invalid path, authentication...) */
+  /* the requests already answered (an authentication challenge, an
+   * invalid path...) are not phodav's to handle */
   if (soup_server_message_get_status (msg) != 0)
     return;
 
   /* without a shared root, no handler is registered: the requests
    * are answered by libsoup, phodav has nothing to do with them */
   if (!self->root_handler)
+    return;
+
+  /* the early handler tagged the requests which libsoup routes to
+   * the phodav root handler. It never runs for the requests
+   * accepted by an auth domain though: libsoup returns from its
+   * headers processing on a successful authentication, before
+   * calling the early handlers. Handle those here too, told by the
+   * Authorization header the client sent: on a server with an
+   * auth domain, the routing of an authenticated request cannot be
+   * told apart, and phodav handles them all */
+  if (g_object_get_qdata (G_OBJECT (msg), g_quark_from_static_string (EARLY_HANDLER_KEY)) == NULL &&
+      soup_message_headers_get_one (request_headers, "Authorization") == NULL)
     return;
 
   /* a method which streams its request body out while it is

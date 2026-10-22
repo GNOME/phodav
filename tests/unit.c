@@ -92,6 +92,15 @@ test_path_has_dot_dot_segment (void)
 
   for (guint i = 0; i < G_N_ELEMENTS (not_dot_dot); i++)
     g_assert_false (path_has_dot_dot_segment (not_dot_dot[i]));
+
+  /* the backslash separates the path components on Windows only:
+   * a request path carrying dot-dot segments behind backslashes
+   * would traverse there, while it names an ordinary file on Unix */
+#ifdef G_OS_WIN32
+  g_assert_true (path_has_dot_dot_segment ("/a\\..\\..\\b"));
+#else
+  g_assert_false (path_has_dot_dot_segment ("/a\\..\\..\\b"));
+#endif
 }
 
 static void

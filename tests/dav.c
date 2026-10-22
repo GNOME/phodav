@@ -199,6 +199,62 @@ dav_fixture_setup_max_upload (DavFixture *f, gconstpointer user_data)
   dav_fixture_setup_full (f, &options);
 }
 
+/* a foreign handler of the user-provided SoupServer, at a more
+ * specific path than the phodav root */
+static void
+foreign_handler_cb (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
+{
+  soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+}
+
+/* a fixture server sharing the SoupServer of the embedding
+ * application, which carries a foreign handler of its own */
+static void
+dav_fixture_setup_shared (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GError) error = NULL;
+  g_autoslist(GUri) uris = NULL;
+  g_autoptr(SoupServer) server = NULL;
+
+  f->dir = g_dir_make_tmp ("phodav-dav-XXXXXX", &error);
+  g_assert_no_error (error);
+
+  write_file (f->dir, "hello.txt", HELLO_CONTENT);
+
+  /* the server runs its own context and thread: the synchronous
+   * client blocks on the socket while waiting for the response, so
+   * it cannot share a context with the server */
+  f->context = g_main_context_new ();
+  g_main_context_push_thread_default (f->context);
+
+  server = soup_server_new (NULL, NULL);
+  soup_server_add_handler (server, "/upload", foreign_handler_cb, NULL, NULL);
+
+  f->phodav = g_object_new (PHODAV_TYPE_SERVER,
+                            "root", f->dir,
+                            "server", server,
+                            NULL);
+
+  g_assert_true (phodav_server_get_soup_server (f->phodav) == server);
+
+  {
+    g_assert_true (soup_server_listen_local (server, 0,
+                                             SOUP_SERVER_LISTEN_IPV4_ONLY,
+                                             &error));
+    g_assert_no_error (error);
+
+    uris = soup_server_get_uris (server);
+    g_assert_nonnull (uris);
+    f->base_uri = g_uri_to_string (uris->data);
+  }
+
+  f->loop = g_main_loop_new (f->context, FALSE);
+  g_main_context_pop_thread_default (f->context);
+  f->thread = g_thread_new ("dav-server", server_thread, f);
+
+  f->session = soup_session_new ();
+}
+
 static void
 dav_fixture_teardown (DavFixture *f, gconstpointer user_data)
 {
@@ -2502,9 +2558,76 @@ test_request_path_validation (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (raw_http_status (f, "PUT /hello.txt#frag"),
                     ==, SOUP_STATUS_BAD_REQUEST);
 
+  /* the dot-dot segments of a request path cannot escape the share:
+   * they are removed when the request URI is parsed, and the ones
+   * surviving are refused, by libsoup and by phodav on its own.
+   * Check the property with files outside the share, next to its
+   * directory */
+  {
+    g_autofree gchar *parent = g_path_get_dirname (f->dir);
+    g_autofree gchar *base = g_path_get_basename (f->dir);
+    g_autofree gchar *secret_name = g_strdup_printf ("%s-secret.txt", base);
+    g_autofree gchar *secret = g_build_filename (parent, secret_name, NULL);
+    g_autofree gchar *get = g_strdup_printf ("GET /../%s", secret_name);
+    g_autofree gchar *evil_name = g_strdup_printf ("%s-evil.txt", base);
+    g_autofree gchar *evil = g_build_filename (parent, evil_name, NULL);
+    g_autofree gchar *put = g_strdup_printf ("PUT /../%s", evil_name);
+
+    g_assert_true (g_file_set_contents (secret, "secret", -1, NULL));
+
+    /* the outside file is not served: its path is normalized to the
+     * same name inside the share (not found), or refused */
+    g_assert_cmpuint (raw_http_status (f, get), !=, SOUP_STATUS_OK);
+
+    /* and a PUT does not write outside the share either: it may
+     * create the file inside (normalized), never next to it */
+    g_assert_cmpuint (raw_http_status (f, put), !=, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+    g_assert_false (g_file_test (evil, G_FILE_TEST_EXISTS));
+
+    g_unlink (secret);
+  }
+
   /* the normal server still works after the rejected requests */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
                     ==, SOUP_STATUS_OK);
+}
+
+/* an embedding application may provide its own SoupServer: the
+ * requests routed to its handlers, at a more specific path than the
+ * phodav root, must be left to them, and phodav must not impose its
+ * request guards on them either */
+static void
+test_shared_server (DavFixture *f, gconstpointer user_data)
+{
+  /* the DAV requests are served as usual on the shared server */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dav.txt", "data", NULL),
+                    ==, SOUP_STATUS_CREATED);
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "dav.txt", NULL);
+
+    assert_file_contents (path, "data");
+  }
+
+  /* a PUT to the foreign handler is not streamed into the share by
+   * phodav: the foreign handler answers, and nothing is written */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/upload/foreign.txt", "data", NULL),
+                    ==, SOUP_STATUS_OK);
+  {
+    g_autofree gchar *path = g_build_filename (f->dir, "upload", NULL);
+
+    g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+  }
+
+  /* the phodav request guards do not apply either: an oversized
+   * body for the foreign handler is not refused with 413 */
+  {
+    g_autofree gchar *big = g_strnfill (1024 * 1024 + 1, 'x');
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_POST, "/upload", big, NULL),
+                      ==, SOUP_STATUS_OK);
+  }
 }
 
 gint
@@ -2562,6 +2685,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add ("/dav/readonly", DavFixture, GINT_TO_POINTER (1), dav_fixture_setup, test_readonly, dav_fixture_teardown);
   g_test_add ("/dav/request-path-validation", DavFixture, NULL, dav_fixture_setup, test_request_path_validation, dav_fixture_teardown);
+  g_test_add ("/dav/shared-server", DavFixture, NULL, dav_fixture_setup_shared, test_shared_server, dav_fixture_teardown);
 
   return g_test_run ();
 }
