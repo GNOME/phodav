@@ -149,9 +149,12 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
     goto end;
 
   /* like the request path, reject encoded slashes: they would survive
-   * dot-segment removal and allow escaping the root once decoded */
+   * dot-segment removal and allow escaping the root once decoded;
+   * and an empty first segment ("//"), which g_file_get_child()
+   * would resolve against the filesystem root */
   udest = g_uri_unescape_string (dest, "/");
-  if (!udest || *udest != '/' || path_has_dot_dot_segment (udest))
+  if (!udest || *udest != '/' || g_path_is_absolute (udest + 1) ||
+      path_has_dot_dot_segment (udest))
     {
       g_debug ("invalid destination path: %s", dest);
       status = SOUP_STATUS_BAD_REQUEST;

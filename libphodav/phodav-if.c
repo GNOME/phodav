@@ -257,10 +257,13 @@ eval_if_tag (PathHandler *handler, IfState *state)
       return FALSE;
     }
 
-  /* like the request path, it may not contain encoded slashes */
+  /* like the request path, it may not contain encoded slashes, and
+   * its first segment may not be empty ("//"): g_file_get_child()
+   * would resolve such a path against the filesystem root */
   path = g_uri_unescape_string (g_uri_get_path (uri), "/");
   g_uri_unref (uri);
-  if (!path || *path != '/' || path_has_dot_dot_segment (path))
+  if (!path || *path != '/' || g_path_is_absolute (path + 1) ||
+      path_has_dot_dot_segment (path))
     {
       state->error = TRUE;
       return FALSE;

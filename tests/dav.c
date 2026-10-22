@@ -830,6 +830,21 @@ test_movecopy_path_traversal (DavFixture *f, gconstpointer user_data)
                       ==, SOUP_STATUS_BAD_REQUEST);
   }
 
+  /* a destination with an empty first segment ("//") would be
+   * resolved against the filesystem root by g_file_get_child():
+   * reject it like an absolute request path (the base URI ends
+   * with a slash, the destination path is thus "//pwned.txt") */
+  {
+    g_autofree gchar *bad = g_strconcat (f->base_uri, "/pwned.txt", NULL);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/source.txt", NULL,
+                                  "Destination", bad, NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/source.txt", NULL,
+                                  "Destination", bad, NULL),
+                      ==, SOUP_STATUS_BAD_REQUEST);
+  }
+
   /* dot-dot segments in a raw Destination path: GLib resolves them
    * during URI parsing before phodav sees the path, but phodav has
    * a defense-in-depth check with path_has_dot_dot_segment(); the
@@ -1354,12 +1369,16 @@ test_lock (DavFixture *f, gconstpointer user_data)
 static void
 test_lock_double_slash (DavFixture *f, gconstpointer user_data)
 {
-  /* empty path segments are ignored: a lock taken on a resource
-   * addressed with a doubled slash can be released again under the
-   * same (or any other equivalent) form of the path */
-  g_autofree gchar *token = lock_resource (f, "//locked.txt", "Second-3600");
+  /* empty path segments are skipped when the path is used as a key
+   * in the lock table: a lock can be released again under an
+   * equivalent spelling of its path.  The empty segment cannot be
+   * leading though: such a request path is rejected outright, see
+   * test_request_path_validation().  (Note that the test client
+   * builds its request URIs with g_build_path(), which collapses a
+   * leading empty segment, but preserves a trailing one.) */
+  g_autofree gchar *token = lock_resource (f, "/locked.txt", "Second-3600");
 
-  g_assert_cmpuint (dav_status (f, "UNLOCK", "//locked.txt", NULL,
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/locked.txt/", NULL,
                                 "Lock-Token", token, NULL),
                     ==, SOUP_STATUS_NO_CONTENT);
 
@@ -1730,6 +1749,10 @@ test_if_malformed (DavFixture *f, gconstpointer user_data)
     "([no-quote])",
     /* tagged-list form with no condition list after the URI */
     "<http://localhost/path>",
+    /* a resource with an empty first path segment ("//") would be
+     * resolved against the filesystem root: reject it like an
+     * absolute request path */
+    "<http://localhost//tmp/pwned.txt> ([\"etag\"])",
   };
   guint i;
 
