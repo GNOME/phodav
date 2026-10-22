@@ -119,7 +119,7 @@ prop_set (SoupServerMessage *msg,
         }
     }
 
-  g_return_val_if_reached (SOUP_STATUS_BAD_REQUEST);
+  return SOUP_STATUS_BAD_REQUEST;
 }
 
 gint

@@ -1283,6 +1283,17 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
   g_test_assert_expected_messages ();
 }
 
+static void
+test_proppatch_empty_prop (DavFixture *f, gconstpointer user_data)
+{
+  /* a set with an empty prop names no property, it is malformed */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop/>"
+                                "</D:set></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+}
+
 /* take an exclusive write lock, returns the Lock-Token header value */
 static gchar *
 lock_resource (DavFixture *f, const gchar *path, const gchar *timeout)
@@ -2530,6 +2541,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/propfind/empty-body", DavFixture, NULL, dav_fixture_setup, test_propfind_empty_body, dav_fixture_teardown);
   g_test_add ("/dav/propfind/errors", DavFixture, NULL, dav_fixture_setup, test_propfind_errors, dav_fixture_teardown);
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
+  g_test_add ("/dav/proppatch/empty-prop", DavFixture, NULL, dav_fixture_setup, test_proppatch_empty_prop, dav_fixture_teardown);
 
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
   g_test_add ("/dav/delete-locked", DavFixture, NULL, dav_fixture_setup, test_delete_locked, dav_fixture_teardown);

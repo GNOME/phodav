@@ -466,7 +466,7 @@ xml_node_has_name (xmlNodePtr node, const gchar *name)
 gboolean G_GNUC_PURE
 xml_node_is_element (xmlNodePtr node)
 {
-  return node->type == XML_ELEMENT_NODE && node->name != NULL;
+  return node != NULL && node->type == XML_ELEMENT_NODE && node->name != NULL;
 }
 
 gchar *

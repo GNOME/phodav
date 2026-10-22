@@ -333,6 +333,7 @@ test_xml_node_helpers (void)
   g_assert_true (xml_node_is_element (root));
   g_assert_true (xml_node_is_element (child));
   g_assert_false (xml_node_is_element (text));
+  g_assert_false (xml_node_is_element (NULL));
 
   g_assert_true (xml_node_has_name (child, "prop"));
   g_assert_false (xml_node_has_name (root, "prop"));
