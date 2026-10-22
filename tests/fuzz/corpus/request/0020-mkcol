@@ -1,0 +1,5 @@
+MKCOL /dir/new HTTP/1.1
+Host: fuzz
+Content-Length: 0
+Connection: close
+

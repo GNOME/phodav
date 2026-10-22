@@ -16,7 +16,7 @@ udev_rulesdir = get_option('udevrulesdir')
 if udev_rulesdir == ''
   udev = dependency('udev', required : false)
   if udev.found()
-    udev_rulesdir = '@0@/@1@'.format(udev.get_variable(pkgconfig: 'udevdir'), 'rules.d')
+    udev_rulesdir = udev.get_variable(pkgconfig: 'udevdir') / 'rules.d'
   endif
 endif
 if udev_rulesdir != ''
@@ -34,10 +34,11 @@ mic = 0
 if version.length() > 2
   mic = version[2].split('-')[0].to_int()
 endif
-win_version = '@0@.@1@.@2@'.format(maj, min, mic * 256 + buildid)
+windows_build = mic * 256 + buildid
+win_version = f'@maj@.@min@.@windows_build@'
 
 if buildid != 0
-  buildid = '-@0@'.format(buildid)
+  buildid = f'-@buildid@'
 else
   buildid = ''
 endif

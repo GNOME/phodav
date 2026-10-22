@@ -1,22 +1,14 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-#include "phodav-utils.h"
+#include "config.h"
+
 #include "phodav-multistatus.h"
+
+#include "phodav-utils.h"
 
 Response *
 response_new (GList *props, gint status)
@@ -25,7 +17,7 @@ response_new (GList *props, gint status)
 
   g_return_val_if_fail (props != NULL || status > 0, NULL);
 
-  r = g_slice_new0 (Response);
+  r = g_new0 (Response, 1);
   r->status = status;
   r->props = props;
 
@@ -36,10 +28,10 @@ void
 response_free (Response *h)
 {
   g_list_free_full (h->props, (GDestroyNotify) xmlFreeNode);
-  g_slice_free (Response, h);
+  g_free (h);
 }
 
-static gchar*
+static gchar *
 status_to_string (gint status)
 {
   return g_strdup_printf ("HTTP/1.1 %d %s",
@@ -50,19 +42,17 @@ static xmlNodePtr
 status_node_new (xmlNsPtr ns, gint status)
 {
   xmlNodePtr node;
-  gchar *text;
+  g_autofree gchar *text = NULL;
 
   text = status_to_string (status);
   node = xmlNewNode (ns, BAD_CAST "status");
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
 
   return node;
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg,
-              const gchar *path, GList *props)
+add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg, const gchar *path, GList *props)
 {
   xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
   GList *s;
@@ -93,14 +83,14 @@ add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg,
 
 gint
 set_response_multistatus (SoupServerMessage *msg,
-                          GHashTable  *mstatus)
+                          GHashTable *mstatus)
 {
   xmlChar *mem = NULL;
-  int size;
+  gint size;
   xmlNodePtr root;
   GHashTableIter iter;
   Response *resp;
-  gchar *path, *text;
+  gchar *path;
   xmlNsPtr ns;
 
   root = xmlNewNode (NULL, BAD_CAST "multistatus");
@@ -111,14 +101,25 @@ set_response_multistatus (SoupServerMessage *msg,
   while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
     {
       xmlNodePtr response;
-      GUri *new_uri;
 
       response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-      new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), path, SOUP_HTTP_URI_FLAGS, NULL);
-      text = g_uri_to_string (new_uri);
-      xmlNewChild (response, ns, BAD_CAST "href", BAD_CAST text);
-      g_free (text);
-      g_uri_unref (new_uri);
+
+      /* the key is the decoded resource path: escape it byte-wise
+       * for the href, where a client would otherwise parse the
+       * characters of the names as URI delimiters ("?" starts a
+       * query, "#" a fragment...). libxml2 escapes the XML special
+       * characters of the text on its own, when the document is
+       * serialized. */
+      g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
+                                                      G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
+      g_autoptr(GUri) new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), escaped,
+                                                      SOUP_HTTP_URI_FLAGS, NULL);
+      g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
+      xmlNodePtr href = xmlNewChild (response, ns, BAD_CAST "href", NULL);
+
+      /* xmlNewText() takes the raw name: the XML special characters
+       * are escaped when the document is serialized */
+      xmlAddChild (href, xmlNewText (BAD_CAST text));
 
       if (resp->props)
         add_propstat (response, ns, msg, path, resp->props);

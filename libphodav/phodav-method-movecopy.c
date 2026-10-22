@@ -1,83 +1,56 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
+#include "config.h"
+
+#include "phodav-lock.h"
 #include "phodav-priv.h"
 #include "phodav-utils.h"
-#include "phodav-lock.h"
 #include "phodav-virtual-dir.h"
 
 static gboolean
-do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags,
-           GCancellable *cancellable, GError **err)
+do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
-  GFileEnumerator *e = NULL;
-  gboolean success = FALSE;
-  GFile *src_child = NULL;
-  GFile *dest_child = NULL;
+  g_autoptr(GFileEnumerator) e = NULL;
 
   if (!g_file_make_directory_with_parents (dest, cancellable, err))
-    goto end;
+    return FALSE;
 
   e = g_file_enumerate_children (src, "standard::*", G_FILE_QUERY_INFO_NONE,
                                  cancellable, err);
   if (!e)
-    goto end;
+    return FALSE;
 
   while (1)
     {
-      GFileInfo *info = g_file_enumerator_next_file (e, cancellable, err);
+      g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, err);
       if (!info)
         break;
 
-      src_child = g_file_get_child (src, g_file_info_get_name (info));
-      dest_child = g_file_get_child (dest, g_file_info_get_name (info));
+      g_autoptr(GFile) src_child = g_file_get_child (src, g_file_info_get_name (info));
+      g_autoptr(GFile) dest_child = g_file_get_child (dest, g_file_info_get_name (info));
       gboolean isdir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
-      g_object_unref (info);
 
       if (isdir)
         {
           if (!do_copy_r (src_child, dest_child, flags, cancellable, err))
-            goto end;
+            return FALSE;
         }
       else if (!g_file_copy (src_child, dest_child, flags, cancellable, NULL, NULL, err))
-        goto end;
-
-      g_clear_object (&src_child);
-      g_clear_object (&dest_child);
+        return FALSE;
     }
 
-  success = TRUE;
-
-end:
-  g_clear_object (&e);
-  g_clear_object (&src_child);
-  g_clear_object (&dest_child);
-
-  return success;
+  return TRUE;
 }
 
 static gint
-do_movecopy_file (SoupServerMessage *msg, GFile *file,
-                  GFile *dest, const gchar *dest_path,
-                  GCancellable *cancellable, GError **err)
+do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gboolean overwrite;
-  DepthType depth;
   gint status = SOUP_STATUS_PRECONDITION_FAILED;
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
@@ -85,60 +58,49 @@ do_movecopy_file (SoupServerMessage *msg, GFile *file,
   gboolean retry = FALSE;
   gboolean exists;
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
   overwrite = !!g_strcmp0 (
     soup_message_headers_get_one (request_headers, "Overwrite"), "F");
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
   exists = g_file_query_exists (dest, cancellable);
 
+  /* the request was validated to be depth 0 or infinity */
 again:
-  switch (depth)
+  copy
+    ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
+    : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
+
+  if (overwrite && !retry &&
+      (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
+       g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
+      phodav_delete_file (dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
-    case DEPTH_INFINITY:
-    case DEPTH_ZERO: {
-        copy
-        ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
-        : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
-
-        if (overwrite && !retry &&
-            (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
-             g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
-            phodav_delete_file (dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
-          {
-            g_clear_error (&error);
-            retry = TRUE;
-            goto again;
-          }
-        else if (!overwrite &&
-                 g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-          {
-            g_clear_error (&error);
-            goto end;
-          }
-        else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
-          {
-            g_clear_error (&error);
-            if (copy)
-              {
-                if (depth == DEPTH_INFINITY)
-                  do_copy_r (file, dest, flags, cancellable, &error);
-                else
-                  g_file_make_directory_with_parents (dest, cancellable, &error);
-              }
-          }
-        else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-          {
-            status = SOUP_STATUS_CONFLICT;
-            g_clear_error (&error);
-            goto end;
-          }
-
-        break;
-      }
-
-    default:
-      g_warn_if_reached ();
+      g_clear_error (&error);
+      retry = TRUE;
+      goto again;
+    }
+  else if (!overwrite &&
+           g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    {
+      g_clear_error (&error);
+      goto end;
+    }
+  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
+    {
+      g_clear_error (&error);
+      if (copy)
+        {
+          if (depth == DEPTH_INFINITY)
+            do_copy_r (file, dest, flags, cancellable, &error);
+          else
+            g_file_make_directory_with_parents (dest, cancellable, &error);
+        }
+    }
+  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    {
+      status = SOUP_STATUS_CONFLICT;
+      g_clear_error (&error);
+      goto end;
     }
 
   if (error)
@@ -151,38 +113,65 @@ end:
 }
 
 gint
-phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
-                        const char *path, GError **err)
+phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
-  gchar *udest;
-  GList *submitted = NULL;
+  DepthType depth = DEPTH_INFINITY;
+  g_autofree gchar *udest = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
-  dest = soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Destination");
+  /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
+   * are valid for COPY and MOVE, an invalid depth must be rejected
+   * with 400 */
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth) ||
+      depth == DEPTH_ONE)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
+  dest = soup_message_headers_get_one (request_headers, "Destination");
   if (!dest)
     goto end;
   dest_uri = g_uri_parse (dest, SOUP_HTTP_URI_FLAGS, NULL);
+  if (!dest_uri)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
   dest = g_uri_get_path (dest_uri);
   if (!dest || !*dest)
     goto end;
+
+  /* like the request path, reject encoded slashes: they would survive
+   * dot-segment removal and allow escaping the root once decoded;
+   * and an empty first segment ("//"), which g_file_get_child()
+   * would resolve against the filesystem root */
+  udest = g_uri_unescape_string (dest, "/");
+  if (!udest || *udest != '/' || g_path_is_absolute (udest + 1) ||
+      path_has_dot_dot_segment (udest))
+    {
+      g_debug ("invalid destination path: %s", dest);
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
 
   status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  if (server_path_has_other_locks (handler_get_server (handler), dest, submitted))
+  if (server_path_has_other_locks (handler_get_server (handler), udest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
     }
 
-  udest = g_uri_unescape_string (dest + 1, NULL);
-  dest_file = g_file_get_child (handler_get_file (handler), udest);
-  g_free (udest);
+  dest_file = g_file_get_child (handler_get_file (handler), udest + 1);
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
 
@@ -192,7 +181,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg,
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, file, dest_file, dest,
+  status = do_movecopy_file (msg, file, dest_file, udest, depth,
                              cancellable, err);
 
 end:
@@ -200,6 +189,5 @@ end:
     g_uri_unref (dest_uri);
   g_clear_object (&file);
   g_clear_object (&dest_file);
-  g_list_free_full (submitted, (GDestroyNotify) lock_submitted_free);
   return status;
 }

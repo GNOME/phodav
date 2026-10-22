@@ -1,23 +1,57 @@
-image: fedora:38
+image: fedora:44
+
+include:
+  # the GNOME release service uploads the tarball exported by the
+  # "build" job to download.gnome.org and creates a GitLab release,
+  # when the pipeline is triggered by a protected tag; see
+  # https://handbook.gnome.org/maintainers/release-pipeline.html
+  - component: "gitlab.gnome.org/GNOME/citemplates/release-service@master"
+    inputs:
+      job-stage: "release"
+      dist-job-name: "build"
 
 stages:
   - build
   - test
+  - release
+
+# the component job only needs "build", so without this override a tag
+# pipeline would publish the tarball even when a test job fails: a job
+# with needs starts as soon as its dependencies succeed, regardless of
+# the remaining jobs of the earlier stages
+release-service:
+  needs:
+    - job: build
+      artifacts: true
+    - job: formatting
+    - job: gobject-linter
+    - job: warnings
+    - job: static-analysis
+    - job: build_win
+    - job: test
+    - job: test_win
+    - job: sanitizers
+    - job: fuzzing
+    - job: coverage
 
 variables:
   DEPENDENCIES:
-    asciidoc
     avahi-gobject-devel
     gcc
-    gcc-c++
     gettext
+    gi-docgen
     git
+    gobject-introspection-devel
     libsoup3-devel
     libxml2-devel
     meson
+    scdoc
     systemd-devel
-    systemd-units
-    xmlto
+
+  # litmus has been retired from Fedora; the test jobs build it from
+  # source as a meson subproject, which needs neon
+  LITMUS_DEPENDENCIES:
+    neon-devel
 
   WIN_DEPENDENCIES:
     dos2unix
@@ -26,73 +60,257 @@ variables:
     gettext
     git
     meson
-    mingw32-libsoup
-    mingw64-libsoup
-    mingw32-readline
-    mingw64-readline
+    mingw32-gcc
+    mingw64-gcc
+    mingw32-libxml2
+    mingw64-libxml2
+    mingw32-libsoup3
+    mingw64-libsoup3
     msitools
 
 build:
   stage: build
   before_script:
-    - dnf update -y --nogpgcheck
     - dnf install -y --nogpgcheck $DEPENDENCIES
-    - mkdir dev
   script:
-    - meson build
-    - ninja -C build dist
-    # avahi is not needed to test with litmus, so build without it,
-    # otherwise we would need another image with systemd
-    - meson --prefix=$(pwd)/dev -Davahi=disabled build-no-avahi
-    - ninja -C build-no-avahi install
+    # avahi needs a system bus, which is not available in the container,
+    # and the spice-webdavd of the dist test run refuses to start without
+    # the avahi daemon (see the test job)
+    - meson setup -Davahi=disabled build
+    - meson dist -C build
+    # export the dist tarball and its checksum for the release service
+    # component, which uploads them on protected tag pipelines
+    - mkdir -p public-dist && cp -a build/meson-dist/. public-dist/
+    # check that the project installs correctly
+    - meson install -C build --destdir "$(pwd)/install-root"
   artifacts:
     paths:
       - build/meson-logs/*.txt
-      - dev
-      - build-no-avahi/tests/virtual-dir-server
+      - public-dist/
     expire_in: 1 week
     when: always
 
-# Temporarily disabled because libsoup 3 is not yet available:
-# https://gitlab.gnome.org/GNOME/phodav/-/merge_requests/27#note_1488522
-#
-#build_win:
-#  stage: build
-#  before_script:
-#    - rm -f /etc/rpm/macros.image-language-conf
-#    - dnf update -y --nogpgcheck
-#    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
-#  script:
-#    - mkdir w32 && cd w32 && mingw32-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-#    - pwd
-#    - ls
-#    - cd ..
-#    - mkdir w64 && cd w64 && mingw64-meson -Dgtk_doc=disabled && ninja && sh -x data/make-msi.sh
-#  artifacts:
-#    paths:
-#      - w32/*.msi
-#      - w64/*.msi
-#      - w32/meson-logs/*.txt
-#      - w64/meson-logs/*.txt
-#    expire_in: 1 week
-#    when: always
-
-litmus:
-  stage: test
-  dependencies:
-    - build
+formatting:
+  stage: build
+  # The .clang-format file requires clang-format >= 17 ("Language: C");
+  # keep this image in sync with the version the sources were formatted with
+  image: fedora:44
   before_script:
-    - dnf install -y litmus libsoup3 nmap-ncat
-  variables:
-    TESTS: basic copymove props locks http
+    - dnf install -y --nogpgcheck clang-tools-extra
   script:
-    - export LD_LIBRARY_PATH=$(pwd)/dev/lib64/
-    - ./dev/bin/chezdav &
-    # wait for the port to open
-    - while ! nc -z localhost 8080; do sleep 1s; done
-    - litmus --keep-going dav://localhost:8080/
-    - kill $!
-    # check that virtual root works as well
-    - ./build-no-avahi/tests/virtual-dir-server &
-    - while ! nc -z localhost 8080; do sleep 1s; done
-    - litmus dav://localhost:8080/
+    - clang-format --version
+    - find libphodav bin tests -name '*.[ch]' -print0 | xargs -0 clang-format --dry-run -Werror
+
+gobject-linter:
+  stage: build
+  # The tree-sitter based GObject/C linter, from its own upstream image.
+  # The rules are configured in .gobject-linter.toml, which makes every
+  # violation fail the job; the same configuration is enforced by the
+  # pre-commit hooks. The image has a non-shell entrypoint, which the
+  # runner has to override.
+  image:
+    name: ghcr.io/bilelmoussaoui/gobject-linter:latest
+    entrypoint: [""]
+  script:
+    - gobject-linter
+
+warnings:
+  stage: build
+  before_script:
+    - dnf install -y --nogpgcheck $DEPENDENCIES
+  script:
+    - meson setup -Dwerror=true build-werror
+    - meson compile -C build-werror
+
+static-analysis:
+  stage: build
+  before_script:
+    - dnf install -y --nogpgcheck $DEPENDENCIES clang-analyzer
+  script:
+    # the dead stores checker is disabled: GLib marks its warning macros
+    # (g_warn_if_reached()...) as analyzer-noreturn, so the usual "warn,
+    # then set the status" error handling pattern reads as a dead store
+    - SCANBUILD="scan-build -o scanbuild-report --status-bugs -disable-checker deadcode.DeadStores"
+    - $SCANBUILD meson setup -Davahi=enabled -Ddocs=disabled -Dintrospection=disabled build-scanbuild
+    - $SCANBUILD ninja -C build-scanbuild
+  artifacts:
+    when: on_failure
+    paths:
+      - scanbuild-report/
+
+build_win:
+  stage: build
+  image: fedora:45
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES
+  script:
+    - mkdir w32 && cd w32 && mingw32-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
+    - cd ..
+    - mkdir w64 && cd w64 && mingw64-meson -Ddocs=disabled -Dintrospection=disabled && ninja && sh -x data/make-msi.sh
+  artifacts:
+    paths:
+      - w32/*.msi
+      - w64/*.msi
+      - w32/meson-logs/*.txt
+      - w64/meson-logs/*.txt
+    expire_in: 1 week
+    when: always
+
+# the GNOME release service publishes the source tarball on
+# download.gnome.org only; attach the Windows installers built by
+# build_win to the GitLab release, storing them durably in the package
+# registry and linking them from the release
+release-msi:
+  stage: release
+  image: alpine:latest
+  needs:
+    - job: release-service
+    - job: build_win
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_PROTECTED
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      api="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      links=$(curl -sf --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$api/releases/$CI_COMMIT_TAG/assets/links")
+      for msi in w32/*.msi w64/*.msi; do
+        [ -f "$msi" ] || continue
+        name=$(basename "$msi")
+        url="$api/packages/generic/phodav/$CI_COMMIT_TAG/$name"
+        # the job may be retried, don't fail on the files it already published
+        if ! curl -sfI --header "JOB-TOKEN: $CI_JOB_TOKEN" "$url" >/dev/null; then
+          echo "uploading $name to the package registry"
+          curl --fail-with-body --silent --show-error \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --upload-file "$msi" "$url"
+        fi
+        if ! printf '%s' "$links" | jq -e --arg name "$name" 'any(.[]; .name == $name)' >/dev/null; then
+          echo "linking $name from the release"
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$(jq -n --arg name "$name" --arg url "$url" \
+              '{name: $name, url: $url, direct_asset_path: ("/" + $name), link_type: "package"}')" \
+            "$api/releases/$CI_COMMIT_TAG/assets/links"
+        fi
+      done
+
+test_win:
+  stage: test
+  needs: []
+  variables:
+    # the g_strerror() of the mingw GLib converts the message with the
+    # console charset: without $LANG it queries the console output code
+    # page, which fails under Wine without a console, and the warning
+    # it emits is fatal to the g_test programs
+    LANG: C.UTF-8
+  before_script:
+    - rm -f /etc/rpm/macros.image-language-conf
+    - dnf install -y --nogpgcheck $WIN_DEPENDENCIES wine mingw64-gsettings-desktop-schemas
+    # the tests connect with a SoupSession, which resolves the proxies
+    # through GLib: the gnome resolver of the mingw glib-networking
+    # reads the org.gnome.system.proxy schema and aborts when no
+    # compiled schema can be found. Compile the schemas of the mingw
+    # sysroot, like an installed Windows system would have them.
+    - WINEDLLOVERRIDES="mscoree,mshtml=" wine64 /usr/x86_64-w64-mingw32/sys-root/mingw/bin/glib-compile-schemas.exe /usr/x86_64-w64-mingw32/sys-root/mingw/share/glib-2.0/schemas
+  script:
+    # wine runs the cross-compiled tests, as the executable wrapper
+    # of an additional machine file (see build-aux/wine-exe-wrapper.meson)
+    - mkdir w64-test && cd w64-test
+    - mingw64-meson --cross-file ../build-aux/wine-exe-wrapper.meson -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=disabled
+    - ninja
+    # the mingw DLLs and the freshly built ones must be on the DLL
+    # search path; WINEDLLOVERRIDES keeps the first wine run from
+    # trying to install wine-mono and wine-gecko; wine is slower
+    # than a native run, give the tests more time
+    - export WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
+    - export WINEPATH="Z:\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;$(winepath -w "$(pwd)/libphodav");$(winepath -w "$(pwd)/bin")"
+    - meson test --print-errorlogs --timeout-multiplier 2
+  artifacts:
+    when: on_failure
+    paths:
+      - w64-test/meson-logs/*.txt
+    expire_in: 1 week
+
+.litmus:
+  before_script:
+    - dnf install -y --nogpgcheck $DEPENDENCIES $LITMUS_DEPENDENCIES
+
+test:
+  extends: .litmus
+  stage: test
+  needs: []
+  script:
+    # avahi needs a system bus, which is not available in the container
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled build-test
+    - meson test -C build-test --print-errorlogs
+
+sanitizers:
+  extends: .litmus
+  stage: test
+  needs: []
+  variables:
+    # make undefined behaviour abort the tests
+    UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  script:
+    # the sanitizer runtimes are not pulled in by gcc on Fedora
+    - dnf install -y --nogpgcheck libasan libubsan
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_sanitize=address,undefined build-sanitize
+    - meson test -C build-sanitize --print-errorlogs
+
+fuzzing:
+  stage: test
+  needs: []
+  variables:
+    # meson would otherwise pick gcc, which does not implement libFuzzer
+    CC: clang
+  before_script:
+    # the address sanitizer catches the memory errors during the fuzzing
+    - dnf install -y --nogpgcheck $DEPENDENCIES clang
+  script:
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=disabled -Dfuzzing=enabled -Db_sanitize=address build-fuzz
+    # the seed corpora run as smoke tests
+    - meson test -C build-fuzz fuzz-request fuzz-body --print-errorlogs
+    # then fuzz for a bounded time, from copies of the corpora which
+    # libFuzzer extends with the new inputs it finds; the leaks of
+    # the whole process would drown the actual findings
+    - cp -r tests/fuzz/corpus/request build-fuzz/corpus-request
+    - cp -r tests/fuzz/corpus/body build-fuzz/corpus-body
+    - ./build-fuzz/tests/fuzz/fuzz-request -max_total_time=90 -detect_leaks=0 -rss_limit_mb=2560 build-fuzz/corpus-request
+    - ./build-fuzz/tests/fuzz/fuzz-body -max_total_time=90 -detect_leaks=0 -rss_limit_mb=2560 build-fuzz/corpus-body
+
+coverage:
+  extends: .litmus
+  stage: test
+  needs: []
+  # extract the total line coverage from the gcovr report in the job log
+  coverage: '/^TOTAL.+?(\d+\%)$/'
+  script:
+    # gcovr is needed to turn the gcov data into a report
+    - dnf install -y --nogpgcheck gcovr
+    - meson setup -Davahi=disabled -Ddocs=disabled -Dintrospection=disabled -Dlitmus=enabled -Db_coverage=true build-coverage
+    # build all the targets, so that the report covers every source file
+    # and not just those needed to run the tests
+    - meson compile -C build-coverage
+    - meson test -C build-coverage --print-errorlogs
+    # the report covers the project sources only: the litmus subproject
+    # and the test programs themselves are excluded; the line and branch
+    # coverage minimums fail the job when they regress below them
+    - mkdir -p build-coverage/meson-logs/coveragereport
+    - gcovr -r . build-coverage
+        --exclude subprojects
+        --exclude tests
+        --fail-under-line 90
+        --fail-under-branch 75
+        --txt -
+        --html-nested build-coverage/meson-logs/coveragereport/index.html
+  artifacts:
+    paths:
+      - build-coverage/meson-logs/coveragereport/
+    expire_in: 1 week
+    when: always

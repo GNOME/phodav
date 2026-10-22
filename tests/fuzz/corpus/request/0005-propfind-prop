@@ -1,0 +1,7 @@
+PROPFIND /dir HTTP/1.1
+Host: fuzz
+Depth: 1
+Content-Length: 135
+Connection: close
+
+<D:propfind xmlns:D="DAV:"><D:prop><D:getcontentlength/><D:getetag/><D:resourcetype/><D:displayname/><D:unknown/></D:prop></D:propfind>

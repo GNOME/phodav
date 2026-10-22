@@ -1,23 +1,15 @@
 /*
  * Copyright (C) 2014 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
+#include "config.h"
+
 #include "phodav-lock.h"
-#include "phodav-utils.h"
+
 #include "phodav-path.h"
+#include "phodav-utils.h"
 
 void
 dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
@@ -28,20 +20,25 @@ dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
     lock->timeout = 0;
 }
 
+gboolean
+dav_lock_is_expired (const DAVLock *lock)
+{
+  return lock->timeout != 0 &&
+         (guint64) (g_get_monotonic_time () / G_USEC_PER_SEC) >= lock->timeout;
+}
+
 DAVLock *
-dav_lock_new (Path *path, const gchar *token,
-              DAVLockScopeType scope, DAVLockType type,
-              DepthType depth, const xmlNodePtr owner,
-              guint timeout)
+dav_lock_new (Path *path, const gchar *token, DAVLockScopeType scope, DAVLockType type, DepthType depth, const xmlNodePtr owner, guint timeout)
 {
   DAVLock *lock;
 
   g_return_val_if_fail (token, NULL);
-  g_return_val_if_fail (strlen (token) == sizeof (lock->token), NULL);
+  g_return_val_if_fail (strlen (token) == DAV_LOCK_TOKEN_LENGTH, NULL);
 
-  lock = g_slice_new0 (DAVLock);
+  lock = g_new0 (DAVLock, 1);
   lock->path = path_ref (path);
-  memcpy (lock->token, token, sizeof (lock->token));
+  /* copy the NUL terminator too, do not rely on the struct padding */
+  memcpy (lock->token, token, DAV_LOCK_TOKEN_LENGTH + 1);
   lock->scope = scope;
   lock->type = type;
   lock->depth = depth;
@@ -64,7 +61,7 @@ dav_lock_free (DAVLock *lock)
   if (lock->owner)
     xmlFreeNode (lock->owner);
 
-  g_slice_free (DAVLock, lock);
+  g_free (lock);
 }
 
 static const gchar *
@@ -89,7 +86,7 @@ lockscope_to_string (DAVLockScopeType type)
 
 xmlNodePtr
 dav_lock_get_activelock_node (const DAVLock *lock,
-                              xmlNsPtr       ns)
+                              xmlNsPtr ns)
 {
   xmlNodePtr node, active;
 
@@ -114,11 +111,10 @@ dav_lock_get_activelock_node (const DAVLock *lock,
   xmlAddChild (node, xmlNewText (BAD_CAST lock->path->path));
   if (lock->timeout)
     {
-      gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -
-                                    g_get_monotonic_time () / G_USEC_PER_SEC);
+      g_autofree gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -
+                                                                             g_get_monotonic_time () / G_USEC_PER_SEC);
       node = xmlNewChild (active, ns, BAD_CAST "timeout", NULL);
       xmlAddChild (node, xmlNewText (BAD_CAST tmp));
-      g_free (tmp);
     }
 
   return active;
@@ -132,7 +128,7 @@ lock_submitted_new (const gchar *path, const gchar *token)
   g_return_val_if_fail (path, NULL);
   g_return_val_if_fail (token, NULL);
 
-  l = g_slice_new (LockSubmitted);
+  l = g_new (LockSubmitted, 1);
 
   l->path = g_strdup (path);
   l->token = g_strdup (token);
@@ -147,7 +143,15 @@ lock_submitted_free (LockSubmitted *l)
 {
   g_free (l->path);
   g_free (l->token);
-  g_slice_free (LockSubmitted, l);
+  g_free (l);
+}
+
+/* the token may be submitted for the locked resource itself or for
+ * any resource covered by the lock */
+static gboolean
+locks_submitted_path_has (const gchar *path, const gchar *lock_path)
+{
+  return path_is_covered (path, lock_path);
 }
 
 gboolean
@@ -156,14 +160,15 @@ locks_submitted_has (GList *locks, DAVLock *lock)
   GList *l;
 
   for (l = locks; l != NULL; l = l->next)
-  {
-    LockSubmitted *sub = l->data;
-    if (!g_strcmp0 (sub->path, lock->path->path) &&
-        !g_strcmp0 (sub->token, lock->token))
-      return TRUE;
-  }
+    {
+      LockSubmitted *sub = l->data;
 
-  g_message ("missing lock: %s %s", lock->path->path, lock->token);
+      if (g_strcmp0 (sub->token, lock->token) == 0 &&
+          locks_submitted_path_has (sub->path, lock->path->path))
+        return TRUE;
+    }
+
+  g_debug ("missing lock: %s %s", lock->path->path, lock->token);
 
   return FALSE;
 }

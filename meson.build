@@ -5,29 +5,29 @@ project(
     '@0@/.tarball-version'.format(meson.project_source_root()),
     check : true
   ).stdout().strip(),
-  license : 'LGPLv2.1',
-  meson_version : '>= 0.56',
+  license : 'LGPL-2.1-or-later',
+  meson_version : '>= 1.0',
 )
 
-meson.add_dist_script('sh', '-c', 'echo @0@>"$MESON_DIST_ROOT/.tarball-version"'.format(meson.project_version()))
-
 proj_version = meson.project_version()
+meson.add_dist_script('sh', '-c', f'echo @proj_version@>"$MESON_DIST_ROOT/.tarball-version"')
+
 proj_name = meson.project_name()
 proj_gettext = 'phodav-3.0'
 proj_bugurl = 'https://gitlab.gnome.org/GNOME/phodav/issues/new'
 
 gnome = import('gnome')
 prefix = get_option('prefix')
-sbindir = join_paths(prefix, get_option('sbindir'))
-datadir = join_paths(prefix, get_option('datadir'))
-mandir = join_paths(prefix, get_option('mandir'))
-localedir = join_paths(datadir, 'locale')
+sbindir = prefix / get_option('sbindir')
+datadir = prefix / get_option('datadir')
+mandir = prefix / get_option('mandir')
+localedir = datadir / 'locale'
 incdir = include_directories('.')
 
 compiler = meson.get_compiler('c')
 conf = configuration_data()
 
-glib_ver = '>= 2.76'
+glib_ver = '>= 2.80'
 
 deps = []
 if host_machine.system() == 'windows'
@@ -51,6 +51,19 @@ if compiler.has_header('sys/xattr.h')
   conf.set('HAVE_SYS_XATTR_H', 1)
 endif
 
+# Turn any accidental use of an API which is deprecated, or only
+# available in a newer version than the ones supported here, into a
+# compiler warning: the CI builds with -Dwerror=true, so that it fails
+# the build. Keep the versions in sync with the dependency checks
+# above.
+add_project_arguments(
+  '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_80',
+  '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_80',
+  '-DSOUP_VERSION_MIN_REQUIRED=SOUP_VERSION_3_0',
+  '-DSOUP_VERSION_MAX_ALLOWED=SOUP_VERSION_3_0',
+  language : 'c',
+)
+
 subdir('po')
 subdir('libphodav')
 subdir('bin')
@@ -63,7 +76,7 @@ config = {
   'LOCALEDIR' : localedir,
   'PACKAGE_BUGREPORT' : proj_bugurl,
   'PACKAGE_NAME' : proj_name,
-  'PACKAGE_STRING' : '@0@ @1@'.format(proj_name, proj_version),
+  'PACKAGE_STRING' : f'@proj_name@ @proj_version@',
   'PACKAGE_VERSION' : proj_version,
   'VERSION' : proj_version,
 }
@@ -76,3 +89,13 @@ configure_file(
   install : false,
   configuration : conf
 )
+
+summary({
+  'mDNS / Avahi support' : d1.found() and d2.found(),
+  'xattr support' : conf.has('HAVE_SYS_XATTR_H'),
+  'Introspection data' : build_gir,
+  'API reference (gi-docgen)' : build_docs,
+  'Manual pages' : build_man,
+  'systemd unit directory' : systemd_systemunitdir,
+  'udev rules directory' : udev_rulesdir,
+}, section : 'Configuration')

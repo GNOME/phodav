@@ -1,0 +1,7 @@
+MOVE /dir/file HTTP/1.1
+Host: fuzz
+Destination: /dir/moved
+Overwrite: F
+If: (Not <DAV:no-lock>)
+Connection: close
+

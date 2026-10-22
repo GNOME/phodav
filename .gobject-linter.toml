@@ -1,0 +1,7 @@
+ignore = [
+    "subprojects/**",
+]
+
+# make every violation fail (exit code 1), so that the pre-commit
+# hook and CI can enforce the rules
+default_level = "error"

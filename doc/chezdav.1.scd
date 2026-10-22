@@ -1,0 +1,100 @@
+chezdav(1)
+
+# NAME
+
+chezdav - simple WebDAV server
+
+# SYNOPSIS
+
+*chezdav* [_OPTIONS_...]
+
+# DESCRIPTION
+
+The *chezdav* command starts a WebDAV server. This allows clients to access
+your files, and modify them. A simple Web browser is sufficient to browse for
+files. The default shared folder is the home directory, but you may specify a
+different folder with the *-P* option.
+
+# OPTIONS
+
+*-P*, *--path*=_PATH_
+	Path to export.
+
+*-p*, *--port*=_PORT_
+	Port to listen from. The default is 8080.
+
+*-s*, *--socket*=_PATH_
+	Listen on the Unix socket at PATH instead of a TCP port. On Unix, the
+	socket is created with owner-only permissions. The socket is removed
+	when the server exits cleanly. This is mutually exclusive with
+	*--port*, *--local* and *--public*. On Windows, this requires Windows
+	10 version 1803 or later.
+
+*--local*
+	Listen on loopback interface only.
+
+*--public*
+	Listen on all network interfaces.
+
+*--no-mdns*
+	Don't broadcast the share on the local network. By default, shares are
+	broadcast with mDNS/DNS-SD (when compiled with Avahi).
+
+*-d*, *--htdigest*=_PATH_
+	Path to a htdigest file, to secure the server with DIGEST authentication.
+
+*--realm*=_REALM_
+	The DIGEST realm string (must be identical to the string used in the
+	htdigest file). The default value is "USER's public share" (where USER is
+	the owner's username of the current process).
+
+*-r*, *--readonly*
+	Read-only access.
+
+*--max-upload*=_SIZE_
+	Refuse PUT uploads larger than SIZE bytes, answering them with 413 Request
+	Entity Too Large and discarding the partial file. By default, the upload
+	size is not limited.
+
+*--tls-cert*=_CERT_
+	Serve the share over HTTPS rather than plain HTTP, using the TLS
+	certificate in CERT. The file must be PEM formatted; it must contain the
+	private key too, unless it is given separately with *--tls-key*. Without
+	authentication, plain HTTP exposes the shared files and the DIGEST
+	credentials to anyone able to eavesdrop the network, so consider pairing
+	this option with *--htdigest*.
+
+*--tls-key*=_KEY_
+	Path to a PEM formatted TLS private key, when it is not included in the
+	certificate file. Requires *--tls-cert*.
+
+*-v*, *--verbose*
+	Verbosely print running information.
+
+*--version*
+	Print program version number.
+
+# EXIT STATUS
+
+*0*
+	Success
+
+*1*
+	Failure (syntax or usage error; unexpected error).
+
+# SEE ALSO
+
+*htdigest*(1)
+
+# AUTHORS
+
+chezdav was originally written by Marc-André Lureau.
+
+# RESOURCES
+
+Main web site: https://gitlab.gnome.org/GNOME/phodav
+
+# COPYING
+
+Copyright (C) 2013-2014 Red Hat, Inc. Free use of this software is granted
+under the terms of the GNU Lesser General Public License (LGPL).

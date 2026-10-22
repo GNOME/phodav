@@ -1,34 +1,25 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-#include "phodav-priv.h"
+#include "config.h"
 
-#include "guuid.h"
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
-#include "phodav-lock.h"
+#include "phodav-priv.h"
 #include "phodav-utils.h"
 
-static gboolean G_GNUC_PURE
+static gboolean
 check_lock (const gchar *key, Path *path, gpointer data)
 {
   DAVLock *lock = data;
   DAVLock *other = NULL;
   GList *l;
+
+  path_expire_locks (path);
 
   for (l = path->locks; l; l = l->next)
     {
@@ -51,6 +42,12 @@ try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
   if (!server_foreach_parent_path (server, path, check_lock, lock))
     return FALSE;
 
+  /* RFC 4918 section 7.4: a depth-infinity lock on a collection must
+   * fail when a member is locked in a conflicting manner */
+  if (lock->depth == DEPTH_INFINITY &&
+      server_tree_has_lock_conflict (server, path, lock))
+    return FALSE;
+
   p = server_get_path (server, path);
   path_add_lock (p, lock);
 
@@ -58,28 +55,19 @@ try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
 }
 
 static gboolean
-lock_ensure_file (PathHandler *handler, const char *path,
-                  GCancellable *cancellable, GError **err)
+lock_ensure_file (PathHandler *handler, const gchar *path, GCancellable *cancellable, GError **err)
 {
-  GError *e = NULL;
-  GFileOutputStream *stream = NULL;
-  GFile *file = NULL;
+  g_autoptr(GError) e = NULL;
+  g_autoptr(GFileOutputStream) stream = NULL;
+  g_autoptr(GFile) file = NULL;
   gboolean created = FALSE;
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
   stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &e);
   created = !!stream;
 
-  if (e)
-    {
-      if (g_error_matches (e, G_IO_ERROR, G_IO_ERROR_EXISTS))
-        g_clear_error (&e);
-      else
-        g_propagate_error (err, e);
-    }
-
-  g_clear_object (&stream);
-  g_clear_object (&file);
+  if (e && !g_error_matches (e, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    g_propagate_error (err, g_steal_pointer (&e));
 
   return created;
 }
@@ -96,9 +84,9 @@ parse_lockscope (xmlNodePtr rt)
   if (node == NULL)
     return DAV_LOCK_SCOPE_NONE;
 
-  if (!g_strcmp0 ((char *) node->name, "exclusive"))
+  if (g_strcmp0 ((char *) node->name, "exclusive") == 0)
     return DAV_LOCK_SCOPE_EXCLUSIVE;
-  else if (!g_strcmp0 ((char *) node->name, "shared"))
+  else if (g_strcmp0 ((char *) node->name, "shared") == 0)
     return DAV_LOCK_SCOPE_SHARED;
   else
     return DAV_LOCK_SCOPE_NONE;
@@ -116,65 +104,79 @@ parse_locktype (xmlNodePtr rt)
   if (node == NULL)
     return DAV_LOCK_NONE;
 
-  if (!g_strcmp0 ((char *) node->name, "write"))
+  if (g_strcmp0 ((char *) node->name, "write") == 0)
     return DAV_LOCK_WRITE;
   else
     return DAV_LOCK_NONE;
 }
 
 gint
-phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
-                    const char *path, GError **err)
+phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   Path *lpath = NULL;
   xmlChar *mem = NULL;
-  int size = 0;
-  DavDoc doc = {0, };
+  gint size = 0;
+  g_auto(DavDoc) doc = {
+    0,
+  };
   xmlNodePtr node = NULL, owner = NULL, root = NULL;
   xmlNsPtr ns = NULL;
-  DAVLockScopeType scope = DAV_LOCK_SCOPE_SHARED;
-  DAVLockType type;
+  DAVLockScopeType scope = DAV_LOCK_SCOPE_NONE;
+  DAVLockType type = DAV_LOCK_NONE;
   DepthType depth;
   guint timeout;
-  gchar *ltoken = NULL, *uuid = NULL, *token = NULL;
+  g_autofree gchar *ltoken = NULL;
+  g_autofree gchar *uuid = NULL;
+  g_autofree gchar *token = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean created;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageBody *request_body;
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
-  timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
-
-  if (depth != DEPTH_ZERO && depth != DEPTH_INFINITY)
+  /* RFC 4918 section 10.2: only the depths 0 and infinity are valid
+   * for a LOCK, and an invalid depth must be rejected */
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth) ||
+      depth == DEPTH_ONE)
     goto end;
+
+  timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
 
   request_body = soup_server_message_get_request_body (msg);
   if (!request_body->length)
     {
-      const gchar *hif = soup_message_headers_get_one (request_headers, "If");
-      if(!hif)
+      /* an empty body refreshes an existing lock, which must be
+       * identified with an If header (RFC 4918 section 9.10.2) */
+      status = phodav_check_if_refresh (handler, msg, path, &submitted);
+      if (status != SOUP_STATUS_OK)
         goto end;
 
-      gint len = strlen (hif);
-      if (len <= 4 || hif[0] != '(' || hif[1] != '<' || hif[len - 2] != '>' || hif[len - 1] != ')')
-        goto end;
+      /* the lock to refresh is the one covering the path among the
+       * tokens submitted with the If header */
+      for (GList *l = submitted; l != NULL; l = l->next)
+        {
+          LockSubmitted *sub = l->data;
 
-      token = g_strndup (hif + 2, len - 4);
-
-      g_debug ("refresh token %s", token);
-      lock = server_path_get_lock (handler_get_server (handler), path, token);
+          lock = server_path_lookup_lock (handler_get_server (handler), path, sub->token);
+          if (lock)
+            break;
+        }
 
       if (!lock)
-        goto end;
+        {
+          status = SOUP_STATUS_BAD_REQUEST;
+          goto end;
+        }
 
+      g_debug ("refresh token %s", lock->token);
       dav_lock_refresh_timeout (lock, timeout);
       status = SOUP_STATUS_OK;
       goto body;
     }
 
-  if (!davdoc_parse (&doc, msg, request_body, "lockinfo"))
+  if (!davdoc_parse (&doc, request_body, "lockinfo"))
     goto end;
 
   node = doc.root;
@@ -204,6 +206,9 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
         }
     }
 
+  if (scope == DAV_LOCK_SCOPE_NONE || type == DAV_LOCK_NONE)
+    goto end;
+
   g_debug ("lock depth:%d scope:%d type:%d owner:%p, timeout: %u",
            depth, scope, type, owner, timeout);
 
@@ -213,14 +218,19 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg,
   soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
 
   lpath = server_get_path (handler_get_server (handler), path);
-  lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
-  if (!try_add_lock (handler_get_server (handler), path, lock))
-    {
-      g_warning ("lock failed");
-      dav_lock_free (lock);
-      status = SOUP_STATUS_LOCKED;
-      goto end;
-    }
+  {
+    g_autoptr(DAVLock) new_lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
+
+    if (!try_add_lock (handler_get_server (handler), path, new_lock))
+      {
+        g_debug ("lock failed");
+        status = SOUP_STATUS_LOCKED;
+        goto end;
+      }
+
+    /* owned by the path now */
+    lock = g_steal_pointer (&new_lock);
+  }
 
   created = lock_ensure_file (handler, path, cancellable, err);
   if (*err)
@@ -241,10 +251,5 @@ body:
                                     SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
-  g_free (ltoken);
-  g_free (token);
-  g_free (uuid);
-  davdoc_free (&doc);
-
   return status;
 }

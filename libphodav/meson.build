@@ -25,23 +25,37 @@ sources = [
   'phodav-virtual-dir.c'
 ]
 
-if not dependency('glib-2.0', version : '>= 2.51.2', required: false).found()
-  sources += 'guuid.c'
-endif
+# the same list, as file objects usable from the other
+# subdirectories, for the fuzzing build in tests/fuzz
+libphodav_sources = files(sources)
 
-mapfile = 'libphodav.syms'
-vflag = compiler.get_supported_link_arguments([
-  '-Wl,--version-script,@0@/@1@'.format(meson.current_source_dir(), mapfile),
-])
+libphodav_inc = include_directories('.')
 
-libphodav = library(
-  'phodav-3.0',
+# the private symbols are needed by the unit tests, so build them as
+# a static library which is included as a whole in the shared one
+libphodav_internals = static_library(
+  'phodav-internal',
   sources,
   c_args : [ '-DG_LOG_DOMAIN="phodav"' ],
   include_directories : incdir,
-  version: '0.0.0',
-  link_args : compiler.get_supported_link_arguments([ '-Wl,--no-undefined', vflag ]),
-  link_depends : mapfile,
+  dependencies : deps,
+)
+
+symbol_map = 'libphodav.syms'
+version_script = meson.current_source_dir() / symbol_map
+
+libphodav = library(
+  'phodav-3.0',
+  link_whole : libphodav_internals,
+  include_directories : incdir,
+  # libtool-style ABI version current.revision.age: bump current and age
+  # when adding symbols, revision otherwise; soversion (current - age)
+  # must only change on incompatible ABI changes
+  soversion : 0,
+  version : '0.0.0',
+  link_args : compiler.get_supported_link_arguments(
+    [ '-Wl,--no-undefined', f'-Wl,--version-script,@version_script@' ]),
+  link_depends : symbol_map,
   dependencies : deps,
   install : true,
 )
@@ -54,3 +68,23 @@ pkgconfig.generate(
   subdirs : 'libphodav-3.0',
   requires : 'libsoup-3.0'
 )
+
+build_gir = false
+gir_scanner = find_program('g-ir-scanner', required : get_option('introspection'))
+if gir_scanner.found()
+  if meson.is_cross_build()
+    if get_option('introspection').enabled()
+      error('gobject-introspection requires a native build')
+    endif
+    message('Skipping gobject-introspection when cross-compiling')
+  else
+    build_gir = true
+    libphodav_gir = gnome.generate_gir(libphodav,
+      sources : [ headers, 'phodav-server.c', 'phodav-virtual-dir.c' ],
+      namespace : 'Phodav',
+      nsversion : '3.0',
+      includes : [ 'Gio-2.0', 'Soup-3.0' ],
+      export_packages : 'libphodav-3.0',
+      install : true)
+  endif
+endif

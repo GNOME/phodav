@@ -1,0 +1,5 @@
+DELETE /dir/file HTTP/1.1
+Host: fuzz
+If: (Not <DAV:no-lock>)
+Connection: close
+

@@ -1,22 +1,15 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-#include "phodav-priv.h"
+#include "config.h"
+
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
+#include "phodav-priv.h"
+#include "phodav-utils.h"
 
 static gint
 error_to_status (GError *err)
@@ -30,12 +23,10 @@ error_to_status (GError *err)
 }
 
 gint
-phodav_delete_file (const gchar *path, GFile *file,
-                    GHashTable *mstatus,
-                    GCancellable *cancellable)
+phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
 {
-  GError *error = NULL;
-  GFileEnumerator *e;
+  g_autoptr(GFileEnumerator) e = NULL;
+  g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NO_CONTENT;
 
   e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
@@ -44,58 +35,55 @@ phodav_delete_file (const gchar *path, GFile *file,
     {
       while (1)
         {
-          GFileInfo *info = g_file_enumerator_next_file (e, cancellable, &error);
+          g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &error);
           if (!info)
             break;
-          GFile *del = g_file_get_child (file, g_file_info_get_name (info));
-          gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
-          gchar *del_path = g_build_path ("/", path, escape, NULL);
+          g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
+          /* the multistatus keys are the decoded resource paths, the
+           * hrefs are escaped when the response is built */
+          g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
           phodav_delete_file (del_path, del, mstatus, cancellable);
-          g_object_unref (del);
-          g_object_unref (info);
-          g_free (escape);
-          g_free (del_path);
         }
 
       g_file_enumerator_close (e, cancellable, NULL);
-      g_clear_object (&e);
     }
 
   if (error)
-    {
-      g_warning ("DELETE: enumeration error: %s", error->message);
-      g_clear_error (&error);
-    }
+    g_warning ("DELETE: enumeration error: %s", error->message);
 
-  if (!g_file_delete (file, cancellable, &error) && mstatus)
+  g_autoptr(GError) del_error = NULL;
+  if (!g_file_delete (file, cancellable, &del_error) && mstatus)
     {
-      status = error_to_status (error);
+      status = error_to_status (del_error);
 
       g_hash_table_insert (mstatus, g_strdup (path),
                            response_new (NULL, status));
     }
 
-  if (error)
-    {
-      g_debug ("ignored del error: %s", error->message);
-      g_clear_error (&error);
-    }
+  if (del_error)
+    g_debug ("ignored del error: %s", del_error->message);
 
   return status;
 }
 
 gint
-phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
-                      const char *path, GError **err)
+phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
   GCancellable *cancellable = handler_get_cancellable (handler);
   GFile *file = NULL;
-  GHashTable *mstatus = NULL;
+  g_autoptr(GHashTable) mstatus = NULL;
   gint status;
-  GList *submitted = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
+  DepthType depth;
 
-  /* depth = depth_from_string(soup_message_headers_get_one (msg->request_headers, "Depth")); */
-  /* must be == infinity with collection */
+  /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
+   * client must not submit any other depth */
+  if (!depth_from_string (soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Depth"), &depth) ||
+      depth != DEPTH_INFINITY)
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
 
   status = phodav_check_if (handler, msg, path, &submitted);
   if (status != SOUP_STATUS_OK)
@@ -111,8 +99,6 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg,
       status = set_response_multistatus (msg, mstatus);
 
 end:
-  if (mstatus)
-    g_hash_table_unref (mstatus);
   g_clear_object (&file);
 
   return status;

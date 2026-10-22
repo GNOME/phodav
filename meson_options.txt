@@ -1,6 +1,12 @@
-option('gtk_doc',
+option('introspection',
        type : 'feature',
-       description : 'Generate API documentation with gtk-doc')
+       value : 'auto',
+       description : 'Generate GObject introspection data')
+
+option('docs',
+       type : 'feature',
+       value : 'auto',
+       description : 'Generate API documentation with gi-docgen')
 
 option('avahi',
        type : 'feature',
@@ -13,6 +19,15 @@ option('systemdsystemunitdir',
 option('udevrulesdir',
        type : 'string',
        description : 'Directory for udev rules')
+
+option('litmus',
+       type : 'feature',
+       description : 'Run the litmus WebDAV compliance test suite')
+
+option('fuzzing',
+       type : 'feature',
+       value : 'disabled',
+       description : 'Build libFuzzer targets for the request parsers')
 
 option('build-id',
        type : 'integer',

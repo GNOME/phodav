@@ -1,40 +1,59 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-#include "phodav-priv.h"
+#include "config.h"
 
-#include "phodav-utils.h"
-#include "phodav-multistatus.h"
+#include <sys/types.h>
+
+#ifdef HAVE_SYS_XATTR_H
+#include <sys/xattr.h>
+#endif
+
 #include "phodav-lock.h"
+#include "phodav-multistatus.h"
 #include "phodav-path.h"
+#include "phodav-priv.h"
+#include "phodav-utils.h"
 
 typedef struct _PropFind
 {
   PropFindType type;
-  GHashTable  *props;
+  GHashTable *props;
 } PropFind;
 
-static PropFind*
+/* the requested properties are collected in a table keyed on the
+ * element name and namespace href, so that duplicated <prop> entries
+ * are only answered once */
+static guint
+prop_node_hash (gconstpointer p)
+{
+  xmlNodePtr node = (xmlNodePtr) p;
+  const gchar *href = node->ns ? (gchar *) node->ns->href : NULL;
+
+  return g_str_hash ((gchar *) node->name) + (href ? g_str_hash (href) : 0);
+}
+
+static gboolean
+prop_node_equal (gconstpointer a, gconstpointer b)
+{
+  xmlNodePtr na = (xmlNodePtr) a;
+  xmlNodePtr nb = (xmlNodePtr) b;
+  const gchar *ha = na->ns ? (gchar *) na->ns->href : NULL;
+  const gchar *hb = nb->ns ? (gchar *) nb->ns->href : NULL;
+
+  return g_strcmp0 ((gchar *) na->name, (gchar *) nb->name) == 0 &&
+         g_strcmp0 (ha, hb) == 0;
+}
+
+static PropFind *
 propfind_new (void)
 {
-  PropFind *pf = g_slice_new0 (PropFind);
+  PropFind *pf = g_new0 (PropFind, 1);
 
-  // TODO: a better hash for Node (name, ns)
-  pf->props = g_hash_table_new (g_direct_hash, g_direct_equal);
+  pf->props = g_hash_table_new (prop_node_hash, prop_node_equal);
   return pf;
 }
 
@@ -45,16 +64,20 @@ propfind_free (PropFind *pf)
     return;
 
   g_hash_table_unref (pf->props);
-  g_slice_free (PropFind, pf);
+  g_free (pf);
 }
 
-#define PROP_SET_STATUS(Node, Status) G_STMT_START {    \
-    (Node)->_private = GINT_TO_POINTER (Status);        \
-  } G_STMT_END
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PropFind, propfind_free)
+
+#define PROP_SET_STATUS(Node, Status)            \
+  G_STMT_START                                   \
+  {                                              \
+    (Node)->_private = GINT_TO_POINTER (Status); \
+  }                                              \
+  G_STMT_END
 
 static xmlNodePtr
-prop_resourcetype (PathHandler *handler, PropFind *pf,
-                   const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_resourcetype (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "resourcetype");
@@ -65,19 +88,18 @@ prop_resourcetype (PathHandler *handler, PropFind *pf,
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
     xmlNewChild (node, ns, BAD_CAST "collection", NULL);
   else if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR)
-  {
-    g_warn_if_reached ();
-    status = SOUP_STATUS_NOT_FOUND;
-  }
+    {
+      g_warn_if_reached ();
+      status = SOUP_STATUS_NOT_FOUND;
+    }
 
- end:
+end:
   PROP_SET_STATUS (node, status);
   return node;
 }
 
 static xmlNodePtr
-prop_supportedlock (PathHandler *handler, PropFind *pf,
-                    const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_supportedlock (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "supportedlock");
 
@@ -114,6 +136,8 @@ lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
   g_return_val_if_fail (key, FALSE);
   g_return_val_if_fail (path, FALSE);
 
+  path_expire_locks (path);
+
   for (l = path->locks; l != NULL; l = l->next)
     xmlAddChild (node, dav_lock_get_activelock_node (l->data, NULL));
 
@@ -121,8 +145,7 @@ lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
 }
 
 static xmlNodePtr
-prop_lockdiscovery (PathHandler *handler, PropFind *pf,
-                    const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_lockdiscovery (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   PhodavServer *server = handler_get_server (handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "lockdiscovery");
@@ -137,16 +160,17 @@ end:
   return node;
 }
 
-typedef enum {
-        NODE_DATE_FORMAT_HTTP,
-        NODE_DATE_FORMAT_ISO8601
+typedef enum
+{
+  NODE_DATE_FORMAT_HTTP,
+  NODE_DATE_FORMAT_ISO8601
 } NodeDateFormat;
 
 static void
 node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
 {
-  GDateTime *date;
-  gchar *text;
+  g_autoptr(GDateTime) date = NULL;
+  g_autofree gchar *text = NULL;
 
   g_warn_if_fail (time != 0);
   date = g_date_time_new_from_unix_utc (time);
@@ -160,13 +184,10 @@ node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
       break;
     }
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
-  g_date_time_unref (date);
 }
 
 static xmlNodePtr
-prop_creationdate (PathHandler *handler, PropFind *pf,
-                   const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_creationdate (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "creationdate");
@@ -186,7 +207,7 @@ prop_creationdate (PathHandler *handler, PropFind *pf,
   if (time == 0)
     status = SOUP_STATUS_NOT_FOUND;
   else
-    node_add_time (node, time, NODE_DATE_FORMAT_HTTP);
+    node_add_time (node, time, NODE_DATE_FORMAT_ISO8601);
 
 end:
   PROP_SET_STATUS (node, status);
@@ -194,8 +215,7 @@ end:
 }
 
 static xmlNodePtr
-prop_getlastmodified (PathHandler *handler, PropFind *pf,
-                      const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getlastmodified (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getlastmodified");
@@ -218,13 +238,12 @@ end:
 }
 
 static xmlNodePtr
-prop_getcontentlength (PathHandler *handler, PropFind *pf,
-                       const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getcontentlength (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getcontentlength");
   guint64 size;
-  gchar *text;
+  g_autofree gchar *text = NULL;
 
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
@@ -232,7 +251,6 @@ prop_getcontentlength (PathHandler *handler, PropFind *pf,
   size = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
   text = g_strdup_printf ("%" G_GUINT64_FORMAT, size);
   xmlAddChild (node, xmlNewText (BAD_CAST text));
-  g_free (text);
 
 end:
   PROP_SET_STATUS (node, status);
@@ -240,8 +258,7 @@ end:
 }
 
 static xmlNodePtr
-prop_getcontenttype (PathHandler *handler, PropFind *pf,
-                     const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getcontenttype (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getcontenttype");
@@ -262,8 +279,7 @@ end:
 }
 
 static xmlNodePtr
-prop_displayname (PathHandler *handler, PropFind *pf,
-                  const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_displayname (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "displayname");
@@ -284,8 +300,7 @@ end:
 }
 
 static xmlNodePtr
-prop_getetag (PathHandler *handler, PropFind *pf,
-              const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getetag (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getetag");
@@ -297,9 +312,8 @@ prop_getetag (PathHandler *handler, PropFind *pf,
   etag = g_file_info_get_etag (info);
   if (etag)
     {
-      gchar *tmp = g_strdup_printf ("\"%s\"", etag);
+      g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
       xmlAddChild (node, xmlNewText (BAD_CAST tmp));
-      g_free (tmp);
     }
   else
     {
@@ -312,8 +326,7 @@ end:
 }
 
 static xmlNodePtr
-prop_executable (PathHandler *handler, PropFind *pf,
-                 const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_executable (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (NULL, BAD_CAST "executable");
@@ -328,7 +341,7 @@ prop_executable (PathHandler *handler, PropFind *pf,
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
     exec = FALSE;
 
-  xmlAddChild (node, xmlNewText (exec ?  BAD_CAST "T" : BAD_CAST "F"));
+  xmlAddChild (node, xmlNewText (exec ? BAD_CAST "T" : BAD_CAST "F"));
 
 end:
   PROP_SET_STATUS (node, status);
@@ -336,16 +349,15 @@ end:
 }
 
 static xmlNodePtr
-prop_quota_available (PathHandler *handler, PropFind *pf,
-                      const gchar *path, GFileInfo *_info, xmlNsPtr ns)
+prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *_info, xmlNsPtr ns)
 {
-  GFile *file;
-  GFileInfo *info = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
-  GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *error = NULL;
-  gchar *tmp = NULL;
+  GCancellable *cancellable = handler_get_cancellable (handler);
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *tmp = NULL;
   guint64 size;
 
   if (pf->type == PROPFIND_PROPNAME)
@@ -354,7 +366,6 @@ prop_quota_available (PathHandler *handler, PropFind *pf,
   file = g_file_get_child (handler_get_file (handler), path + 1);
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
-  g_object_unref (file);
 
   if (error)
     {
@@ -369,25 +380,20 @@ prop_quota_available (PathHandler *handler, PropFind *pf,
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
-  if (info)
-    g_object_unref (info);
-
-  g_free (tmp);
   PROP_SET_STATUS (node, status);
   return node;
 }
 
 static xmlNodePtr
-prop_quota_used (PathHandler *handler, PropFind *pf,
-                 const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_quota_used (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
 {
   GFile *file = NULL;
   gint status = SOUP_STATUS_OK;
-  GCancellable *cancellable = handler_get_cancellable(handler);
+  GCancellable *cancellable = handler_get_cancellable (handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
   guint64 disk_usage = 0;
-  GError *error = NULL;
-  gchar *tmp = NULL;
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *tmp = NULL;
 
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
@@ -410,7 +416,6 @@ prop_quota_used (PathHandler *handler, PropFind *pf,
 
 end:
   g_clear_object (&file);
-  g_free (tmp);
   PROP_SET_STATUS (node, status);
   return node;
 }
@@ -447,46 +452,96 @@ static const struct _PropList
   PROP (executable, 1),
   PROP (supportedlock, 0),
   PROP (lockdiscovery, 0),
-  { "quota-available-bytes", prop_quota_available, },
-  { "quota-used-bytes", prop_quota_used, FALSE, TRUE, }
+  {
+    "quota-available-bytes",
+    prop_quota_available,
+  },
+  {
+    "quota-used-bytes",
+    prop_quota_used,
+    FALSE,
+    TRUE,
+  }
 };
 
 static xmlNodePtr
-prop_xattr (gchar *xattr)
+prop_xattr (const gchar *xattr)
 {
   xmlNodePtr node;
-  gchar *ns = xattr + 7;
-  gchar *name = g_utf8_strchr (ns, -1, '#');
+  /* the attribute names are owned by the GFileInfo, copy before
+   * splitting the string in place */
+  g_autofree gchar *attr = g_strdup (xattr + 7);
+  gchar *name;
+
+  name = g_utf8_strchr (attr, -1, '#');
 
   if (name)
     {
+      /* <ns-href>#<name> */
       *name = '\0';
-      name = name + 1;
+      node = xmlNewNode (NULL, BAD_CAST name + 1);
+      xmlNewNs (node, BAD_CAST attr, NULL);
     }
   else
-    {
-      name = ns;
-      ns = NULL;
-    }
-
-  node = xmlNewNode (NULL, BAD_CAST name);
-  if (ns)
-    xmlNewNs (node, BAD_CAST ns, NULL);
+    node = xmlNewNode (NULL, BAD_CAST attr);
 
   PROP_SET_STATUS (node, SOUP_STATUS_OK);
   return node;
 }
 
+#ifdef HAVE_SYS_XATTR_H
+static gssize
+xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
+{
+#ifdef __APPLE__
+  return getxattr (path, name, value, size, 0, 0);
+#else
+  return getxattr (path, name, value, size);
+#endif
+}
+#endif /* HAVE_SYS_XATTR_H */
+
+/* GIO escapes non-ASCII bytes in extended attribute values, which breaks
+ * UTF-8 property values. Read the raw value when possible and fall back
+ * to the escaped GIO value otherwise. */
+static gchar *
+xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
+{
+#ifdef HAVE_SYS_XATTR_H
+  g_autofree gchar *path = g_file_get_path (file);
+
+  if (path)
+    {
+      /* the "xattr::" namespace lists user attributes only */
+      g_autofree gchar *name = g_strdup_printf ("user.%s", xattr + strlen ("xattr::"));
+      gssize len = xattr_get (path, name, NULL, 0);
+
+      if (len > 0)
+        {
+          g_autofree gchar *value = g_malloc (len + 1);
+
+          if (xattr_get (path, name, value, len) == len)
+            {
+              value[len] = '\0';
+
+              if (g_utf8_validate (value, len, NULL))
+                return g_steal_pointer (&value);
+            }
+        }
+    }
+#endif
+
+  return g_strdup (g_file_info_get_attribute_string (info, xattr));
+}
+
 #define FILE_QUERY "standard::*,time::*,access::*,etag::*,xattr::*"
-static GList*
-propfind_populate (PathHandler *handler, const gchar *path,
-                   PropFind *pf, GFileInfo *info,
-                   xmlNsPtr ns)
+static GList *
+propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
 {
   GHashTableIter iter;
   xmlNodePtr node;
   GList *stat = NULL;
-  int i;
+  gint i;
 
   if (pf->type == PROPFIND_ALLPROP || pf->type == PROPFIND_PROPNAME)
     {
@@ -510,7 +565,7 @@ propfind_populate (PathHandler *handler, const gchar *path,
 
           for (i = 0; attrs[i]; i++)
             {
-              node = prop_xattr(attrs[i]);
+              node = prop_xattr (attrs[i]);
               prop_add (&stat, node);
             }
 
@@ -525,23 +580,21 @@ propfind_populate (PathHandler *handler, const gchar *path,
     {
       for (i = 0; i < G_N_ELEMENTS (prop_list); i++)
         {
-          if (xml_node_has_name (node, prop_list[i].name)) {
-            node = prop_list[i].func (handler, pf, path, info, ns);
-            break;
-          }
+          if (xml_node_has_name (node, prop_list[i].name))
+            {
+              node = prop_list[i].func (handler, pf, path, info, ns);
+              break;
+            }
         }
 
       if (i == G_N_ELEMENTS (prop_list))
         {
-          gchar *xattr = xml_node_get_xattr_name (node, "xattr::");
+          g_autofree gchar *xattr = xml_node_get_xattr_name (node, "xattr::");
+          g_autofree gchar *val = NULL;
           node = xmlCopyNode (node, 2);
-          const gchar *val = NULL;
 
           if (xattr)
-            {
-              val = g_file_info_get_attribute_string (info, xattr);
-              g_free (xattr);
-            }
+            val = xattr_get_value (file, info, xattr);
 
           if (val)
             {
@@ -563,46 +616,39 @@ end:
 }
 
 static gint
-propfind_query_zero (PathHandler *handler, PropFind *pf,
-                     const gchar *path, GHashTable *path_resp,
-                     xmlNsPtr     ns)
+propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHashTable *path_resp, xmlNsPtr ns)
 {
-  GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *err = NULL;
-  GFileInfo *info = NULL;
-  GFile *file;
+  GCancellable *cancellable = handler_get_cancellable (handler);
+  g_autoptr(GError) err = NULL;
+  g_autoptr(GFileInfo) info = NULL;
+  g_autoptr(GFile) file = NULL;
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
   file = g_file_get_child (handler_get_file (handler), path + 1);
   info = g_file_query_info (file, FILE_QUERY,
                             G_FILE_QUERY_INFO_NONE, cancellable, &err);
-  g_object_unref (file);
   if (err)
     {
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         g_warning ("queryinfo: %s", err->message);
-      g_clear_error (&err);
       return SOUP_STATUS_NOT_FOUND;
     }
 
-  stat = propfind_populate (handler, path, pf, info, ns);
+  stat = propfind_populate (handler, file, path, pf, info, ns);
   g_hash_table_insert (path_resp, g_strdup (path),
                        response_new (stat, 0));
-  g_clear_object (&info);
 
   return status;
 }
 
 static gint
-propfind_query_one (PathHandler *handler, PropFind *pf,
-                    const gchar *path, GHashTable *path_resp,
-                    xmlNsPtr     ns)
+propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHashTable *path_resp, xmlNsPtr ns)
 {
-  GCancellable *cancellable = handler_get_cancellable(handler);
-  GError *err = NULL;
-  GFile *file;
-  GFileEnumerator *e;
+  GCancellable *cancellable = handler_get_cancellable (handler);
+  g_autoptr(GError) err = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GFileEnumerator) e = NULL;
   gint status;
 
   status = propfind_query_zero (handler, pf, path, path_resp, ns);
@@ -612,35 +658,29 @@ propfind_query_one (PathHandler *handler, PropFind *pf,
   file = g_file_get_child (handler_get_file (handler), path + 1);
   e = g_file_enumerate_children (file, FILE_QUERY, G_FILE_QUERY_INFO_NONE,
                                  cancellable, &err);
-  g_object_unref (file);
   if (!e)
     goto end;
 
   while (1)
     {
       GList *stat;
-      GFileInfo *info = g_file_enumerator_next_file (e, cancellable, &err);
+      g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &err);
       if (!info)
         break;
 
-      gchar *escape = g_markup_escape_text (g_file_info_get_name (info), -1);
-      stat = propfind_populate (handler, path, pf, info, ns);
-      g_hash_table_insert (path_resp, g_build_path ("/", path, escape, NULL),
+      g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
+      stat = propfind_populate (handler, child, path, pf, info, ns);
+      /* the multistatus keys are the decoded resource paths, the
+       * hrefs are escaped when the response is built */
+      g_hash_table_insert (path_resp, g_build_path ("/", path, g_file_info_get_name (info), NULL),
                            response_new (stat, 0));
-      g_free (escape);
-      g_object_unref (info);
     }
 
   g_file_enumerator_close (e, cancellable, NULL);
-  g_clear_object (&e);
 
 end:
-  if (err)
-    {
-      if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
-        g_warning ("query: %s", err->message);
-      g_clear_error (&err);
-    }
+  if (err && !g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
+    g_warning ("query: %s", err->message);
 
   return status;
 }
@@ -648,6 +688,8 @@ end:
 static gboolean
 parse_prop (xmlNodePtr node, GHashTable *props)
 {
+  gboolean found = FALSE;
+
   for (node = node->children; node; node = node->next)
     {
       if (!xml_node_is_element (node))
@@ -655,12 +697,13 @@ parse_prop (xmlNodePtr node, GHashTable *props)
 
       // only interested in ns&name
       g_hash_table_add (props, node);
+      found = TRUE;
     }
 
-  return TRUE;
+  return found;
 }
 
-static PropFind*
+static PropFind *
 parse_propfind (xmlNodePtr xml)
 {
   PropFind *pf = propfind_new ();
@@ -684,7 +727,11 @@ parse_propfind (xmlNodePtr xml)
       else if (xml_node_has_name (node, "prop"))
         {
           pf->type = PROPFIND_PROP;
-          parse_prop (node, pf->props);
+          /* a prop element without any property is a malformed
+           * request (RFC 4918 section 9.1), it would produce an
+           * empty multistatus response otherwise */
+          if (!parse_prop (node, pf->props))
+            g_clear_pointer (&pf, propfind_free);
           goto end;
         }
     }
@@ -697,19 +744,25 @@ end:
 }
 
 gint
-phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
-                        const char *path, GError **err)
+phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
 {
-  PropFind *pf = NULL;
+  g_autoptr(PropFind) pf = NULL;
   DepthType depth;
-  GHashTable *mstatus = NULL;   // path -> statlist
-  DavDoc doc = {0, };
+  g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
+  g_auto(DavDoc) doc = {
+    0,
+  };
   gint status = SOUP_STATUS_NOT_FOUND;
   xmlNsPtr ns = NULL;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
 
-  depth = depth_from_string (soup_message_headers_get_one (request_headers, "Depth"));
+  if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth))
+    {
+      status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
   if (!request_body || !request_body->length)
     {
       /* Win kludge: http://code.google.com/p/sabredav/wiki/Windows */
@@ -718,7 +771,7 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
     }
   else
     {
-      if (!davdoc_parse (&doc, msg, request_body, "propfind"))
+      if (!davdoc_parse (&doc, request_body, "propfind"))
         {
           status = SOUP_STATUS_BAD_REQUEST;
           goto end;
@@ -726,7 +779,10 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
 
       pf = parse_propfind (doc.root);
       if (!pf)
-        goto end;
+        {
+          status = SOUP_STATUS_BAD_REQUEST;
+          goto end;
+        }
     }
 
   ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
@@ -755,11 +811,9 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg,
   status = set_response_multistatus (msg, mstatus);
 
 end:
-  davdoc_free (&doc);
-  propfind_free (pf);
-  if (mstatus)
-    g_hash_table_unref (mstatus);
+  /* the responses use ns */
+  g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
-    xmlFreeNs(ns);
+    xmlFreeNs (ns);
   return status;
 }

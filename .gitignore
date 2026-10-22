@@ -1,0 +1,12 @@
+# meson subproject downloads
+/subprojects/litmus/
+/subprojects/packagecache/
+/subprojects/.wraplock
+
+# release tarball exported by the CI build job (gitlab-ci-local
+# copies the job artifacts to the working directory)
+/public-dist/
+
+# libFuzzer crash and leak reports
+/crash-*
+/leak-*

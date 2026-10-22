@@ -1,27 +1,16 @@
 /*
  * Copyright (C) 2013 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
-#include "guuid.h"
 #include "phodav-server.h"
+
+#include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
-#include "phodav-lock.h"
 #include "phodav-utils.h"
 
 /**
@@ -33,62 +22,95 @@
  * @include: libphodav/phodav.h
  *
  * PhodavServer implements a simple WebDAV server.
+ *
+ * The DAV methods are handled synchronously from the #SoupServer
+ * callbacks: a #PhodavServer must be used from a single thread, the
+ * one running the main context the #SoupServer is listened from,
+ * and a slow request delays the other requests.
  */
 
 struct _PhodavServer
 {
-  GObject       parent;
-  SoupServer   *server;
+  GObject parent;
+  SoupServer *server;
   GCancellable *cancellable;
-  GFile        *root_file;
-  PathHandler  *root_handler; /* weak ref */
-  GHashTable   *paths;
-  gboolean      readonly;
+  GFile *root_file;
+  PathHandler *root_handler; /* weak ref */
+  GHashTable *paths;
+  gboolean readonly;
+  guint64 max_upload;
+  gboolean constructing;
+  GMainContext *expire_locks_context;
+  GSource *expire_locks_source;
 };
 
-struct _PhodavServerClass
-{
-  GObjectClass parent_class;
-};
-
-G_DEFINE_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
+G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
 /* Properties */
-enum {
-  PROP_0,
-  PROP_ROOT,
+typedef enum
+{
+  PROP_ROOT = 1,
   PROP_ROOT_FILE,
   PROP_SERVER,
   PROP_READONLY,
-};
+  PROP_MAX_UPLOAD,
+} PhodavServerProps;
 
-static void server_callback (SoupServer        *server,
+static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
+
+static void server_callback (SoupServer *server,
                              SoupServerMessage *msg,
-                             const char        *path,
-                             GHashTable        *query,
-                             gpointer           user_data);
+                             const gchar *path,
+                             GHashTable *query,
+                             gpointer user_data);
 
-static void request_started (SoupServer        *server,
+static void request_started (SoupServer *server,
                              SoupServerMessage *message,
-                             gpointer           user_data);
+                             gpointer user_data);
+
+/* how often to look for expired locks; they are also expired lazily
+ * when they are used, this only reclaims the memory */
+#define LOCK_EXPIRY_INTERVAL 1
+
+static gboolean expire_locks_timeout (gpointer user_data);
+
+/* Canonicalize a request path for use as a key in the paths table:
+ * empty segments ("//") and trailing slashes are skipped, just like
+ * the walk in server_foreach_parent_path() does, so that locks are
+ * found again under whatever form the client used in its request. */
+static gchar *
+path_key (const gchar *_path)
+{
+  g_auto(GStrv) parts = g_strsplit (_path, "/", -1);
+  g_autoptr(GString) path = g_string_new (NULL);
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      if (!*parts[i])
+        continue;
+
+      g_string_append_c (path, '/');
+      g_string_append (path, parts[i]);
+    }
+
+  if (!path->len)
+    g_string_append_c (path, '/');
+
+  return g_string_free_and_steal (g_steal_pointer (&path));
+}
 
 Path *
 server_get_path (PhodavServer *self, const gchar *_path)
 {
   Path *p;
-  gchar *path = g_strdup (_path);
+  g_autofree gchar *path = path_key (_path);
 
-  remove_trailing (path, '/');
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
     {
-      p = g_slice_new0 (Path);
-      p->path = path;
+      p = g_new0 (Path, 1);
+      p->path = g_steal_pointer (&path);
       g_hash_table_insert (self->paths, p->path, path_ref (p));
-    }
-  else
-    {
-      g_free (path);
     }
 
   return p;
@@ -97,37 +119,43 @@ server_get_path (PhodavServer *self, const gchar *_path)
 struct _PathHandler
 {
   PhodavServer *self;
-  GFile       *file;
+  GFile *file;
 };
 
-PhodavServer * G_GNUC_PURE
+PhodavServer *
 handler_get_server (PathHandler *handler)
 {
   return handler->self;
 }
 
-GFile * G_GNUC_PURE
+GFile *
 handler_get_file (PathHandler *handler)
 {
   return handler->file;
 }
 
-GCancellable * G_GNUC_PURE
+GCancellable *
 handler_get_cancellable (PathHandler *handler)
 {
   return handler->self->cancellable;
 }
 
-gboolean G_GNUC_PURE
+gboolean
 handler_get_readonly (PathHandler *handler)
 {
   return handler->self->readonly;
 }
 
+guint64
+handler_get_max_upload (PathHandler *handler)
+{
+  return handler->self->max_upload;
+}
+
 static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
-  PathHandler *h = g_slice_new0 (PathHandler);
+  PathHandler *h = g_new0 (PathHandler, 1);
 
   h->self = self;
   h->file = g_object_ref (file);
@@ -138,16 +166,53 @@ static void
 path_handler_free (PathHandler *h)
 {
   g_object_unref (h->file);
-  g_slice_free (PathHandler, h);
+  g_free (h);
 }
 
 static void
 phodav_server_init (PhodavServer *self)
 {
+  self->constructing = TRUE;
+
   self->cancellable = g_cancellable_new ();
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
+
+  /* the context this server is created on; the lock expiry sweep
+   * runs there, like the rest of the server */
+  self->expire_locks_context = g_main_context_ref (g_main_context_get_thread_default () ?: g_main_context_default ());
+}
+
+/* free the locks whose timeout has elapsed, and drop the empty paths
+ * so the lock table does not grow without bound with the locks taken
+ * over the lifetime of the server */
+void
+server_expire_locks (PhodavServer *self)
+{
+  GHashTableIter iter;
+  Path *path;
+
+  if (g_hash_table_size (self->paths) == 0)
+    return;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      path_expire_locks (path);
+
+      /* the path is only kept alive by the table when it has no locks */
+      if (!path->locks)
+        g_hash_table_iter_remove (&iter);
+    }
+}
+
+static gboolean
+expire_locks_timeout (gpointer user_data)
+{
+  server_expire_locks (PHODAV_SERVER (user_data));
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -173,12 +238,35 @@ phodav_server_constructed (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  self->server = soup_server_new ("server-header", "PhodavServer ",
-                                  NULL);
+  /* the construct properties are set at this point */
+  self->constructing = FALSE;
 
-  update_root_handler (self);
+  /* a #SoupServer given at construction is used as is, so that it
+   * can be pre-configured with listeners, TLS or auth domains;
+   * otherwise create a plain one */
+  if (!self->server)
+    self->server = soup_server_new ("server-header", "PhodavServer",
+                                    NULL);
+
+  /* when a server was given at construction, the root handler is
+   * already registered on it */
+  if (!self->root_handler)
+    update_root_handler (self);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
+
+  {
+    g_autoptr(GSource) source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
+
+    /* g_timeout_add_seconds() cannot be used here: it would attach
+     * the sweep to the global default context instead of the one
+     * this server runs on */
+    g_source_set_callback (source, expire_locks_timeout, self, NULL);
+    g_source_attach (source, self->expire_locks_context);
+    /* the context owns the source while it is attached and dispose()
+     * detaches it, keep only a borrowed pointer */
+    self->expire_locks_source = source;
+  }
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)
@@ -186,17 +274,39 @@ phodav_server_constructed (GObject *gobject)
 }
 
 static void
+free_path_locks (gpointer key, gpointer value, gpointer user_data)
+{
+  Path *path = value;
+
+  /* the locks remove themselves from the list when freed */
+  while (path->locks)
+    dav_lock_free (path->locks->data);
+}
+
+static void
 phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+  g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
+
   /* SoupServer could live longer than PhodavServer,
-   * this frees the PhodavHandler passed as user_data */
-  soup_server_remove_handler (self->server, "/");
-  g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+   * this frees the PhodavHandler passed as user_data;
+   * dispose may run again, the server is already gone then */
+  if (self->server)
+    {
+      soup_server_remove_handler (self->server, "/");
+      g_signal_handlers_disconnect_by_func (self->server, request_started, self);
+    }
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
+
+  /* remaining locks hold references on the paths, free them first
+   * so the paths are released with the table */
+  if (self->paths)
+    g_hash_table_foreach (self->paths, free_path_locks, NULL);
   g_clear_pointer (&self->paths, g_hash_table_unref);
 
   /* Chain up to the parent class */
@@ -205,18 +315,17 @@ phodav_server_dispose (GObject *gobject)
 }
 
 static void
-phodav_server_get_property (GObject    *gobject,
-                            guint       prop_id,
-                            GValue     *value,
+phodav_server_get_property (GObject *gobject,
+                            guint prop_id,
+                            GValue *value,
                             GParamSpec *pspec)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  switch (prop_id)
+  switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
-      g_value_take_string (value, self->root_file ?
-        g_file_get_path (self->root_file) : NULL);
+      g_value_take_string (value, self->root_file ? g_file_get_path (self->root_file) : NULL);
       break;
 
     case PROP_ROOT_FILE:
@@ -231,39 +340,45 @@ phodav_server_get_property (GObject    *gobject,
       g_value_set_boolean (value, self->readonly);
       break;
 
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
+    case PROP_MAX_UPLOAD:
+      g_value_set_uint64 (value, self->max_upload);
       break;
     }
 }
 
 static void
-phodav_server_set_property (GObject      *gobject,
-                            guint         prop_id,
+phodav_server_set_property (GObject *gobject,
+                            guint prop_id,
                             const GValue *value,
-                            GParamSpec   *pspec)
+                            GParamSpec *pspec)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
   const gchar *root;
 
-  /* do not overwrite the root file during construction,
-   * phodav should be constructed either with "root" or "root-file", not both */
-  if (!self->server && self->root_file)
-    return;
-
-  switch (prop_id)
+  switch ((PhodavServerProps) prop_id)
     {
     case PROP_ROOT:
-      root = g_value_get_string (value);
-      g_clear_object (&self->root_file);
-      if (root)
-        self->root_file = g_file_new_for_path (root);
-      update_root_handler (self);
-      break;
-
     case PROP_ROOT_FILE:
-      g_clear_object (&self->root_file);
-      self->root_file = g_value_dup_object (value);
+      /* during construction, both root properties are set in turn,
+       * with their default NULL value for the one which was not
+       * given; once a root file is set, do not let the redundant
+       * NULL of the other one clobber it: phodav should be
+       * constructed either with "root" or "root-file", not both */
+      if (self->constructing && self->root_file)
+        return;
+
+      if (prop_id == PROP_ROOT)
+        {
+          root = g_value_get_string (value);
+          g_clear_object (&self->root_file);
+          if (root)
+            self->root_file = g_file_new_for_path (root);
+        }
+      else
+        {
+          g_clear_object (&self->root_file);
+          self->root_file = g_value_dup_object (value);
+        }
       update_root_handler (self);
       break;
 
@@ -271,8 +386,14 @@ phodav_server_set_property (GObject      *gobject,
       self->readonly = g_value_get_boolean (value);
       break;
 
-    default:
-      G_OBJECT_WARN_INVALID_PROPERTY_ID (gobject, prop_id, pspec);
+    case PROP_MAX_UPLOAD:
+      self->max_upload = g_value_get_uint64 (value);
+      break;
+
+    case PROP_SERVER:
+      /* construct-only */
+      g_return_if_fail (self->server == NULL);
+      self->server = g_value_dup_object (value);
       break;
     }
 }
@@ -282,8 +403,8 @@ phodav_server_class_init (PhodavServerClass *klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
-  gobject_class->dispose      = phodav_server_dispose;
-  gobject_class->constructed  = phodav_server_constructed;
+  gobject_class->dispose = phodav_server_dispose;
+  gobject_class->constructed = phodav_server_constructed;
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;
 
@@ -296,17 +417,15 @@ phodav_server_class_init (PhodavServerClass *klass)
    * You can use either of them or none to construct a new #PhodavServer,
    * you should not use both.
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_ROOT,
+  properties[PROP_ROOT] =
     g_param_spec_string ("root",
-                         "Root path",
-                         "Root path",
+                         NULL, NULL,
                          NULL,
                          G_PARAM_CONSTRUCT |
-                         G_PARAM_READWRITE |
-                         G_PARAM_STATIC_STRINGS));
+                           G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
 
-/**
+  /**
    * PhodavServer:root-file:
    *
    * A more generic version of #PhodavServer:root,
@@ -314,39 +433,71 @@ phodav_server_class_init (PhodavServerClass *klass)
    *
    * Since: 2.5
    **/
-  g_object_class_install_property
-    (gobject_class, PROP_ROOT_FILE,
-     g_param_spec_object ("root-file",
-                          "Root file",
-                          "Root file",
-                          G_TYPE_FILE,
-                          G_PARAM_CONSTRUCT |
-                          G_PARAM_READWRITE |
-                          G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property
-    (gobject_class, PROP_SERVER,
-     g_param_spec_object ("server",
-                          "Soup Server",
-                          "Soup Server",
-                          SOUP_TYPE_SERVER,
-                          G_PARAM_READABLE |
-                          G_PARAM_STATIC_STRINGS));
-
-  g_object_class_install_property
-    (gobject_class, PROP_READONLY,
-     g_param_spec_boolean ("read-only",
-                           "Read-only access",
-                           "Read-only access",
-                           FALSE,
+  properties[PROP_ROOT_FILE] =
+    g_param_spec_object ("root-file",
+                         NULL, NULL,
+                         G_TYPE_FILE,
+                         G_PARAM_CONSTRUCT |
                            G_PARAM_READWRITE |
-                           G_PARAM_STATIC_STRINGS));
+                           G_PARAM_STATIC_STRINGS);
+
+  /**
+   * PhodavServer:server:
+   *
+   * The underlying #SoupServer.
+   *
+   * When constructing a #PhodavServer, an already configured
+   * #SoupServer may be given, with listeners, TLS certificates or
+   * auth domains set up for example. When no server is provided, a
+   * new one is created.
+   *
+   * Since: 3.1
+   **/
+  properties[PROP_SERVER] =
+    g_param_spec_object ("server",
+                         NULL, NULL,
+                         SOUP_TYPE_SERVER,
+                         G_PARAM_READWRITE |
+                           G_PARAM_CONSTRUCT_ONLY |
+                           G_PARAM_STATIC_STRINGS);
+
+  /**
+   * PhodavServer:read-only:
+   *
+   * Whether the shared folder is read-only.
+   **/
+  properties[PROP_READONLY] =
+    g_param_spec_boolean ("read-only",
+                          NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE |
+                            G_PARAM_STATIC_STRINGS);
+
+  /**
+   * PhodavServer:max-upload:
+   *
+   * The maximum size of a PUT request body, in bytes. An upload
+   * which would be larger is refused with 413 Request Entity Too
+   * Large, and the file it was writing is discarded rather than
+   * left truncated. The default, 0, does not limit the uploads.
+   *
+   * Since: 3.1
+   **/
+  properties[PROP_MAX_UPLOAD] =
+    g_param_spec_uint64 ("max-upload",
+                         NULL, NULL,
+                         0, G_MAXUINT64, 0,
+                         G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (gobject_class, G_N_ELEMENTS (properties), properties);
 }
 
 gboolean
 server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
-  gchar **pathv, *partial = g_strdup ("/");
+  g_auto(GStrv) pathv = NULL;
+  g_autofree gchar *partial = g_strdup ("/");
   gboolean ret = FALSE;
   gchar *key = NULL;
   Path *p;
@@ -374,16 +525,13 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
   ret = TRUE;
 
 end:
-  g_strfreev (pathv);
-  g_free (partial);
-
   return ret;
 }
 
 typedef struct _PathGetLock
 {
   const gchar *token;
-  DAVLock     *lock;
+  DAVLock *lock;
 } PathGetLock;
 
 static gboolean
@@ -392,11 +540,13 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   PathGetLock *d = data;
   GList *l;
 
+  path_expire_locks (path);
+
   for (l = path->locks; l != NULL; l = l->next)
     {
       DAVLock *lock = l->data;
 
-      if (!g_strcmp0 (lock->token, d->token))
+      if (g_strcmp0 (lock->token, d->token) == 0)
         {
           d->lock = lock;
           return FALSE;
@@ -406,17 +556,26 @@ _path_get_lock (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
+/* look for the lock with @token on @path or any of its parents */
+DAVLock *
+server_path_lookup_lock (PhodavServer *self, const gchar *path, const gchar *token)
+{
+  PathGetLock p = { .token = token };
+
+  server_foreach_parent_path (self, path, _path_get_lock, &p);
+
+  return p.lock;
+}
+
 DAVLock *
 server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
 {
-  PathGetLock p = { .token = token };
-  gboolean success = !server_foreach_parent_path (self, path,
-                                                  _path_get_lock, (gpointer) &p);
+  DAVLock *lock = server_path_lookup_lock (self, path, token);
 
-  if (!success)
-    g_message ("Invalid lock token %s for %s", token, path);
+  if (!lock)
+    g_debug ("Invalid lock token %s for %s", token, path);
 
-  return p.lock;
+  return lock;
 }
 
 static gboolean
@@ -424,6 +583,8 @@ other_lock_exists (const gchar *key, Path *path, gpointer data)
 {
   GList *locks = data;
   GList *l;
+
+  path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     {
@@ -441,67 +602,251 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
 }
 
+typedef struct _TreeLockCheck
+{
+  const gchar *path; /* canonical path of the new lock root */
+  DAVLock *lock;     /* the lock about to be taken */
+  gboolean conflict;
+} TreeLockCheck;
+
+static void
+tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
+{
+  TreeLockCheck *d = user_data;
+  Path *path = value;
+  GList *l;
+
+  path_expire_locks (path);
+
+  /* the lock root itself and its ancestors are checked by
+   * server_foreach_parent_path() in try_add_lock() */
+  if (g_strcmp0 (path->path, d->path) == 0 ||
+      !path_is_covered (path->path, d->path))
+    return;
+
+  for (l = path->locks; l != NULL; l = l->next)
+    {
+      DAVLock *other = l->data;
+
+      /* RFC 4918 section 6.1: an exclusive lock conflicts with any
+       * other kind of lock, whether direct or indirect */
+      if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE ||
+          d->lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
+        d->conflict = TRUE;
+    }
+}
+
+/* does a depth-infinity lock on @path conflict with a lock on one of
+ * its members? (RFC 4918 section 7.4: such a LOCK request must fail
+ * with 423 when the members are locked in a conflicting manner) */
+gboolean
+server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *lock)
+{
+  g_autofree gchar *path = path_key (_path);
+  TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
+
+  g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
+
+  return d.conflict;
+}
+
+/* a body which is not delimited by a Content-Length cannot be
+ * checked before it is received: refuse it as soon as it grows over
+ * the parse limit, so that a client cannot make the server
+ * accumulate an unbounded request body in memory */
+static void
+got_chunk (SoupServerMessage *msg,
+           GBytes *chunk,
+           gpointer user_data)
+{
+  SoupMessageBody *body = soup_server_message_get_request_body (msg);
+
+  /* the accumulated length includes the chunk being signaled, the
+   * body is appended before the signal is emitted */
+  if (body->length <= PHODAV_MAX_REQUEST_BODY)
+    return;
+
+  g_debug ("refusing the oversized request body");
+
+  g_signal_handlers_disconnect_by_func (msg, got_chunk, user_data);
+
+  /* stop accumulating the rest of the body: it is drained, and the
+   * request is answered with 413 rather than parsed */
+  soup_message_body_set_accumulate (body, FALSE);
+  soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+}
+
 static void
 got_headers (SoupServerMessage *msg,
-             gpointer     user_data)
+             gpointer user_data)
 {
   PhodavServer *self = user_data;
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *path = g_uri_get_path (uri);
-  GError *err = NULL;
+  g_autoptr(GError) err = NULL;
+  const gchar *method = soup_server_message_get_method (msg);
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
 
-  if (soup_server_message_get_method (msg) == SOUP_METHOD_PUT)
-    phodav_method_put (self->root_handler, msg, path, &err);
+  /* libsoup handlers ran first, the request may have been rejected
+   * already (invalid path, authentication...) */
+  if (soup_server_message_get_status (msg) != 0)
+    return;
 
-  if (err)
+  if (method == SOUP_METHOD_PUT)
     {
-      g_warning ("error: %s", err->message);
-      g_clear_error (&err);
+      if (!(path && *path == '/') || g_path_is_absolute (path + 1))
+        {
+          g_debug ("invalid PUT path: %s", path);
+          soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+          return;
+        }
+
+      phodav_method_put (self->root_handler, msg, path, &err);
+
+      if (err)
+        g_warning ("error: %s", err->message);
+
+      return;
     }
+
+  /* unlike PUT, the other methods have their request body parsed in
+   * memory: refuse an unreasonable Content-Length before the body is
+   * received (RFC 9110 section 15.5.15), and drain it without
+   * accumulating it */
+  if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
+    {
+      g_debug ("refusing the oversized request body");
+      soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+      soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+      return;
+    }
+
+  /* a chunked body has no Content-Length to check in advance: watch
+   * it while it is received */
+  if (soup_message_headers_get_encoding (request_headers) == SOUP_ENCODING_CHUNKED)
+    g_signal_connect (msg, "got-chunk", G_CALLBACK (got_chunk), self);
 }
 
 static void
-request_started (SoupServer        *server,
+request_started (SoupServer *server,
                  SoupServerMessage *message,
-                 gpointer           user_data)
+                 gpointer user_data)
 {
   PhodavServer *self = user_data;
 
   g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
 }
 
-static void
-server_callback (SoupServer *server, SoupServerMessage *msg,
-                 const char *path, GHashTable *query,
-                 gpointer user_data)
+typedef struct _DavMethod DavMethod;
+
+/* the DAV methods handled by the server, in the order of the Allow
+ * header of the OPTIONS answer.
+ *
+ * The mutating methods, which modify the shared files, are answered
+ * with FORBIDDEN when the server is read-only. UNLOCK is not one of
+ * them: it only releases a lock, and does not modify the files.
+ *
+ * PUT has no handler: its body is streamed to the file from
+ * got_headers(), and the request is answered from its got-body
+ * callback, once the file is committed (its read-only refusal also
+ * happens there). It is listed like the other methods, so that the
+ * Allow header covers it. */
+struct _DavMethod
 {
-  GError *err = NULL;
+  const gchar *name;
+  gboolean mutating;
+  gint (*handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
+};
+
+static const DavMethod dav_methods[] = {
+  { "GET", FALSE, phodav_method_get },
+  { "HEAD", FALSE, phodav_method_get },
+  { "PUT", TRUE, NULL },
+  { "PROPFIND", FALSE, phodav_method_propfind },
+  { "PROPPATCH", TRUE, phodav_method_proppatch },
+  { "MKCOL", TRUE, phodav_method_mkcol },
+  { "DELETE", TRUE, phodav_method_delete },
+  { "MOVE", TRUE, phodav_method_movecopy },
+  { "COPY", TRUE, phodav_method_movecopy },
+  { "LOCK", TRUE, phodav_method_lock },
+  { "UNLOCK", FALSE, phodav_method_unlock },
+};
+
+static const DavMethod *
+dav_method_lookup (const gchar *method)
+{
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    if (g_strcmp0 (method, dav_methods[i].name) == 0)
+      return &dav_methods[i];
+
+  return NULL;
+}
+
+/* the comma separated names of the methods, for the Allow header */
+static gchar *
+dav_methods_allow (void)
+{
+  g_autoptr(GString) allow = g_string_sized_new (128);
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    {
+      if (i > 0)
+        g_string_append (allow, ", ");
+      g_string_append (allow, dav_methods[i].name);
+    }
+
+  return g_string_free_and_steal (g_steal_pointer (&allow));
+}
+
+static void
+server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
+{
+  g_autoptr(GError) err = NULL;
   PathHandler *handler = user_data;
   gint status = SOUP_STATUS_NOT_IMPLEMENTED;
+
   GUri *uri = soup_server_message_get_uri (msg);
-  const char *method = soup_server_message_get_method (msg);
+  const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageHeaders *response_headers;
-  GHashTable *params;
+  g_autoptr(GHashTable) params = NULL;
 
   g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_server_message_get_http_version (msg),
-           soup_message_headers_get_one (request_headers, "X-Litmus") ? : "",
-           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ? : "");
+           soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
+           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
+
+  /* got_headers() may have already rejected the request (oversized
+   * body, or a PUT refused before its upload was started); do not
+   * overwrite its status with the result of the method handler */
+  if (soup_server_message_get_status (msg) != 0)
+    return;
+
+  /* a PUT which passed got_headers() streams its body to the file
+   * while it is received, and is answered from its got-body callback
+   * once the file is committed: it has no method handler here */
+  if (method == SOUP_METHOD_PUT)
+    return;
 
   if (!(path && *path == '/'))
     {
       g_debug ("path must begin with /");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
   if (g_path_is_absolute (path + 1))
     {
       g_debug ("path cannot be absolute");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
 
   if (!(uri && g_uri_get_fragment (uri) == NULL))
     {
       g_debug ("using fragments in query is not supported");
+      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
       return;
     }
 
@@ -510,56 +855,45 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
   response_headers = soup_server_message_get_response_headers (msg);
   soup_message_headers_set_content_type (response_headers,
                                          "text/xml", params);
-  g_hash_table_destroy (params);
 
-  if (handler->self->readonly &&
-      (method == SOUP_METHOD_PROPPATCH ||
-       method == SOUP_METHOD_MKCOL ||
-       method == SOUP_METHOD_DELETE ||
-       method == SOUP_METHOD_MOVE ||
-       method == SOUP_METHOD_COPY ||
-       method == SOUP_METHOD_LOCK))
-      status = SOUP_STATUS_FORBIDDEN;
-  else if (method == SOUP_METHOD_OPTIONS)
+  if (method == SOUP_METHOD_OPTIONS)
     {
+      g_autofree gchar *allow = dav_methods_allow ();
+
       soup_message_headers_append (response_headers, "DAV", "1,2");
 
       /* according to http://code.google.com/p/sabredav/wiki/Windows */
       soup_message_headers_append (response_headers, "MS-Author-Via", "DAV");
 
-      soup_message_headers_append (response_headers, "Allow",
-                                   "GET, HEAD, PUT, PROPFIND, PROPPATCH, MKCOL, DELETE, MOVE, COPY, LOCK, UNLOCK");
+      soup_message_headers_append (response_headers, "Allow", allow);
       status = SOUP_STATUS_OK;
     }
-  else if (method == SOUP_METHOD_GET ||
-           method == SOUP_METHOD_HEAD)
-    status = phodav_method_get (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_PROPFIND)
-    status = phodav_method_propfind (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_PROPPATCH)
-    status = phodav_method_proppatch (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_MKCOL)
-    status = phodav_method_mkcol (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_DELETE)
-    status = phodav_method_delete (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_MOVE ||
-           method == SOUP_METHOD_COPY)
-    status = phodav_method_movecopy (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_LOCK)
-    status = phodav_method_lock (handler, msg, path, &err);
-  else if (method == SOUP_METHOD_UNLOCK)
-    status = phodav_method_unlock (handler, msg, path, &err);
   else
-    g_warn_if_reached ();
+    {
+      const DavMethod *m = dav_method_lookup (method);
+
+      if (m == NULL)
+        {
+          /* rather than warning, answer that the method is not implemented */
+          g_debug ("unsupported method %s", method);
+        }
+      else if (handler->self->readonly && m->mutating)
+        status = SOUP_STATUS_FORBIDDEN;
+      else if (m->handler == NULL)
+        {
+          /* only PUT, which is answered from its body callback and
+           * returns before the dispatch */
+          g_warn_if_reached ();
+        }
+      else
+        status = m->handler (handler, msg, path, &err);
+    }
 
   soup_server_message_set_status (msg, status, NULL);
 
   g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
   if (err)
-    {
-      g_warning ("error: %s", err->message);
-      g_clear_error (&err);
-    }
+    g_warning ("error: %s", err->message);
 }
 
 /**
@@ -568,7 +902,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg,
  *
  * Returns the underlying %SoupServer, if any.
  *
- * Returns: the associated %SoupServer or %NULL
+ * Returns: (transfer none) (nullable): the associated %SoupServer or %NULL
  **/
 SoupServer *
 phodav_server_get_soup_server (PhodavServer *self)
@@ -580,13 +914,13 @@ phodav_server_get_soup_server (PhodavServer *self)
 
 /**
  * phodav_server_new:
- * @root: (allow-none): Root path.
+ * @root: (nullable): Root path.
  *
  * Creates a new #PhodavServer.
  * This is equivalent to constructing a #GFile from @root
  * and using phodav_server_new_for_root_file().
  *
- * Returns: a new #PhodavServer
+ * Returns: (transfer full): a new #PhodavServer
  **/
 PhodavServer *
 phodav_server_new (const gchar *root)

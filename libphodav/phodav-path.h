@@ -1,21 +1,9 @@
 /*
  * Copyright (C) 2014 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
-#ifndef __PHODAV_PATH_H__
-#define __PHODAV_PATH_H__
+#pragma once
 
 #include "phodav-priv.h"
 
@@ -23,16 +11,19 @@ G_BEGIN_DECLS
 
 struct _Path
 {
-  gchar         *path;
-  GList         *locks;
-  guint32        refs;
+  gchar *path;
+  GList *locks;
+  guint32 refs;
 };
 
-Path *                  path_ref                    (Path *path);
-void                    path_unref                  (Path *path);
-void                    path_remove_lock            (Path *path, DAVLock *lock);
-void                    path_add_lock               (Path *path, DAVLock *lock);
+Path *path_ref (Path *path);
+void path_unref (Path *path);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (Path, path_unref)
+void path_remove_lock (Path *path, DAVLock *lock);
+void path_add_lock (Path *path, DAVLock *lock);
+
+/* free the locks whose timeout has elapsed; like dav_lock_free(), they
+ * remove themselves from the path lock list */
+void path_expire_locks (Path *path);
 
 G_END_DECLS
-
-#endif /* __PHODAV_PATH_H__ */

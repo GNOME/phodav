@@ -1,0 +1,7 @@
+LOCK /test HTTP/1.1
+Host: fuzz
+Timeout: Second-60
+Content-Length: 139
+Connection: close
+
+<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype><D:owner>fuzz</D:owner></D:lockinfo>

@@ -1,3 +1,80 @@
+v3.1
+====
+
+Security fixes:
+
+- CVE-2026-114417 - reject the encoded slashes in the COPY/MOVE
+  Destination header, which allowed writing outside of the shared
+  directory
+- CVE-2026-114418 - don't handle PUT when the request was already
+  rejected: with digest authentication configured, an unauthenticated
+  client could create or overwrite any file of the share
+- CVE-2026-114419 - chezdav: check the digest password, any password
+  was accepted for a user listed in the htdigest file
+- refuse the oversized request bodies with 413, including the chunked
+  ones, and don't run the method handler of an already rejected request
+- fix crash and hangs on invalid If headers
+- fix a crash on PROPFIND/PROPPATCH requests without any property
+
+New features:
+
+- chezdav: serve the share over HTTPS with --tls-cert/--tls-key
+- chezdav: listen on a Unix socket with --socket, including on Windows 10
+- chezdav: optional upload size limit with --max-upload
+- chezdav: --verbose enables the debug messages
+- chezdav: MSI: bundle libsoup 3, the Windows installer works again
+- get: serve byte-range requests
+- get: answer conditional requests with Not Modified
+- put: implement If-Match and If-None-Match conditionals
+- server: allow constructing with an existing SoupServer, and add a
+  max-upload property
+- virtual-dir: report a modification time and etag
+- virtual-dir: implement the GFile URI, dup, prefix and relative path
+  operations
+- spice-webdavd: add a --mux-path option
+- libphodav: gobject-introspection support, language bindings become
+  possible
+
+DAV fixes:
+
+- lock: enforce the lock timeouts, reject conflicting locks on
+  collection members, accept the tokens submitted for covered
+  resources, accept any If header form when refreshing, reject requests
+  without locktype or lockscope, and canonicalize the lock table keys
+- put: answer the upload once the file is committed, discard the
+  partial file when the upload fails, return Conflict when the parent
+  collection is missing
+- propfind: answer each requested property once, read the dead
+  property values unescaped, fix the creationdate and getlastmodified
+  formats
+- proppatch: fix a crash when removing properties
+- multistatus and directory listing hrefs are URI-escaped
+- reject invalid Depth headers and bad request paths with 400, answer
+  the unknown methods with 501
+- harden the directory listings (error path, nosniff, CSP), and fall
+  back to a default content type
+- fix several leaks (locks, paths, GFileInfo, options, xattr values)
+
+spice-webdavd:
+
+- give the mux clients increasing ids, the connection ids could be
+  reused or truncated on Win64
+- fix and harden the systemd unit: restart on failure, sandboxing
+
+Build, documentation and tests:
+
+- requires GLib >= 2.80 and meson >= 1.0
+- switch API documentation to gi-docgen, man page to scdoc
+- use SPDX license identifiers
+- clang-format and gobject-linter compliance, pre-commit hooks
+- extensive new test suite: unit tests, DAV end-to-end tests, TLS and
+  digest authentication tests, spice-webdavd multiplexing test
+- run litmus with meson test, building it as a subproject when not
+  installed
+- add libFuzzer targets for the DAV request parsers
+- CI: coverage (line and branch), clang static analyzer, sanitizers,
+  -Werror and gobject-linter jobs, Windows tests under Wine
+
 v3.0
 ====
 

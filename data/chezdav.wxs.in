@@ -17,7 +17,7 @@
       <?define Win64 = "no"?>
   <?endif?>
 
-  <?require libsoup.wxi?>
+  <?require libsoup3.wxi?>
 
   <Product Id="*" Name="chezdav @VERSION@@BUILDID@ ($(var.ArchString))"
            Manufacturer="$(env.MANUFACTURER)"
@@ -58,7 +58,7 @@
     </Directory>
 
     <Feature Id="Complete"  Level="1">
-      <ComponentGroupRef Id="CG.libsoup"/>
+      <ComponentGroupRef Id="CG.libsoup3"/>
       <ComponentRef Id="CChezDAV"/>
       <ComponentRef Id="CLibPhoDAV"/>
       <ComponentRef Id="CDepsTxt"/>

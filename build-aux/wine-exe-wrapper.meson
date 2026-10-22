@@ -1,0 +1,14 @@
+# An additional machine file for the mingw builds, adding Wine as the
+# executable wrapper so that meson can run the cross-compiled tests:
+#
+#   mingw64-meson --cross-file build-aux/wine-exe-wrapper.meson builddir
+#   meson test -C builddir
+#
+# The tests also need the mingw DLLs on their search path, for example:
+#
+#   WINEPATH="Z:\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;$(winepath -w "$(pwd)/libphodav");$(winepath -w "$(pwd)/bin")"
+#
+# (see the test_win job in .gitlab-ci.yml)
+
+[binaries]
+exe_wrapper = ['wine64']

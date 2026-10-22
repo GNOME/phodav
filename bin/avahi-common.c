@@ -1,30 +1,20 @@
 /*
  * Copyright (C) 2019 Red Hat, Inc.
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
+
 #include "avahi-common.h"
+
+#include <errno.h>
+#include <net/if.h>
+#include <netinet/in.h>
 
 #include <avahi-gobject/ga-client.h>
 #include <avahi-gobject/ga-entry-group.h>
-
 #include <ifaddrs.h>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <errno.h>
 
 static GaClient *mdns_client;
 static GaEntryGroup *mdns_group;
@@ -32,11 +22,13 @@ static GaEntryGroup *mdns_group;
 static const gchar *s_name;
 static guint s_port;
 static gboolean s_local;
+static gboolean s_tls;
 
 static gboolean
 ifaddr_is_loopback (struct ifaddrs *ifa)
 {
-  union {
+  union
+  {
     struct sockaddr_in *in;
     struct sockaddr_in6 *in6;
   } sa;
@@ -49,12 +41,12 @@ ifaddr_is_loopback (struct ifaddrs *ifa)
 
   switch (ifa->ifa_addr->sa_family)
     {
-      case AF_INET:
-        sa.in = (struct sockaddr_in *)(ifa->ifa_addr);
-        return sa.in->sin_addr.s_addr == g_htonl (0x7f000001); // 127.0.0.1
-      case AF_INET6:
-        sa.in6 = (struct sockaddr_in6 *)(ifa->ifa_addr);
-        return IN6_IS_ADDR_LOOPBACK (&sa.in6->sin6_addr);
+    case AF_INET:
+      sa.in = (struct sockaddr_in *) (ifa->ifa_addr);
+      return sa.in->sin_addr.s_addr == g_htonl (0x7f000001); // 127.0.0.1
+    case AF_INET6:
+      sa.in6 = (struct sockaddr_in6 *) (ifa->ifa_addr);
+      return IN6_IS_ADDR_LOOPBACK (&sa.in6->sin6_addr);
     }
   return FALSE;
 }
@@ -67,7 +59,7 @@ get_loopback_if_id (void)
 
   if (getifaddrs (&ifaddr) == -1)
     {
-      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror(errno));
+      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror (errno));
       return id;
     }
 
@@ -107,7 +99,9 @@ mdns_register_service (void)
                                      s_local ? get_loopback_if_id () : AVAHI_IF_UNSPEC,
                                      AVAHI_PROTO_UNSPEC,
                                      0,
-                                     s_name, "_webdav._tcp",
+                                     s_name,
+                                     /* WebDAV over TLS is announced with its own service type */
+                                     s_tls ? "_webdavs._tcp" : "_webdav._tcp",
                                      NULL, NULL,
                                      s_port, &error,
                                      NULL);
@@ -178,7 +172,7 @@ mdns_state_changed (GaClient *client, GaClientState state, gpointer user_data)
 }
 
 gboolean
-avahi_client_start (const gchar *name, guint port, gboolean local, GError **error)
+avahi_client_start (const gchar *name, guint port, gboolean local, gboolean tls, GError **error)
 {
   g_return_val_if_fail (mdns_client == NULL, FALSE);
 
@@ -186,6 +180,7 @@ avahi_client_start (const gchar *name, guint port, gboolean local, GError **erro
   s_name = name;
   s_port = port;
   s_local = local;
+  s_tls = tls;
 
   g_signal_connect (mdns_client, "state-changed", G_CALLBACK (mdns_state_changed), NULL);
   return ga_client_start (mdns_client, error);

@@ -1,0 +1,7 @@
+PROPPATCH /test HTTP/1.1
+Host: fuzz
+If: (Not <DAV:no-lock>)
+Content-Length: 112
+Connection: close
+
+<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><user.fuzz>value</user.fuzz></D:prop></D:set></D:propertyupdate>
