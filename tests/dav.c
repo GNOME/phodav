@@ -1389,6 +1389,23 @@ test_delete_locked (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_lock_escaping (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *content = NULL;
+
+  msg = dav_request (f, "LOCK", "/sp ace.txt", LOCK_EXCLUSIVE, &body,
+                     "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+
+  doc = parse_prop (body);
+  content = node_content (find_child (find_child (find_activelock (doc), "lockroot"), "href"));
+  g_assert_cmpstr (content, ==, "/sp%20ace.txt");
+}
+
+static void
 test_lock_double_slash (DavFixture *f, gconstpointer user_data)
 {
   /* empty path segments are skipped when the path is used as a key
@@ -2516,6 +2533,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
   g_test_add ("/dav/delete-locked", DavFixture, NULL, dav_fixture_setup, test_delete_locked, dav_fixture_teardown);
+  g_test_add ("/dav/lock-escaping", DavFixture, NULL, dav_fixture_setup, test_lock_escaping, dav_fixture_teardown);
   g_test_add ("/dav/lock-double-slash", DavFixture, NULL, dav_fixture_setup, test_lock_double_slash, dav_fixture_teardown);
   g_test_add ("/dav/lock/depth-infinity", DavFixture, NULL, dav_fixture_setup, test_lock_depth_infinity, dav_fixture_teardown);
   g_test_add ("/dav/lock/expiry", DavFixture, NULL, dav_fixture_setup, test_lock_expiry, dav_fixture_teardown);

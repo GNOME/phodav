@@ -106,9 +106,15 @@ dav_lock_get_activelock_node (const DAVLock *lock,
   node = xmlNewChild (node, ns, BAD_CAST "href", NULL);
   xmlAddChild (node, xmlNewText (BAD_CAST lock->token));
 
-  node = xmlNewChild (active, ns, BAD_CAST "lockroot", NULL);
-  node = xmlNewChild (node, ns, BAD_CAST "href", NULL);
-  xmlAddChild (node, xmlNewText (BAD_CAST lock->path->path));
+  {
+    g_autofree gchar *href = g_uri_escape_string (lock->path->path,
+                                                  G_URI_RESERVED_CHARS_ALLOWED_IN_PATH,
+                                                  FALSE);
+
+    node = xmlNewChild (active, ns, BAD_CAST "lockroot", NULL);
+    node = xmlNewChild (node, ns, BAD_CAST "href", NULL);
+    xmlAddChild (node, xmlNewText (BAD_CAST href));
+  }
   if (lock->timeout)
     {
       g_autofree gchar *tmp = g_strdup_printf ("Second-%" G_GINT64_FORMAT, lock->timeout -

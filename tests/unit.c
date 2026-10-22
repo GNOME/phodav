@@ -460,7 +460,7 @@ test_dav_lock_activelock_node (void)
   xmlDocPtr doc = xmlNewDoc (NULL);
   xmlNodePtr owner = xmlNewDocNode (doc, NULL, BAD_CAST "owner", BAD_CAST "unit-test");
   xmlNsPtr ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
-  g_autoptr(Path) p = path_new_test ("/a/b");
+  g_autoptr(Path) p = path_new_test ("/a b/c");
   g_autofree gchar *token = new_token ();
   g_autoptr(DAVLock) lock = NULL;
   xmlNodePtr node;
@@ -487,8 +487,9 @@ test_dav_lock_activelock_node (void)
   g_assert_cmpstr (content, ==, token);
   g_clear_pointer (&content, g_free);
 
+  /* the lockroot is a URI, its path must be escaped */
   content = node_content (find_child (find_child (node, "lockroot"), "href"));
-  g_assert_cmpstr (content, ==, "/a/b");
+  g_assert_cmpstr (content, ==, "/a%20b/c");
   g_clear_pointer (&content, g_free);
 
   content = node_content (find_child (node, "timeout"));
