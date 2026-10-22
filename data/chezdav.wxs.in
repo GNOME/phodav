@@ -18,6 +18,7 @@
   <?endif?>
 
   <?require libsoup3.wxi?>
+  <?require libxml2.wxi?>
 
   <Product Id="*" Name="chezdav @VERSION@@BUILDID@ ($(var.ArchString))"
            Manufacturer="$(env.MANUFACTURER)"
@@ -59,6 +60,7 @@
 
     <Feature Id="Complete"  Level="1">
       <ComponentGroupRef Id="CG.libsoup3"/>
+      <ComponentGroupRef Id="CG.libxml2"/>
       <ComponentRef Id="CChezDAV"/>
       <ComponentRef Id="CLibPhoDAV"/>
       <ComponentRef Id="CDepsTxt"/>
