@@ -2497,6 +2497,11 @@ test_request_path_validation (DavFixture *f, gconstpointer user_data)
   g_assert_cmpuint (raw_http_status (f, "PUT //etc/passwd"),
                     ==, SOUP_STATUS_BAD_REQUEST);
 
+  /* the streamed methods are validated like the other ones: a URI
+   * fragment is refused there too, not only by server_callback() */
+  g_assert_cmpuint (raw_http_status (f, "PUT /hello.txt#frag"),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+
   /* the normal server still works after the rejected requests */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
                     ==, SOUP_STATUS_OK);

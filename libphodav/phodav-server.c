@@ -677,6 +677,97 @@ server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *
   return d.conflict;
 }
 
+typedef struct _DavMethod DavMethod;
+
+/* the DAV methods handled by the server, in the order of the Allow
+ * header of the OPTIONS answer.
+ *
+ * The mutating methods, which modify the shared files, are answered
+ * with FORBIDDEN when the server is read-only. UNLOCK is not one of
+ * them: it only releases a lock, and does not modify the files.
+ *
+ * A method with a headers_handler streams its request body out
+ * while it is received: it is started from got_headers(), before
+ * its body arrives, and it is answered from its got-body callback,
+ * once the file it writes is committed (PUT answers its success
+ * status only then). It has no handler: server_callback() runs
+ * none for it either. It is listed like the other methods, so that
+ * the Allow header covers it. */
+struct _DavMethod
+{
+  const gchar *name;
+  gboolean mutating;
+  gint (*handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
+  void (*headers_handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
+};
+
+static const DavMethod dav_methods[] = {
+  { "GET", FALSE, phodav_method_get, NULL },
+  { "HEAD", FALSE, phodav_method_get, NULL },
+  { "PUT", TRUE, NULL, phodav_method_put },
+  { "PROPFIND", FALSE, phodav_method_propfind, NULL },
+  { "PROPPATCH", TRUE, phodav_method_proppatch, NULL },
+  { "MKCOL", TRUE, phodav_method_mkcol, NULL },
+  { "DELETE", TRUE, phodav_method_delete, NULL },
+  { "MOVE", TRUE, phodav_method_movecopy, NULL },
+  { "COPY", TRUE, phodav_method_movecopy, NULL },
+  { "LOCK", TRUE, phodav_method_lock, NULL },
+  { "UNLOCK", FALSE, phodav_method_unlock, NULL },
+};
+
+static const DavMethod *
+dav_method_lookup (const gchar *method)
+{
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    if (g_strcmp0 (method, dav_methods[i].name) == 0)
+      return &dav_methods[i];
+
+  return NULL;
+}
+
+/* the comma separated names of the methods, for the Allow header */
+static gchar *
+dav_methods_allow (void)
+{
+  g_autoptr(GString) allow = g_string_sized_new (128);
+  gsize i;
+
+  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
+    {
+      if (i > 0)
+        g_string_append (allow, ", ");
+      g_string_append (allow, dav_methods[i].name);
+    }
+
+  return g_string_free_and_steal (g_steal_pointer (&allow));
+}
+
+/* the DAV requests operate on the resources under the share root:
+ * their path must be absolute (it begins with a "/"), but relative
+ * to the root (no second "/" may follow the first one, or the path
+ * would read as absolute on Windows too), and their URI must carry
+ * no fragment. The dot segments were removed by libsoup already. A
+ * request which does not qualify is answered with 400 BAD REQUEST. */
+static gboolean
+request_path_is_valid (SoupServerMessage *msg, const gchar *path)
+{
+  GUri *uri = soup_server_message_get_uri (msg);
+
+  if (!(path && *path == '/'))
+    g_debug ("path must begin with /");
+  else if (g_path_is_absolute (path + 1))
+    g_debug ("path cannot be absolute: %s", path);
+  else if (!(uri && g_uri_get_fragment (uri) == NULL))
+    g_debug ("using fragments in query is not supported");
+  else
+    return TRUE;
+
+  soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+  return FALSE;
+}
+
 /* a body which is not delimited by a Content-Length cannot be
  * checked before it is received: refuse it as soon as it grows over
  * the parse limit, so that a client cannot make the server
@@ -710,35 +801,58 @@ got_headers (SoupServerMessage *msg,
   PhodavServer *self = user_data;
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *path = g_uri_get_path (uri);
-  g_autoptr(GError) err = NULL;
   const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  const DavMethod *m = dav_method_lookup (method);
 
   /* libsoup handlers ran first, the request may have been rejected
    * already (invalid path, authentication...) */
   if (soup_server_message_get_status (msg) != 0)
     return;
 
-  if (method == SOUP_METHOD_PUT)
+  /* without a shared root, no handler is registered: the requests
+   * are answered by libsoup, phodav has nothing to do with them */
+  if (!self->root_handler)
+    return;
+
+  /* a method which streams its request body out while it is
+   * received (PUT) is started from here, before the body arrives:
+   * it is answered from its got-body callback, not by
+   * server_callback() */
+  if (m && m->headers_handler)
     {
-      if (!(path && *path == '/') || g_path_is_absolute (path + 1))
+      g_autoptr(GError) err = NULL;
+
+      /* the request is validated like server_callback() validates
+       * the ones of the other methods; a refused client may still
+       * be sending its body: have it drained, not accumulated */
+      if (!request_path_is_valid (msg, path))
         {
-          g_debug ("invalid PUT path: %s", path);
-          soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
+          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
           return;
         }
 
-      phodav_method_put (self->root_handler, msg, path, &err);
+      /* a read-only server refuses the mutating methods before
+       * their upload is started, like server_callback() does for
+       * the other ones */
+      if (self->readonly && m->mutating)
+        {
+          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+          soup_server_message_set_status (msg, SOUP_STATUS_FORBIDDEN, NULL);
+          return;
+        }
+
+      m->headers_handler (self->root_handler, msg, path, &err);
 
       if (err)
-        g_debug ("PUT %s: %s", path, err->message);
+        g_debug ("%s %s: %s", method, path, err->message);
 
       return;
     }
 
-  /* unlike PUT, the other methods have their request body parsed in
-   * memory: refuse an unreasonable Content-Length before the body is
-   * received (RFC 9110 section 15.5.15), and drain it without
+  /* the other methods have their whole request body parsed in
+   * memory: refuse an unreasonable Content-Length before the body
+   * is received (RFC 9110 section 15.5.15), and drain it without
    * accumulating it */
   if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
     {
@@ -764,70 +878,6 @@ request_started (SoupServer *server,
   g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
 }
 
-typedef struct _DavMethod DavMethod;
-
-/* the DAV methods handled by the server, in the order of the Allow
- * header of the OPTIONS answer.
- *
- * The mutating methods, which modify the shared files, are answered
- * with FORBIDDEN when the server is read-only. UNLOCK is not one of
- * them: it only releases a lock, and does not modify the files.
- *
- * PUT has no handler: its body is streamed to the file from
- * got_headers(), and the request is answered from its got-body
- * callback, once the file is committed (its read-only refusal also
- * happens there). It is listed like the other methods, so that the
- * Allow header covers it. */
-struct _DavMethod
-{
-  const gchar *name;
-  gboolean mutating;
-  gint (*handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-};
-
-static const DavMethod dav_methods[] = {
-  { "GET", FALSE, phodav_method_get },
-  { "HEAD", FALSE, phodav_method_get },
-  { "PUT", TRUE, NULL },
-  { "PROPFIND", FALSE, phodav_method_propfind },
-  { "PROPPATCH", TRUE, phodav_method_proppatch },
-  { "MKCOL", TRUE, phodav_method_mkcol },
-  { "DELETE", TRUE, phodav_method_delete },
-  { "MOVE", TRUE, phodav_method_movecopy },
-  { "COPY", TRUE, phodav_method_movecopy },
-  { "LOCK", TRUE, phodav_method_lock },
-  { "UNLOCK", FALSE, phodav_method_unlock },
-};
-
-static const DavMethod *
-dav_method_lookup (const gchar *method)
-{
-  gsize i;
-
-  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
-    if (g_strcmp0 (method, dav_methods[i].name) == 0)
-      return &dav_methods[i];
-
-  return NULL;
-}
-
-/* the comma separated names of the methods, for the Allow header */
-static gchar *
-dav_methods_allow (void)
-{
-  g_autoptr(GString) allow = g_string_sized_new (128);
-  gsize i;
-
-  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
-    {
-      if (i > 0)
-        g_string_append (allow, ", ");
-      g_string_append (allow, dav_methods[i].name);
-    }
-
-  return g_string_free_and_steal (g_steal_pointer (&allow));
-}
-
 static void
 server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
 {
@@ -835,8 +885,8 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
   PathHandler *handler = user_data;
   gint status = SOUP_STATUS_NOT_IMPLEMENTED;
 
-  GUri *uri = soup_server_message_get_uri (msg);
   const gchar *method = soup_server_message_get_method (msg);
+  const DavMethod *m = dav_method_lookup (method);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageHeaders *response_headers;
   g_autoptr(GHashTable) params = NULL;
@@ -846,36 +896,22 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
   /* got_headers() may have already rejected the request (oversized
-   * body, or a PUT refused before its upload was started); do not
-   * overwrite its status with the result of the method handler */
+   * body, or a streamed method refused before its upload was
+   * started); do not overwrite its status with the result of the
+   * method handler */
   if (soup_server_message_get_status (msg) != 0)
     return;
 
-  /* a PUT which passed got_headers() streams its body to the file
-   * while it is received, and is answered from its got-body callback
-   * once the file is committed: it has no method handler here */
-  if (method == SOUP_METHOD_PUT)
+  /* a streamed method was started from got_headers(), before its
+   * request body was received, and is answered from its got-body
+   * callback, once the file it writes is committed: there is no
+   * handler to run for it here, and its answer must not be
+   * overwritten */
+  if (m && m->headers_handler)
     return;
 
-  if (!(path && *path == '/'))
-    {
-      g_debug ("path must begin with /");
-      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
-      return;
-    }
-  if (g_path_is_absolute (path + 1))
-    {
-      g_debug ("path cannot be absolute");
-      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
-      return;
-    }
-
-  if (!(uri && g_uri_get_fragment (uri) == NULL))
-    {
-      g_debug ("using fragments in query is not supported");
-      soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
-      return;
-    }
+  if (!request_path_is_valid (msg, path))
+    return;
 
   params = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
   g_hash_table_insert (params, g_strdup ("charset"), g_strdup ("utf-8"));
@@ -897,21 +933,13 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
     }
   else
     {
-      const DavMethod *m = dav_method_lookup (method);
-
       if (m == NULL)
         {
           /* rather than warning, answer that the method is not implemented */
           g_debug ("unsupported method %s", method);
         }
-      else if (handler->self->readonly && m->mutating)
+      else if (handler_get_readonly (handler) && m->mutating)
         status = SOUP_STATUS_FORBIDDEN;
-      else if (m->handler == NULL)
-        {
-          /* only PUT, which is answered from its body callback and
-           * returns before the dispatch */
-          g_warn_if_reached ();
-        }
       else
         status = m->handler (handler, msg, path, &err);
     }

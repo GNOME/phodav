@@ -249,11 +249,8 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
    * client is still sending it */
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
 
-  if (handler_get_readonly (handler))
-    {
-      status = SOUP_STATUS_FORBIDDEN;
-      goto end;
-    }
+  /* the read-only refusal is enforced by the method dispatch, in
+   * got_headers(), before the upload is started */
 
   /* an upload which is over the limit is refused before anything is
    * written to disk, RFC 9110 section 15.5.15; a chunked body has
