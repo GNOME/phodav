@@ -10,15 +10,22 @@ if conf.has('WITH_AVAHI')
 endif
 
 output_queue_sources = files('output-queue.c', 'output-queue.h')
+spice_mux_sources = files('spice-mux.c', 'spice-mux.h')
 bin_inc = include_directories('.')
 
-sources = [
-  'spice-webdavd.c',
-]
+spice_webdavd_sources = files('spice-webdavd.c') + spice_mux_sources + output_queue_sources
+if host_machine.system() == 'windows'
+  spice_webdavd_sources += files(
+    'drive-mapping.c',
+    'drive-mapping.h',
+    'win32-service.c',
+    'win32-service.h',
+  )
+endif
 
 spice_webdavd = executable(
   'spice-webdavd',
-  sources + output_queue_sources + avahi_common,
+  spice_webdavd_sources + avahi_common,
   install_dir : sbindir,
   include_directories : incdir,
   dependencies : win32_deps + avahi_deps + deps,

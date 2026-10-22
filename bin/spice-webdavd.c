@@ -11,331 +11,127 @@
 #include <gio/gio.h>
 
 #ifdef G_OS_UNIX
-#include <errno.h>
-#include <fcntl.h>
-
-#include <gio/gunixinputstream.h>
-#include <gio/gunixoutputstream.h>
 #include <glib-unix.h>
-#include <glib/gstdio.h>
 #endif
 
 #ifdef G_OS_WIN32
-#include <gio/gwin32inputstream.h>
-#include <gio/gwin32outputstream.h>
-#include <windows.h>
-#define SERVICE_NAME "spice-webdavd"
+#include <signal.h>
+
+#include "drive-mapping.h"
+#include "win32-service.h"
 #endif
 
 #ifdef WITH_AVAHI
 #include "avahi-common.h"
 #endif
 
-#include "output-queue.h"
+#include "spice-mux.h"
 
-typedef struct _ServiceData
-{
-#ifdef G_OS_WIN32
-  gchar drive_letter;
-  GMutex mutex;
-#endif
-} ServiceData;
-
-static GCancellable *cancel;
-
-static struct _DemuxData
-{
-  gint64 client;
-  guint16 size;
-  gchar buf[G_MAXUINT16];
-} demux;
-
-typedef struct _Client
-{
-  guint ref_count;
-  struct
-  {
-    gint64 id;
-    guint16 size;
-    guint8 buf[G_MAXUINT16];
-  } mux;
-  GSocketConnection *client_connection;
-} Client;
-
-static volatile gboolean quit_service;
-static GMainLoop *loop;
-static GInputStream *mux_istream;
-static GOutputStream *mux_ostream;
-static OutputQueue *mux_queue;
-static GHashTable *clients;
-/* the ids of the mux clients, see add_client() */
-static gint64 mux_client_ids;
-static GSocketService *socket_service;
-#ifdef G_OS_UNIX
-static gint port_fd;
+/* the default mux channel: the spice WebDAV virtio port */
+#ifdef __APPLE__
+#define DEFAULT_MUX_PATH "/dev/tty.org.spice-space.webdav.0"
 #elif defined(G_OS_WIN32)
-static HANDLE port_handle;
+#define DEFAULT_MUX_PATH "\\\\.\\Global\\org.spice-space.webdav.0"
+#else
+#define DEFAULT_MUX_PATH "/dev/virtio-ports/org.spice-space.webdav.0"
 #endif
 
-static void start_mux_read (GInputStream *istream);
+/* the delay before the mux channel is reopened, when it broke, in
+ * seconds */
+#define RECONNECT_DELAY 1
 
+/* the daemon: the client connections are multiplexed over the mux
+ * channel, which is reopened when it breaks, until the daemon is
+ * asked to stop */
+typedef struct _Daemon
+{
+  gchar *mux_path;
+
+  /* the live mux, and the pending source reopening it when it broke;
+   * borrowed pointers, owned by run_daemon() and read by the stop
+   * handlers */
+  SpiceMux *mux;
+  guint retry_id;
+  GMainLoop *loop;
+
+  /* set when the daemon must stop; read from the main loop, written
+   * by the signal source (the main thread) or the Windows service
+   * control handler (its own thread) */
+  gint stopped;
+} Daemon;
+
+/* the daemon of the process, for the handlers which take no user
+ * data */
+static Daemon *the_daemon;
+
+/* ask the daemon to stop: leave the main loop of the daemon, the mux
+ * channel is not reopened afterwards */
 static void
-quit (gint sig)
+daemon_stop (gpointer user_data)
 {
-  g_debug ("quit %d", sig);
+  Daemon *daemon = user_data;
 
-  if (sig == SIGINT || sig == SIGTERM)
-    quit_service = TRUE;
+  g_debug ("stopping the daemon");
 
-  if (loop)
-    g_main_loop_quit (loop);
+  g_atomic_int_set (&daemon->stopped, TRUE);
+
+  if (daemon->loop)
+    g_main_loop_quit (daemon->loop);
 }
 
-#ifdef G_OS_UNIX
-static gboolean
-signal_handler (gpointer user_data)
-{
-  quit (SIGINT);
-  return G_SOURCE_REMOVE;
-}
-#endif
+static void daemon_open_mux (Daemon *daemon);
 
-static Client *
-add_client (GSocketConnection *client_connection)
-{
-  Client *client;
-
-  client = g_new0 (Client, 1);
-  client->ref_count = 1;
-  client->client_connection = g_object_ref (client_connection);
-
-  /* the id only has to be unique among the live clients: the other
-   * end of the mux channel learns it from the data forwarded to it
-   * and echoes it back. A monotonically increasing counter cannot
-   * collide, unlike the connection pointer it replaces, which may
-   * be reused by a later connection (and does not even fit in an
-   * int on Win64). */
-  client->mux.id = ++mux_client_ids;
-
-  g_hash_table_insert (clients, &client->mux.id, client);
-  g_warn_if_fail (g_hash_table_lookup (clients, &client->mux.id));
-
-  return client;
-}
-
-static Client *
-client_ref (Client *c)
-{
-  c->ref_count++;
-  return c;
-}
-
+/* the retry of a mux channel which could not be opened */
 static void
-client_unref (gpointer user_data)
+open_mux_retry_cb (gpointer user_data)
 {
-  Client *c = user_data;
-  if (--c->ref_count > 0)
+  Daemon *daemon = user_data;
+
+  daemon->retry_id = 0;
+
+  if (g_atomic_int_get (&daemon->stopped))
     return;
 
-  g_debug ("Free client %" G_GINT64_FORMAT, c->mux.id);
+  daemon_open_mux (daemon);
+}
 
-  g_io_stream_close (G_IO_STREAM (c->client_connection), NULL, NULL);
-  g_object_unref (c->client_connection);
-  g_free (c);
+/* the mux channel broke (or the mux was stopped): drop it, and
+ * reopen it after a delay unless the daemon is stopping */
+static void
+mux_closed_cb (SpiceMux *mux, gpointer user_data)
+{
+  Daemon *daemon = user_data;
+
+  daemon->mux = NULL;
+  g_object_unref (mux);
+
+  /* let the operations cancelled by the close complete, they release
+   * the last references on the mux and its clients */
+  while (g_main_context_pending (NULL))
+    g_main_context_iteration (NULL, FALSE);
+
+  if (!g_atomic_int_get (&daemon->stopped))
+    daemon->retry_id = g_timeout_add_seconds_once (RECONNECT_DELAY, open_mux_retry_cb, daemon);
 }
 
 static void
-remove_client (Client *client)
+daemon_open_mux (Daemon *daemon)
 {
-  g_debug ("remove client %" G_GINT64_FORMAT, client->mux.id);
-
-  g_hash_table_remove (clients, &client->mux.id);
-}
-
-static void
-mux_pushed_client_cb (GObject *source_object,
-                      GAsyncResult *res,
-                      gpointer user_data)
-{
-  Client *client = user_data;
+  SpiceMux *mux;
   g_autoptr(GError) error = NULL;
-  g_output_stream_write_all_finish (G_OUTPUT_STREAM (source_object), res, NULL, &error);
 
-  if (error)
+  mux = spice_mux_new (daemon->mux_path, &error);
+  if (mux)
     {
-      g_warning ("error pushing to client %" G_GINT64_FORMAT ": %s",
-                 client->mux.id, error->message);
-      remove_client (client);
-    }
-  client_unref (client);
-
-  start_mux_read (mux_istream);
-}
-
-static void
-mux_data_read_cb (GObject *source_object,
-                  GAsyncResult *res,
-                  gpointer user_data)
-{
-  GError *error = NULL;
-  gsize size;
-
-  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
-  g_debug ("read %" G_GSIZE_FORMAT " bytes from mux", size);
-  if (error)
-    {
-      g_warning ("%s: error: %s", __FUNCTION__, error->message);
-      g_clear_error (&error);
-    }
-  if (size != demux.size)
-    {
-      quit (-1);
+      daemon->mux = mux;
+      g_signal_connect (mux, "closed", G_CALLBACK (mux_closed_cb), daemon);
       return;
     }
 
-  Client *c = g_hash_table_lookup (clients, &demux.client);
-  g_debug ("looked up client %" G_GINT64_FORMAT ": %p", demux.client, c);
-
-  if (c)
-    {
-      GOutputStream *out;
-      out = g_io_stream_get_output_stream (G_IO_STREAM (c->client_connection));
-      g_output_stream_write_all_async (out, demux.buf, demux.size,
-                                       G_PRIORITY_DEFAULT, cancel, mux_pushed_client_cb, client_ref (c));
-    }
-  else
-    start_mux_read (mux_istream);
-}
-
-static void
-mux_size_read_cb (GObject *source_object,
-                  GAsyncResult *res,
-                  gpointer user_data)
-{
-  GInputStream *istream = G_INPUT_STREAM (source_object);
-  GError *error = NULL;
-  gsize size;
-
-  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
-  if (error || size != sizeof (guint16))
-    goto end;
-
-  g_input_stream_read_all_async (istream,
-                                 &demux.buf, demux.size, G_PRIORITY_DEFAULT,
-                                 cancel, mux_data_read_cb, NULL);
-  return;
-
-end:
-  if (error)
-    {
-      g_warning ("%s: error: %s", __FUNCTION__, error->message);
-      g_clear_error (&error);
-    }
-
-  quit (-2);
-}
-
-static void
-mux_client_read_cb (GObject *source_object,
-                    GAsyncResult *res,
-                    gpointer user_data)
-{
-  GInputStream *istream = G_INPUT_STREAM (source_object);
-  GError *error = NULL;
-  gsize size;
-
-  g_input_stream_read_all_finish (G_INPUT_STREAM (source_object), res, &size, &error);
-  if (error || size != sizeof (gint64))
-    goto end;
-  g_input_stream_read_all_async (istream,
-                                 &demux.size, sizeof (guint16), G_PRIORITY_DEFAULT,
-                                 cancel, mux_size_read_cb, NULL);
-  return;
-
-end:
-  if (error)
-    {
-      g_warning ("%s: error: %s", __FUNCTION__, error->message);
-      g_clear_error (&error);
-    }
-
-  quit (-3);
-}
-
-static void
-start_mux_read (GInputStream *istream)
-{
-  g_debug ("start reading mux");
-  g_input_stream_read_all_async (istream,
-                                 &demux.client, sizeof (gint64), G_PRIORITY_DEFAULT,
-                                 cancel, mux_client_read_cb, NULL);
-}
-
-static void client_start_read (Client *client);
-
-static void
-mux_pushed_cb (OutputQueue *q, gpointer user_data, GError *error)
-{
-  Client *client = user_data;
-
-  if (error)
-    {
-      g_warning ("error pushing to mux from client %" G_GINT64_FORMAT ": %s",
-                 client->mux.id, error->message);
-      remove_client (client);
-      goto end;
-    }
-
-  if (client->mux.size == 0)
-    {
-      remove_client (client);
-      goto end;
-    }
-
-  client_start_read (client);
-end:
-  client_unref (client);
-}
-
-static void
-client_read_cb (GObject *source_object,
-                GAsyncResult *res,
-                gpointer user_data)
-{
-  Client *client = user_data;
-  GError *error = NULL;
-  gssize size;
-
-  size = g_input_stream_read_finish (G_INPUT_STREAM (source_object), res, &error);
-  g_debug ("read %" G_GSSIZE_FORMAT " bytes from client %" G_GINT64_FORMAT, size, client->mux.id);
-  if (error)
-    {
-      g_warning ("%s: error for client %" G_GINT64_FORMAT ": %s",
-                 __FUNCTION__, client->mux.id, error->message);
-      g_clear_error (&error);
-      remove_client (client);
-      client_unref (client);
-      return;
-    }
-
-  g_return_if_fail (size <= G_MAXUINT16);
-  g_return_if_fail (size >= 0);
-  client->mux.size = size;
-
-  output_queue_push (mux_queue, (guint8 *) &client->mux,
-                     sizeof (gint64) + sizeof (guint16) + size, mux_pushed_cb, client);
-}
-
-static void
-client_start_read (Client *client)
-{
-  GIOStream *iostream = G_IO_STREAM (client->client_connection);
-  GInputStream *istream = g_io_stream_get_input_stream (iostream);
-
-  g_debug ("start read client %" G_GINT64_FORMAT, client->mux.id);
-  g_input_stream_read_async (istream,
-                             client->mux.buf, G_MAXUINT16, G_PRIORITY_DEFAULT,
-                             cancel, client_read_cb, client_ref (client));
+  /* the channel cannot be opened (the device is not there yet?):
+   * retry after a delay */
+  g_warning ("Failed to open the mux channel: %s", error->message);
+  daemon->retry_id = g_timeout_add_seconds_once (RECONNECT_DELAY, open_mux_retry_cb, daemon);
 }
 
 static gboolean
@@ -344,461 +140,103 @@ incoming_callback (GSocketService *service,
                    GObject *source_object,
                    gpointer user_data)
 {
-  Client *client;
+  Daemon *daemon = user_data;
 
-  client = add_client (client_connection);
-  g_debug ("new client %" G_GINT64_FORMAT, client->mux.id);
-  client_start_read (client);
+  /* the mux channel is being reopened: the connection cannot be
+   * multiplexed, drop it */
+  if (!daemon->mux)
+    return FALSE;
+
+  spice_mux_add_client (daemon->mux, client_connection);
 
   return FALSE;
 }
 
-static gint port;
-static gchar *mux_path;
-
-#ifdef G_OS_WIN32
-static gboolean no_service;
-#endif
-
 #ifdef G_OS_UNIX
-static void
-wait_for_virtio_host (gint fd)
-{
-  GPollFD pfd = { .fd = fd, .events = G_IO_HUP | G_IO_IN | G_IO_OUT };
-
-  while (1)
-    {
-      gboolean connected;
-
-      g_debug ("polling");
-      g_assert_cmpint (g_poll (&pfd, 1, -1), ==, 1);
-      g_debug ("polling end");
-      connected = !(pfd.revents & G_IO_HUP);
-      g_debug ("connected: %d", connected);
-      if (connected)
-        break;
-
-      // FIXME: I don't see a reasonable way to wait for virtio
-      // host-side to be connected..
-      g_usleep (G_USEC_PER_SEC);
-    }
-}
-#endif
-
-static void
-open_mux_path (const gchar *path)
-{
-  g_return_if_fail (path);
-  g_return_if_fail (!mux_istream);
-  g_return_if_fail (!mux_ostream);
-  g_return_if_fail (!mux_queue);
-
-  g_debug ("Open %s", path);
-#ifdef G_OS_UNIX
-  port_fd = g_open (path, O_RDWR);
-  gint errsv = errno;
-  if (port_fd == -1)
-    {
-      g_printerr ("Failed to open %s: %s\n", path, g_strerror (errsv));
-      exit (1);
-    }
-
-  wait_for_virtio_host (port_fd);
-
-  mux_ostream = g_unix_output_stream_new (port_fd, TRUE);
-  mux_istream = g_unix_input_stream_new (port_fd, FALSE);
-#else
-  port_handle = CreateFile (path,
-                            GENERIC_WRITE | GENERIC_READ,
-                            0,
-                            NULL,
-                            OPEN_EXISTING,
-                            FILE_FLAG_OVERLAPPED,
-                            NULL);
-
-  if (port_handle == INVALID_HANDLE_VALUE)
-    g_error ("%s", g_win32_error_message (GetLastError ()));
-
-  mux_ostream = G_OUTPUT_STREAM (g_win32_output_stream_new (port_handle, TRUE));
-  mux_istream = G_INPUT_STREAM (g_win32_input_stream_new (port_handle, TRUE));
-#endif
-
-  mux_queue = output_queue_new (G_OUTPUT_STREAM (mux_ostream), cancel);
-}
-
-#ifdef G_OS_WIN32
-#define MAX_SHARED_FOLDER_NAME_SIZE 64
-#define MAX_DRIVE_LETTER_SIZE 3
-
-typedef struct _MapDriveData
-{
-  ServiceData *service_data;
-  GCancellable *cancel_map;
-} MapDriveData;
-
-static gchar
-get_free_drive_letter (void)
-{
-  const guint32 max_mask = 1 << 25;
-  guint32 drives;
-  gint i;
-
-  drives = GetLogicalDrives ();
-  if (drives == 0)
-    {
-      g_warning ("%s", g_win32_error_message (GetLastError ()));
-      return 0;
-    }
-
-  for (i = 0; i < 26; i++)
-    {
-      guint32 mask = max_mask >> i;
-      if ((drives & mask) == 0)
-        return 'z' - i;
-    }
-
-  return 0;
-}
-
-static gchar
-get_spice_folder_letter (void)
-{
-  const guint32 max_mask = 1 << 25;
-  gchar local_name[3] = "z:";
-  g_autofree gchar *spice_folder_name = NULL;
-  gchar spice_folder_letter = 0;
-  guint32 drives;
-  guint32 i;
-
-  drives = GetLogicalDrives ();
-  spice_folder_name = g_strdup_printf ("\\\\localhost@%d\\DavWWWRoot", port);
-
-  for (i = 0; i < 26; i++)
-    {
-      gchar remote_name[MAX_SHARED_FOLDER_NAME_SIZE];
-      guint32 size = sizeof (remote_name);
-      guint32 mask = max_mask >> i;
-      if (drives & mask)
-        {
-          local_name[0] = 'z' - i;
-          if ((WNetGetConnection (local_name, remote_name, (LPDWORD) &size) == NO_ERROR) &&
-              (g_strcmp0 (remote_name, spice_folder_name) == 0))
-            {
-              spice_folder_letter = local_name[0];
-              g_debug ("Found Spice Shared Folder at %c drive", spice_folder_letter);
-              break;
-            }
-        }
-    }
-
-  return spice_folder_letter;
-}
-
-/* User is required to call netresource_free, when no longer needed. */
-static void
-netresource_init (NETRESOURCE *net_resource, const gchar drive_letter)
-{
-  net_resource->dwType = RESOURCETYPE_DISK;
-  net_resource->lpLocalName = g_strdup_printf ("%c:", drive_letter);
-  net_resource->lpRemoteName = g_strdup_printf ("http://localhost:%d/", port);
-  net_resource->lpProvider = NULL;
-}
-
-static void
-netresource_free (NETRESOURCE *net_resource)
-{
-  g_free (net_resource->lpLocalName);
-  g_free (net_resource->lpRemoteName);
-}
-
-static guint32
-map_drive (const gchar drive_letter)
-{
-  NETRESOURCE net_resource;
-  guint32 errn;
-
-  netresource_init (&net_resource, drive_letter);
-  errn = WNetAddConnection2 (&net_resource, NULL, NULL, CONNECT_TEMPORARY);
-  netresource_free (&net_resource);
-
-  if (errn == NO_ERROR)
-    {
-      g_debug ("Shared folder mapped to %c succesfully", drive_letter);
-    }
-  else if (errn == ERROR_ALREADY_ASSIGNED)
-    {
-      g_debug ("Drive letter %c is already assigned", drive_letter);
-    }
-  else
-    {
-      g_warning ("map_drive error %d", errn);
-    }
-
-  return errn;
-}
-
-static void
-unmap_drive (ServiceData *service_data)
-{
-  gchar local_name[MAX_DRIVE_LETTER_SIZE];
-  guint32 errn;
-
-  g_mutex_lock (&service_data->mutex);
-  snprintf (local_name, MAX_DRIVE_LETTER_SIZE, "%c:", service_data->drive_letter);
-  errn = WNetCancelConnection2 (local_name, CONNECT_UPDATE_PROFILE, TRUE);
-
-  if (errn == NO_ERROR)
-    {
-      g_debug ("Shared folder unmapped succesfully");
-    }
-  else if (errn == ERROR_NOT_CONNECTED)
-    {
-      g_debug ("Drive %c is not connected", service_data->drive_letter);
-    }
-  else
-    {
-      g_warning ("map_drive error %d", errn);
-    }
-
-  g_mutex_unlock (&service_data->mutex);
-}
-
-static void
-map_drive_cb (GTask *task,
-              gpointer source_object,
-              gpointer task_data,
-              GCancellable *cancellable)
-{
-  const guint32 delay = 500; // half a second
-  MapDriveData *map_drive_data = task_data;
-  gchar drive_letter;
-  GPollFD cancel_pollfd;
-  guint32 ret = 0;
-
-  if (!g_cancellable_make_pollfd (map_drive_data->cancel_map, &cancel_pollfd))
-    {
-      g_critical ("GPollFD failed to create.");
-      return;
-    }
-
-  ret = g_poll (&cancel_pollfd, 1, delay);
-  g_cancellable_release_fd (map_drive_data->cancel_map);
-
-  if (ret != 0)
-    {
-      return;
-    }
-
-  while (TRUE)
-    {
-      drive_letter = get_free_drive_letter ();
-      if (drive_letter == 0)
-        {
-          g_warning ("all drive letters already assigned.");
-          break;
-        }
-
-      ret = map_drive (drive_letter);
-      if (ret == ERROR_ALREADY_ASSIGNED)
-        {
-          /* try again with another letter */
-          continue;
-        }
-      if (ret != NO_ERROR)
-        {
-          drive_letter = 0;
-        }
-      break;
-      // TODO: After mapping, rename network drive from \\localhost@PORT\DavWWWRoot
-      //       to something like SPICE Shared Folder
-    }
-  g_mutex_lock (&map_drive_data->service_data->mutex);
-  map_drive_data->service_data->drive_letter = drive_letter;
-  g_mutex_unlock (&map_drive_data->service_data->mutex);
-}
-
-#endif
-
-/* returns FALSE if the service should quit */
 static gboolean
-run_service (ServiceData *service_data)
+signal_handler (gpointer user_data)
 {
+  g_debug ("quit SIGINT");
+
+  daemon_stop (user_data);
+
+  return G_SOURCE_REMOVE;
+}
+#endif
+
+#ifdef G_OS_WIN32
+static void
+console_signal_handler (gint sig)
+{
+  g_debug ("quit %d", sig);
+
+  daemon_stop (the_daemon);
+}
+#endif
+
+/* run the daemon until it is asked to stop: the mux channel is
+ * reopened when it breaks on its own (the guest was disconnected...),
+ * dropping the connected clients with it, while the HTTP server keeps
+ * listening and the announced service stays up. */
+static void
+run_daemon (gpointer user_data)
+{
+  Daemon *daemon = user_data;
+
   g_debug ("Run service");
 
-  if (quit_service)
-    return FALSE;
+  daemon->loop = g_main_loop_new (NULL, TRUE);
 
-#ifdef G_OS_WIN32
-  MapDriveData map_drive_data;
-  map_drive_data.cancel_map = g_cancellable_new ();
-  gchar drive_letter = get_spice_folder_letter ();
+  daemon_open_mux (daemon);
 
-  g_mutex_lock (&service_data->mutex);
-  service_data->drive_letter = drive_letter;
-  map_drive_data.service_data = service_data;
-  g_mutex_unlock (&service_data->mutex);
+  g_main_loop_run (daemon->loop);
 
-  if (drive_letter == 0)
-    {
-      g_autoptr(GTask) map_drive_task = g_task_new (NULL, NULL, NULL, NULL);
-      g_task_set_source_tag (map_drive_task, run_service);
-      g_task_set_task_data (map_drive_task, &map_drive_data, NULL);
-      g_task_run_in_thread (map_drive_task, map_drive_cb);
-    }
-#endif
+  /* the daemon was asked to stop: drop the pending retry and the live
+   * mux, if any (its close drops it) */
+  g_clear_handle_id (&daemon->retry_id, g_source_remove);
+  if (daemon->mux)
+    spice_mux_stop (daemon->mux);
 
-  g_socket_service_start (socket_service);
-
-  cancel = g_cancellable_new ();
-  clients = g_hash_table_new_full (g_int64_hash, g_int64_equal,
-                                   NULL, client_unref);
-
-  loop = g_main_loop_new (NULL, TRUE);
-#ifdef G_OS_UNIX
-#ifdef __APPLE__
-  open_mux_path (mux_path ? mux_path : "/dev/tty.org.spice-space.webdav.0");
-#else
-  open_mux_path (mux_path ? mux_path : "/dev/virtio-ports/org.spice-space.webdav.0");
-#endif
-#else
-  open_mux_path ("\\\\.\\Global\\org.spice-space.webdav.0");
-#endif
-
-  /* listen on port for incoming clients, multiplex there input into
-     virtio path, demultiplex input from there to the respective
-     clients */
-
-#ifdef WITH_AVAHI
-  GError *error = NULL;
-  if (!avahi_client_start ("Spice client folder", port, TRUE, FALSE, &error))
-    {
-      g_printerr ("%s\n", error->message);
-      exit (1);
-    }
-#endif
-
-  start_mux_read (mux_istream);
-  g_main_loop_run (loop);
-  g_clear_pointer (&loop, g_main_loop_unref);
-
-#ifdef G_OS_WIN32
-  g_cancellable_cancel (map_drive_data.cancel_map);
-  g_object_unref (map_drive_data.cancel_map);
-#endif
-
-  g_cancellable_cancel (cancel);
-
-  g_clear_object (&mux_istream);
-  g_clear_object (&mux_ostream);
-
-  g_clear_object (&mux_queue);
-  g_hash_table_unref (clients);
-
-#ifdef WITH_AVAHI
-  avahi_client_stop ();
-#endif
-  g_socket_service_stop (socket_service);
-
-  g_clear_object (&cancel);
-
-#ifdef G_OS_WIN32
-  CloseHandle (port_handle);
-#else
-  close (port_fd);
-#endif
-  return !quit_service;
+  g_clear_pointer (&daemon->loop, g_main_loop_unref);
 }
-
-#ifdef G_OS_WIN32
-static SERVICE_STATUS service_status;
-static SERVICE_STATUS_HANDLE service_status_handle;
-
-DWORD WINAPI
-service_ctrl_handler (DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx);
-VOID WINAPI
-service_main (DWORD argc, TCHAR *argv[]);
-
-DWORD WINAPI
-service_ctrl_handler (DWORD ctrl, DWORD type, LPVOID data, LPVOID ctx)
-{
-  DWORD ret = NO_ERROR;
-
-  ServiceData *service_data = ctx;
-
-  switch (ctrl)
-    {
-    case SERVICE_CONTROL_STOP:
-    case SERVICE_CONTROL_SHUTDOWN:
-      if (service_data->drive_letter != 0)
-        {
-          unmap_drive (service_data);
-          g_mutex_clear (&service_data->mutex);
-        }
-      quit (SIGTERM);
-      service_status.dwCurrentState = SERVICE_STOP_PENDING;
-      SetServiceStatus (service_status_handle, &service_status);
-      break;
-
-    default:
-      ret = ERROR_CALL_NOT_IMPLEMENTED;
-    }
-
-  return ret;
-}
-
-VOID WINAPI
-service_main (DWORD argc, TCHAR *argv[])
-{
-  ServiceData service_data;
-
-  service_data.drive_letter = 0;
-  g_mutex_init (&service_data.mutex);
-
-  service_status_handle =
-    RegisterServiceCtrlHandlerEx (SERVICE_NAME, service_ctrl_handler, &service_data);
-
-  g_return_if_fail (service_status_handle != 0);
-
-  service_status.dwServiceType = SERVICE_WIN32;
-  service_status.dwCurrentState = SERVICE_RUNNING;
-  service_status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
-  service_status.dwWin32ExitCode = NO_ERROR;
-  service_status.dwServiceSpecificExitCode = NO_ERROR;
-  service_status.dwCheckPoint = 0;
-  service_status.dwWaitHint = 0;
-  SetServiceStatus (service_status_handle, &service_status);
-
-  while (run_service (&service_data))
-    {
-      g_usleep (G_USEC_PER_SEC);
-    }
-
-  service_status.dwCurrentState = SERVICE_STOPPED;
-  SetServiceStatus (service_status_handle, &service_status);
-}
-#endif
-
-static GOptionEntry entries[] = {
-  { "port", 'p', 0,
-    G_OPTION_ARG_INT, &port,
-    "Port to listen on", NULL },
-  { "mux-path", 0, 0,
-    G_OPTION_ARG_FILENAME, &mux_path,
-    "Path of the multiplexing channel (default: the spice WebDAV virtio port)", "PATH" },
-#ifdef G_OS_WIN32
-  { "no-service", 0, 0,
-    G_OPTION_ARG_NONE, &no_service,
-    "Don't start as a service", NULL },
-#endif
-  { NULL }
-};
 
 gint
 main (gint argc, gchar *argv[])
 {
-  ServiceData service_data;
+  g_autoptr(GError) error = NULL;
   g_autoptr(GOptionContext) opts = NULL;
-  GError *error = NULL;
+  g_autoptr(GSocketService) socket_service = NULL;
+  g_autoptr(GInetAddress) iaddr = NULL;
+  g_autoptr(GSocketAddress) saddr = NULL;
+  g_autofree Daemon *daemon = NULL;
+#ifdef G_OS_WIN32
+  g_autoptr(SharedDrive) drive = NULL;
+#endif
+
+  /* the parsed filename option is an owned copy */
+  g_autofree gchar *mux_path = NULL;
+
+  /* the command line options, parsed in place by GOption: they are
+   * plain locals of main(), which outlives the option context */
+  gint port = 0;
+#ifdef G_OS_WIN32
+  gboolean no_service = FALSE;
+#endif
+
+  GOptionEntry entries[] = {
+    { "port", 'p', 0,
+      G_OPTION_ARG_INT, &port,
+      "Port to listen on", NULL },
+    { "mux-path", 0, 0,
+      G_OPTION_ARG_FILENAME, &mux_path,
+      "Path of the multiplexing channel (default: the spice WebDAV virtio port)", "PATH" },
+#ifdef G_OS_WIN32
+    { "no-service", 0, 0,
+      G_OPTION_ARG_NONE, &no_service,
+      "Don't start as a service", NULL },
+#endif
+    { NULL }
+  };
 
   opts = g_option_context_new (NULL);
   g_option_context_add_main_entries (opts, entries, NULL);
@@ -816,27 +254,30 @@ main (gint argc, gchar *argv[])
       exit (1);
     }
 
+  daemon = g_new0 (Daemon, 1);
+  the_daemon = daemon;
+  daemon->mux_path = mux_path ? g_steal_pointer (&mux_path) : g_strdup (DEFAULT_MUX_PATH);
+
 #ifdef G_OS_UNIX
-  g_unix_signal_add (SIGINT, signal_handler, NULL);
-#else
-  signal (SIGINT, quit);
+  g_unix_signal_add (SIGINT, signal_handler, daemon);
 #endif
 
-  /* run socket service once at beginning, there seems to be a bug on
-     windows, and it can't accept new connections if cleanup and
-     restart a new service */
+  /* the socket service is kept for the whole lifetime of the daemon:
+   * there seems to be a bug on Windows, where it cannot accept new
+   * connections anymore after being cleaned up and restarted */
   socket_service = g_socket_service_new ();
-  g_autoptr(GInetAddress) iaddr = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
-  g_autoptr(GSocketAddress) saddr = g_inet_socket_address_new (iaddr, port);
+  iaddr = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
+  saddr = g_inet_socket_address_new (iaddr, port);
 
-  g_socket_listener_add_address (G_SOCKET_LISTENER (socket_service),
-                                 saddr,
-                                 G_SOCKET_TYPE_STREAM,
-                                 G_SOCKET_PROTOCOL_TCP,
-                                 NULL,
-                                 NULL,
-                                 &error);
-  if (error)
+  /* listen on the port for the incoming clients, multiplexing them
+   * over the mux channel */
+  if (!g_socket_listener_add_address (G_SOCKET_LISTENER (socket_service),
+                                      saddr,
+                                      G_SOCKET_TYPE_STREAM,
+                                      G_SOCKET_PROTOCOL_TCP,
+                                      NULL,
+                                      NULL,
+                                      &error))
     {
       g_printerr ("%s\n", error->message);
       exit (1);
@@ -844,39 +285,47 @@ main (gint argc, gchar *argv[])
 
   g_signal_connect (socket_service,
                     "incoming", G_CALLBACK (incoming_callback),
-                    NULL);
+                    daemon);
+  g_socket_service_start (socket_service);
+
+#ifdef WITH_AVAHI
+  if (!avahi_client_start ("Spice client folder", port, TRUE, FALSE, &error))
+    {
+      g_printerr ("%s\n", error->message);
+      exit (1);
+    }
+#endif
 
 #ifdef G_OS_WIN32
-  service_data.drive_letter = 0;
-  g_mutex_init (&service_data.mutex);
+  /* map the shared folder over the HTTP server of the daemon */
+  drive = shared_drive_new ();
+  shared_drive_map (drive, port);
 
-  SERVICE_TABLE_ENTRY service_table[] = {
-    { SERVICE_NAME, service_main }, { NULL, NULL }
-  };
-  if (!no_service && !getenv ("DEBUG"))
+  if (no_service || g_getenv ("DEBUG"))
     {
-      if (!StartServiceCtrlDispatcher (service_table))
-        {
-          g_error ("%s", g_win32_error_message (GetLastError ()));
-          exit (1);
-        }
+      signal (SIGINT, console_signal_handler);
+      run_daemon (daemon);
     }
   else
-#endif
-    while (run_service (&service_data))
-      {
-        g_usleep (G_USEC_PER_SEC);
-      }
-
-#ifdef G_OS_WIN32
-  if (service_data.drive_letter != 0)
     {
-      unmap_drive (&service_data);
-      g_mutex_clear (&service_data.mutex);
+      /* this blocks until the service is stopped, when the daemon was
+       * asked to stop and the shared folder was unmapped by its
+       * control handler */
+      win32_service_run (drive, run_daemon, daemon_stop, daemon);
     }
+
+  /* the shared folder is unmapped by the service control handler
+   * already; this is for the console mode */
+  shared_drive_unmap (drive);
+#else
+  run_daemon (daemon);
 #endif
 
-  g_clear_object (&socket_service);
+#ifdef WITH_AVAHI
+  avahi_client_stop ();
+#endif
+
+  g_free (daemon->mux_path);
 
   return 0;
 }
