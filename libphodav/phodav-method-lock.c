@@ -199,10 +199,12 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
         }
       else if (xml_node_has_name (node, "owner"))
         {
+          /* RFC 4918 section 14.19: there is at most one owner, keep
+           * the first one and ignore the extra ones */
           if (owner == NULL)
             owner = node;
           else
-            g_warn_if_reached ();
+            g_debug ("LOCK: ignoring the extra owner element");
         }
     }
 

@@ -19,6 +19,10 @@ gboolean path_has_dot_dot_segment (const gchar *path);
  * value, which the caller must reject with 400 */
 gboolean depth_from_string (const gchar *depth, DepthType *out);
 const gchar *depth_to_string (DepthType depth);
+
+/* parse the Timeout header of a LOCK request (RFC 4918 section 10.7):
+ * a missing header, "Infinite" and an unrecognized value all mean
+ * no timeout */
 guint timeout_from_string (const gchar *timeout);
 
 /* is @path the tree rooted at @root, or one of its members? */

@@ -49,7 +49,7 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
     }
 
   if (error)
-    g_warning ("DELETE: enumeration error: %s", error->message);
+    g_debug ("DELETE: enumeration error: %s", error->message);
 
   g_autoptr(GError) del_error = NULL;
   if (!g_file_delete (file, cancellable, &del_error))

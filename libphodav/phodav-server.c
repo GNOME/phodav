@@ -731,7 +731,7 @@ got_headers (SoupServerMessage *msg,
       phodav_method_put (self->root_handler, msg, path, &err);
 
       if (err)
-        g_warning ("error: %s", err->message);
+        g_debug ("PUT %s: %s", path, err->message);
 
       return;
     }
@@ -920,7 +920,7 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
 
   g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
   if (err)
-    g_warning ("error: %s", err->message);
+    g_debug ("%s %s: %s", method, path, err->message);
 }
 
 /**

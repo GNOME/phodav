@@ -140,8 +140,10 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     {
-      if (error)
-        g_warning ("check_etag error: %s", error->message);
+      /* the resource cannot be queried: its etag cannot match the
+       * submitted condition */
+      g_debug ("If: cannot query the etag of %s: %s", path,
+               error ? error->message : "no error details");
       return FALSE;
     }
 
