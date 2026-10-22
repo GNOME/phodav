@@ -86,7 +86,11 @@ accept_etag (IfState *state)
       if (*state->cur == '"')
         break;
       else if (*state->cur == '\\')
-        state->cur++;
+        {
+          state->cur++;
+          if (!*state->cur)
+            goto end;
+        }
 
       g_string_append_c (str, *state->cur);
       state->cur++;

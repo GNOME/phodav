@@ -1800,6 +1800,8 @@ test_if_malformed (DavFixture *f, gconstpointer user_data)
     "([",
     "([\"etag",
     "([\"etag\"",
+    /* a trailing backslash must not escape the string terminator */
+    "([\"etag\\",
     "(\"etag\")",
     "Not",
     /* unclosed token ref: '<' without '>' (accept_ref NULL path) */
