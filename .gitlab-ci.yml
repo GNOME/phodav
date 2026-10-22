@@ -1,8 +1,38 @@
 image: fedora:44
 
+include:
+  # the GNOME release service uploads the tarball exported by the
+  # "build" job to download.gnome.org and creates a GitLab release,
+  # when the pipeline is triggered by a protected tag; see
+  # https://handbook.gnome.org/maintainers/release-pipeline.html
+  - component: "gitlab.gnome.org/GNOME/citemplates/release-service@master"
+    inputs:
+      job-stage: "release"
+      dist-job-name: "build"
+
 stages:
   - build
   - test
+  - release
+
+# the component job only needs "build", so without this override a tag
+# pipeline would publish the tarball even when a test job fails: a job
+# with needs starts as soon as its dependencies succeed, regardless of
+# the remaining jobs of the earlier stages
+release-service:
+  needs:
+    - job: build
+      artifacts: true
+    - job: formatting
+    - job: gobject-linter
+    - job: warnings
+    - job: static-analysis
+    - job: build_win
+    - job: test
+    - job: test_win
+    - job: sanitizers
+    - job: fuzzing
+    - job: coverage
 
 variables:
   DEPENDENCIES:
@@ -48,11 +78,15 @@ build:
     # the avahi daemon (see the test job)
     - meson setup -Davahi=disabled build
     - meson dist -C build
+    # export the dist tarball and its checksum for the release service
+    # component, which uploads them on protected tag pipelines
+    - mkdir -p public-dist && cp -a build/meson-dist/. public-dist/
     # check that the project installs correctly
     - meson install -C build --destdir "$(pwd)/install-root"
   artifacts:
     paths:
       - build/meson-logs/*.txt
+      - public-dist/
     expire_in: 1 week
     when: always
 
@@ -122,6 +156,49 @@ build_win:
       - w64/meson-logs/*.txt
     expire_in: 1 week
     when: always
+
+# the GNOME release service publishes the source tarball on
+# download.gnome.org only; attach the Windows installers built by
+# build_win to the GitLab release, storing them durably in the package
+# registry and linking them from the release
+release-msi:
+  stage: release
+  image: alpine:latest
+  needs:
+    - job: release-service
+    - job: build_win
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG && $CI_COMMIT_REF_PROTECTED
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      set -eu
+      api="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      links=$(curl -sf --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        "$api/releases/$CI_COMMIT_TAG/assets/links")
+      for msi in w32/*.msi w64/*.msi; do
+        [ -f "$msi" ] || continue
+        name=$(basename "$msi")
+        url="$api/packages/generic/phodav/$CI_COMMIT_TAG/$name"
+        # the job may be retried, don't fail on the files it already published
+        if ! curl -sfI --header "JOB-TOKEN: $CI_JOB_TOKEN" "$url" >/dev/null; then
+          echo "uploading $name to the package registry"
+          curl --fail-with-body --silent --show-error \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --upload-file "$msi" "$url"
+        fi
+        if ! printf '%s' "$links" | jq -e --arg name "$name" 'any(.[]; .name == $name)' >/dev/null; then
+          echo "linking $name from the release"
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data "$(jq -n --arg name "$name" --arg url "$url" \
+              '{name: $name, url: $url, direct_asset_path: ("/" + $name), link_type: "package"}')" \
+            "$api/releases/$CI_COMMIT_TAG/assets/links"
+        fi
+      done
 
 test_win:
   stage: test

@@ -34,8 +34,25 @@ The *chezdav*(1) manual page is installed in the usual locations.
 
 ## Releases
 
-Releases are uploaded to [GNOME's FTP](https://download.gnome.org/sources/phodav/)
-and published in the [tags section](https://gitlab.gnome.org/GNOME/phodav/-/tags).
+A release is made by pushing a signed tag to the repository:
+
+    git evtag sign v3.1   # or: git tag -s v3.1
+    git push origin v3.1
+
+The tag must match a protected tag pattern (such as `v*`) in the project
+settings, and the version in *NEWS* must already be updated. The tarball
+version is derived from the tag with `git describe`.
+
+The tag triggers a CI pipeline which builds and tests the release,
+generates the tarball and uploads it to
+[download.gnome.org](https://download.gnome.org/sources/phodav/) and
+to the
+[releases section](https://gitlab.gnome.org/GNOME/phodav/-/releases),
+as described in the
+[maintainer handbook](https://handbook.gnome.org/maintainers/release-pipeline.html).
+The tag message becomes the release notes, and the *NEWS* file of the
+tarball is published alongside the tarball. The Windows installers built
+by the CI are attached to the release as additional assets.
 
 ## Notes
 
