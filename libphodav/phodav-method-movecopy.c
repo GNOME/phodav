@@ -47,7 +47,7 @@ do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancella
 }
 
 static gint
-do_movecopy_file (SoupServerMessage *msg, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (SoupServerMessage *msg, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   GError *error = NULL;
   gboolean overwrite;
@@ -73,7 +73,7 @@ again:
   if (overwrite && !retry &&
       (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
-      phodav_delete_file (dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
+      phodav_delete_file (server, dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
       retry = TRUE;
@@ -181,7 +181,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, file, dest_file, udest, depth,
+  status = do_movecopy_file (msg, handler_get_server (handler), file, dest_file, udest, depth,
                              cancellable, err);
 
 end:

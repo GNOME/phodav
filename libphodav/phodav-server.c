@@ -207,6 +207,33 @@ server_expire_locks (PhodavServer *self)
     }
 }
 
+/* destroy the locks rooted on a deleted resource and its members, and
+ * drop the paths which are no longer needed */
+void
+server_remove_locks (PhodavServer *self, const gchar *_path)
+{
+  GHashTableIter iter;
+  Path *path;
+  g_autofree gchar *root = path_key (_path);
+
+  if (g_hash_table_size (self->paths) == 0)
+    return;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      if (!path_is_covered (path->path, root))
+        continue;
+
+      /* the locks remove themselves from the list when freed */
+      while (path->locks)
+        dav_lock_free (path->locks->data);
+
+      /* the path is only kept alive by the table when it has no locks */
+      g_hash_table_iter_remove (&iter);
+    }
+}
+
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {

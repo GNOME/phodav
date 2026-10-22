@@ -97,13 +97,15 @@ gboolean server_tree_has_lock_conflict (PhodavServer *self,
                                         const gchar *path,
                                         DAVLock *lock);
 void server_expire_locks (PhodavServer *self);
+void server_remove_locks (PhodavServer *self,
+                          const gchar *_path);
 Path *server_get_path (PhodavServer *self,
                        const gchar *_path);
 
 gint phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
 gint phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
 
-gint phodav_delete_file (const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable);
+gint phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable);
 
 gint phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
 gint phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
