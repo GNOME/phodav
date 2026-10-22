@@ -56,6 +56,15 @@ by the CI are attached to the release as additional assets.
 
 ## Notes
 
+### Windows WebDAV clients
+
+The Windows WebDAV redirector limits downloads to 50,000,000 bytes by
+default. Larger files fail to open with "The file size exceeds the limit
+allowed and cannot be saved"; uploads are not affected by this setting.
+To allow larger downloads, set the `FileSizeLimitInBytes` DWORD under
+`HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\WebClient\Parameters`
+to the desired size in bytes, and restart the `WebClient` service.
+
 phởdav was initially developed as a filesharing mechanism for Spice,
 but it is generic enough to be reused in other projects, in particular
 in the GNOME desktop. Further integration work would be a welcome
