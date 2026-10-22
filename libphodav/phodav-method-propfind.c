@@ -812,7 +812,8 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   status = set_response_multistatus (msg, mstatus);
 
 end:
-  /* the responses use ns */
+  /* the parsed request and the responses are no longer needed */
+  g_clear_pointer (&pf, propfind_free);
   g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
     xmlFreeNs (ns);
