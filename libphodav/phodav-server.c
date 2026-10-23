@@ -101,6 +101,23 @@ server_get_path (PhodavServer *self, const gchar *_path)
   return p;
 }
 
+/* drop the path from the lock table when it holds no lock anymore;
+ * called when a LOCK request is rolled back, so that a failed request
+ * does not leave an empty entry behind */
+void
+server_remove_path_if_empty (PhodavServer *self, const gchar *_path)
+{
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
+  Path *p = g_hash_table_lookup (self->paths, path);
+
+  if (!p)
+    return;
+
+  path_expire_locks (p);
+  if (!p->locks)
+    g_hash_table_remove (self->paths, path);
+}
+
 struct _PathHandler
 {
   PhodavServer *self;

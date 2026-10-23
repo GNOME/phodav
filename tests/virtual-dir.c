@@ -191,6 +191,77 @@ test_propfind_validators (void)
   g_object_unref (in);
 }
 
+#define LOCK_BODY                                                          \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope>" \
+  "<D:locktype><D:write/></D:locktype></D:lockinfo>"
+
+/* send a LOCK or UNLOCK request for @path; @token is the Lock-Token
+ * header of an UNLOCK, @lock_token receives the token of a LOCK */
+static guint
+send_lock_request (const gchar *method, const gchar *path, const gchar *token, gchar **lock_token)
+{
+  g_autoptr(GBytes) bytes = NULL;
+  g_autofree gchar *uri = g_build_path ("/", server_uri, path, NULL);
+  g_autoptr(SoupMessage) msg = soup_message_new (method, uri);
+  g_autoptr(GError) error = NULL;
+  GInputStream *in;
+  gchar buf[4096];
+  gssize n;
+
+  if (g_strcmp0 (method, "LOCK") == 0)
+    {
+      bytes = g_bytes_new_static (LOCK_BODY, strlen (LOCK_BODY));
+      soup_message_headers_append (soup_message_get_request_headers (msg),
+                                   "Depth", "0");
+      soup_message_set_request_body_from_bytes (msg, NULL, bytes);
+    }
+  else
+    soup_message_headers_append (soup_message_get_request_headers (msg),
+                                 "Lock-Token", token);
+
+  in = soup_session_send (session, msg, NULL, &error);
+  g_assert_no_error (error);
+
+  while ((n = g_input_stream_read (in, buf, sizeof (buf), NULL, &error)) > 0)
+    ;
+  g_assert_no_error (error);
+  g_object_unref (in);
+
+  if (lock_token)
+    g_set_str (lock_token, soup_message_headers_get_one (
+                             soup_message_get_response_headers (msg), "Lock-Token"));
+
+  return soup_message_get_status (msg);
+}
+
+/* the virtual directories do not implement GFile create(): LOCK must
+ * not try to create an existing one, and must not fail on the missing
+ * create() for an unmapped resource */
+static void
+test_lock (void)
+{
+  g_autofree gchar *token = NULL;
+
+  g_assert_cmpint (send_lock_request ("LOCK", "virtual", NULL, &token),
+                   ==, SOUP_STATUS_OK);
+  g_assert_nonnull (token);
+
+  /* a second exclusive lock conflicts with the first one */
+  g_assert_cmpint (send_lock_request ("LOCK", "virtual", NULL, NULL),
+                   ==, SOUP_STATUS_LOCKED);
+
+  g_assert_cmpint (send_lock_request ("UNLOCK", "virtual", token, NULL),
+                   ==, SOUP_STATUS_NO_CONTENT);
+
+  /* a virtual child cannot be created: the lock is taken on the
+   * resource as it is, rather than failing on the missing create() */
+  g_assert_cmpint (send_lock_request ("LOCK", "virtual/missing", NULL, &token),
+                   ==, SOUP_STATUS_OK);
+  g_assert_nonnull (token);
+  g_assert_cmpint (send_lock_request ("UNLOCK", "virtual/missing", token, NULL),
+                   ==, SOUP_STATUS_NO_CONTENT);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -304,6 +375,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/virtual-dir/proppatch", test_proppatch);
   g_test_add_func ("/virtual-dir/propfind-validators", test_propfind_validators);
+  g_test_add_func ("/virtual-dir/lock", test_lock);
 
   gint res = g_test_run ();
   g_object_unref (session);

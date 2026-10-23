@@ -1901,6 +1901,28 @@ test_lock_bad_request (DavFixture *f, gconstpointer user_data)
 }
 
 static void
+test_lock_failed_does_not_leak (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(GBytes) body = NULL;
+
+  /* the parent collection is missing: the empty resource of the lock
+   * cannot be created, and the request is rolled back */
+  msg = dav_request (f, "LOCK", "/missing/locked.txt", LOCK_EXCLUSIVE, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CONFLICT);
+
+  /* the token is only advertised by a successful LOCK */
+  g_assert_null (soup_message_headers_get_one (
+    soup_message_get_response_headers (msg), "Lock-Token"));
+
+  /* a leaked lock would turn the next attempt into 423 */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/missing/locked.txt", LOCK_EXCLUSIVE, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+}
+
+static void
 test_unlock_no_token (DavFixture *f, gconstpointer user_data)
 {
   /* the lock token is mandatory */
@@ -2794,6 +2816,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/server-properties", DavFixture, NULL, dav_fixture_setup, test_server_properties, dav_fixture_teardown);
   g_test_add ("/dav/propfind/quota", DavFixture, NULL, dav_fixture_setup, test_propfind_quota, dav_fixture_teardown);
   g_test_add ("/dav/lock/bad-request", DavFixture, NULL, dav_fixture_setup, test_lock_bad_request, dav_fixture_teardown);
+  g_test_add ("/dav/lock/failed-does-not-leak", DavFixture, NULL, dav_fixture_setup, test_lock_failed_does_not_leak, dav_fixture_teardown);
   g_test_add ("/dav/unlock/no-token", DavFixture, NULL, dav_fixture_setup, test_unlock_no_token, dav_fixture_teardown);
   g_test_add ("/dav/locked-parent", DavFixture, NULL, dav_fixture_setup, test_locked_parent, dav_fixture_teardown);
 
