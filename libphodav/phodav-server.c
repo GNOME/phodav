@@ -81,9 +81,10 @@ static void request_started (SoupServer *server,
 static gboolean expire_locks_timeout (gpointer user_data);
 
 /* Canonicalize a request path for use as a key in the paths table:
- * empty segments ("//") and trailing slashes are skipped, just like
- * the walk in server_foreach_parent_path() does, so that locks are
- * found again under whatever form the client used in its request. */
+ * empty segments ("//") and trailing slashes are skipped, so that
+ * locks are found again under whatever form the client used in its
+ * request. server_foreach_parent_path() walks the keys produced by
+ * this function, so the two cannot disagree on the canonical form. */
 static gchar *
 path_key (const gchar *_path)
 {
@@ -552,23 +553,19 @@ phodav_server_class_init (PhodavServerClass *klass)
 gboolean
 server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
-  g_auto(GStrv) pathv = NULL;
-  g_autofree gchar *partial = g_strdup ("/");
+  g_autofree gchar *canonical = path_key (path);
   gboolean ret = FALSE;
   gchar *key = NULL;
   Path *p;
-  gint i;
+  const gchar *segment = canonical + 1;
 
-  pathv = g_strsplit (path, "/", -1);
-
-  for (i = 0; pathv[i]; i++)
+  /* canonical is "/" or "/segment[/segment...]"; visit each prefix
+   * from the first segment down to the whole path */
+  while (*segment)
     {
-      if (!*pathv[i])
-        continue;
-
-      gchar *tmp = g_build_path ("/", partial, pathv[i], NULL);
-      g_free (partial);
-      partial = tmp;
+      const gchar *slash = strchr (segment, '/');
+      gsize len = slash ? (gsize) (slash - canonical) : strlen (canonical);
+      g_autofree gchar *partial = g_strndup (canonical, len);
 
       if (g_hash_table_lookup_extended (self->paths, partial,
                                         (gpointer *) &key, (gpointer *) &p))
@@ -576,6 +573,11 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
           if (!cb (key, p, data))
             goto end;
         }
+
+      if (!slash)
+        break;
+
+      segment = slash + 1;
     }
 
   ret = TRUE;
