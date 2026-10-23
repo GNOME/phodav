@@ -2,101 +2,169 @@
 # Copyright (C) 2020 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 #
-# Yuri Chornoivan <yurchor@ukr.net>, 2020, 2021, 2022.
+# SPDX-FileCopyrightText: 2020, 2021, 2022, 2026 Yuri Chornoivan <yurchor@ukr.net>
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2022-04-19 13:18+0000\n"
-"PO-Revision-Date: 2022-04-19 18:47+0300\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/-/issues/\n"
+"POT-Creation-Date: 2026-10-22 10:25+0000\n"
+"PO-Revision-Date: 2026-10-23 21:19+0300\n"
 "Last-Translator: Yuri Chornoivan <yurchor@ukr.net>\n"
 "Language-Team: Ukrainian <trans-uk@lists.fedoraproject.org>\n"
 "Language: uk\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Plural-Forms: nplurals=4; plural=n==1 ? 3 : n%10==1 && n%100!=11 ? 0 : n"
-"%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
-"X-Generator: Lokalize 20.12.0\n"
+"Plural-Forms: nplurals=4; plural=n==1 ? 3 : n%10==1 && n%100!=11 ? 0 : n%10>="
+"2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2;\n"
+"X-Generator: Lokalize 25.12.1\n"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:142
+msgid "--tls-cert contains no private key, pass it with --tls-key\n"
+msgstr ""
+"--tls-cert не містить закритого ключа, передайте його за допомогою --tls-key"
+"\n"
+
+#: bin/chezdav.c:179
 msgid "Print program version"
 msgstr "Вивести дані щодо версії програми"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:180
 msgid "Be verbose"
 msgstr "Режим докладних повідомлень"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:181
+#| msgid "Port to listen to"
+msgid "Unix socket to listen on"
+msgstr "Сокет Unix, на якому слід очікувати дані"
+
+#: bin/chezdav.c:182
 msgid "Port to listen to"
 msgstr "Порт, на якому слід очікувати на дані"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:183
 msgid "Listen on loopback only"
 msgstr "Очікувати дані лише на петльовому інтерфейсі"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:184
 msgid "Listen on all interfaces"
 msgstr "Очікувати дані на усіх інтерфейсах"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:185
 msgid "Path to export"
 msgstr "Шлях для експортування"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:186
 msgid "Path to htdigest file"
 msgstr "Шлях до файла htdigest"
 
-#: bin/chezdav.c:127
+#: bin/chezdav.c:187
 msgid "DIGEST realm"
 msgstr "область DIGEST"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:188
 msgid "Read-only access"
 msgstr "Доступ лише до читання"
 
-#: bin/chezdav.c:130
+#: bin/chezdav.c:189
+msgid "Refuse uploads over SIZE bytes (0 for no limit)"
+msgstr ""
+"Відмовляти у вивантаженні понад вказаний розмір байтів (0 — без обмежень)"
+
+#: bin/chezdav.c:189
+msgid "SIZE"
+msgstr "РОЗМІР"
+
+#: bin/chezdav.c:190
+msgid ""
+"Serve HTTPS, with the TLS certificate in CERT (which must include the "
+"private key, unless --tls-key is given)"
+msgstr ""
+"Забезпечити роботу HTTPS, використовуючи сертифікат TLS з файла СЕРТ (який ма"
+"є містити закритий ключ, якщо не вказано параметр --tls-key)"
+
+#: bin/chezdav.c:190
+msgid "CERT"
+msgstr "СЕРТ"
+
+#: bin/chezdav.c:191
+msgid "Path to the TLS private key, when it is not in the certificate file"
+msgstr "Шлях до закритого ключа TLS, якщо його немає у файлі сертифіката"
+
+#: bin/chezdav.c:191
+msgid "KEY"
+msgstr "КЛЮЧ"
+
+#: bin/chezdav.c:193
 msgid "Skip mDNS service announcement"
 msgstr "Пропустити оголошення служби mDNS"
 
-#: bin/chezdav.c:142
+#: bin/chezdav.c:205
 msgid "- simple WebDAV server"
 msgstr "– простий сервер WebDAV"
 
-#: bin/chezdav.c:143
+#: bin/chezdav.c:206
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Адреса для повідомлень про вади: <%s>"
 
-#: bin/chezdav.c:150
+#: bin/chezdav.c:212
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Не вдалося обробити параметри: %s\n"
 
-#: bin/chezdav.c:154
+#: bin/chezdav.c:219
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Непідтримувані зайві аргументи: %s ...\n"
 
-#: bin/chezdav.c:163
+#: bin/chezdav.c:228
+#| msgid "--local and --public are mutually exclusive\n"
+msgid "--socket and --local are mutually exclusive\n"
+msgstr "Не можна одночасно використовувати --socket і --local\n"
+
+#: bin/chezdav.c:230
+#| msgid "--local and --public are mutually exclusive\n"
+msgid "--socket and --public are mutually exclusive\n"
+msgstr "Не можна одночасно використовувати --socket і --public\n"
+
+#: bin/chezdav.c:232
+#| msgid "--local and --public are mutually exclusive\n"
+msgid "--socket and --port are mutually exclusive\n"
+msgstr "Не можна одночасно використовувати --socket і --port\n"
+
+#: bin/chezdav.c:234
 msgid "--local and --public are mutually exclusive\n"
 msgstr "Не можна одночасно використовувати --local і --public\n"
 
-#: bin/chezdav.c:189
+#: bin/chezdav.c:237
+msgid "--max-upload must not be negative\n"
+msgstr "--max-upload має бути невід'ємним\n"
+
+#: bin/chezdav.c:240
+msgid "--tls-key requires --tls-cert\n"
+msgstr "--tls-key потребує --tls-cert\n"
+
+#: bin/chezdav.c:280
+#, c-format
+#| msgid "Failed to open htdigest: %s\n"
+msgid "Failed to load the certificate: %s\n"
+msgstr "Не вдалося завантажити сертифікат: %s\n"
+
+#: bin/chezdav.c:308
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "Не вдалося відкрити htdigest: %s\n"
 
-#: bin/chezdav.c:205
+#: bin/chezdav.c:322
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "Помилка mDNS: %s\n"
 
-#: bin/chezdav.c:216
-msgid "Internal error, should not happen\n"
-msgstr "Внутрішня помилка, цього не мало трапитися\n"
-
-#: bin/chezdav.c:219
+#: bin/chezdav.c:345
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Не вдалося розпочати очікування на дані: %s\n"
+
+#~ msgid "Internal error, should not happen\n"
+#~ msgstr "Внутрішня помилка, цього не мало трапитися\n"
