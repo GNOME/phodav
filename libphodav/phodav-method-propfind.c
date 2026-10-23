@@ -24,6 +24,16 @@ typedef struct _PropFind
   GHashTable *props;
 } PropFind;
 
+typedef struct _PropFindContext
+{
+  PathHandler *handler;
+  PropFind *pf;
+  const gchar *path;
+  GFileInfo *info;
+} PropFindContext;
+
+typedef xmlNodePtr (*PropFunc) (const PropFindContext *ctx, xmlNsPtr ns);
+
 /* the requested properties are collected in a table keyed on the
  * element name and namespace href, so that duplicated <prop> entries
  * are only answered once */
@@ -77,21 +87,21 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (PropFind, propfind_free)
   G_STMT_END
 
 static xmlNodePtr
-prop_resourcetype (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_resourcetype (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "resourcetype");
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+  if (g_file_info_get_file_type (ctx->info) == G_FILE_TYPE_DIRECTORY)
     xmlNewChild (node, ns, BAD_CAST "collection", NULL);
-  else if (g_file_info_get_file_type (info) != G_FILE_TYPE_REGULAR)
+  else if (g_file_info_get_file_type (ctx->info) != G_FILE_TYPE_REGULAR)
     {
       /* a special file is no DAV collection nor a document: the
        * property is not found for it */
-      g_debug ("PROPFIND: %s is not a directory or a regular file", path);
+      g_debug ("PROPFIND: %s is not a directory or a regular file", ctx->path);
       status = SOUP_STATUS_NOT_FOUND;
     }
 
@@ -101,11 +111,11 @@ end:
 }
 
 static xmlNodePtr
-prop_supportedlock (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_supportedlock (const PropFindContext *ctx, xmlNsPtr ns)
 {
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "supportedlock");
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
   {
@@ -147,15 +157,15 @@ lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
 }
 
 static xmlNodePtr
-prop_lockdiscovery (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_lockdiscovery (const PropFindContext *ctx, xmlNsPtr ns)
 {
-  PhodavServer *server = handler_get_server (handler);
+  PhodavServer *server = handler_get_server (ctx->handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "lockdiscovery");
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  server_foreach_parent_path (server, path, lockdiscovery_cb, node);
+  server_foreach_parent_path (server, ctx->path, lockdiscovery_cb, node);
 
 end:
   PROP_SET_STATUS (node, SOUP_STATUS_OK);
@@ -189,21 +199,21 @@ node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
 }
 
 static xmlNodePtr
-prop_creationdate (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_creationdate (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "creationdate");
   guint64 time;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  time = g_file_info_get_attribute_uint64 (info,
+  time = g_file_info_get_attribute_uint64 (ctx->info,
                                            G_FILE_ATTRIBUTE_TIME_CREATED);
 
   /* windows seems to want this, even apache returns modified time */
   if (time == 0)
-    time = g_file_info_get_attribute_uint64 (info,
+    time = g_file_info_get_attribute_uint64 (ctx->info,
                                              G_FILE_ATTRIBUTE_TIME_MODIFIED);
 
   if (time == 0)
@@ -217,16 +227,16 @@ end:
 }
 
 static xmlNodePtr
-prop_getlastmodified (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getlastmodified (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getlastmodified");
   guint64 time;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  time = g_file_info_get_attribute_uint64 (info,
+  time = g_file_info_get_attribute_uint64 (ctx->info,
                                            G_FILE_ATTRIBUTE_TIME_MODIFIED);
 
   if (time == 0)
@@ -240,17 +250,17 @@ end:
 }
 
 static xmlNodePtr
-prop_getcontentlength (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getcontentlength (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getcontentlength");
   guint64 size;
   g_autofree gchar *text = NULL;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  size = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
+  size = g_file_info_get_attribute_uint64 (ctx->info, G_FILE_ATTRIBUTE_STANDARD_SIZE);
   text = g_strdup_printf ("%" G_GUINT64_FORMAT, size);
   xmlAddChild (node, xmlNewText (BAD_CAST text));
 
@@ -260,16 +270,16 @@ end:
 }
 
 static xmlNodePtr
-prop_getcontenttype (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getcontenttype (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getcontenttype");
   const gchar *type;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  type = g_file_info_get_attribute_string (info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
+  type = g_file_info_get_attribute_string (ctx->info, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE);
   if (type == NULL)
     status = SOUP_STATUS_NOT_FOUND;
   else
@@ -281,16 +291,16 @@ end:
 }
 
 static xmlNodePtr
-prop_displayname (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_displayname (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "displayname");
   const gchar *name;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  name = g_file_info_get_display_name (info);
+  name = g_file_info_get_display_name (ctx->info);
   if (name == NULL)
     status = SOUP_STATUS_NOT_FOUND;
   else
@@ -302,16 +312,16 @@ end:
 }
 
 static xmlNodePtr
-prop_getetag (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_getetag (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getetag");
   const gchar *etag;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  etag = g_file_info_get_etag (info);
+  etag = g_file_info_get_etag (ctx->info);
   if (etag)
     {
       g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
@@ -328,7 +338,7 @@ end:
 }
 
 static xmlNodePtr
-prop_executable (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_executable (const PropFindContext *ctx, xmlNsPtr ns G_GNUC_UNUSED)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (NULL, BAD_CAST "executable");
@@ -336,11 +346,11 @@ prop_executable (PathHandler *handler, PropFind *pf, const gchar *path, GFileInf
 
   xmlNewNs (node, BAD_CAST "http://apache.org/dav/props/", NULL);
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  exec = g_file_info_get_attribute_boolean (info, G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE);
-  if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+  exec = g_file_info_get_attribute_boolean (ctx->info, G_FILE_ATTRIBUTE_ACCESS_CAN_EXECUTE);
+  if (g_file_info_get_file_type (ctx->info) == G_FILE_TYPE_DIRECTORY)
     exec = FALSE;
 
   xmlAddChild (node, xmlNewText (exec ? BAD_CAST "T" : BAD_CAST "F"));
@@ -351,27 +361,27 @@ end:
 }
 
 static xmlNodePtr
-prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *_info, xmlNsPtr ns)
+prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
 {
   g_autoptr(GFile) file = NULL;
   g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
   g_autoptr(GError) error = NULL;
   g_autofree gchar *tmp = NULL;
   guint64 size;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (handler, path);
+  file = handler_get_file_for_path (ctx->handler, ctx->path);
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
 
   if (error)
     {
-      g_debug ("PROPFIND: filesystem info of %s failed: %s", path, error->message);
+      g_debug ("PROPFIND: filesystem info of %s failed: %s", ctx->path, error->message);
       status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
       goto end;
     }
@@ -387,20 +397,20 @@ end:
 }
 
 static xmlNodePtr
-prop_quota_used (PathHandler *handler, PropFind *pf, const gchar *path, GFileInfo *info, xmlNsPtr ns)
+prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
 {
   GFile *file = NULL;
   gint status = SOUP_STATUS_OK;
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
   guint64 disk_usage = 0;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *tmp = NULL;
 
-  if (pf->type == PROPFIND_PROPNAME)
+  if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (handler, path);
+  file = handler_get_file_for_path (ctx->handler, ctx->path);
   if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
                                   cancellable,
@@ -408,7 +418,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf, const gchar *path, GFileInf
                                   &disk_usage, NULL, NULL,
                                   &error))
     {
-      g_debug ("PROPFIND: disk usage of %s could not be measured: %s", path, error->message);
+      g_debug ("PROPFIND: disk usage of %s could not be measured: %s", ctx->path, error->message);
       status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
       goto end;
     }
@@ -439,7 +449,7 @@ prop_add (GList **stat, xmlNodePtr node)
 static const struct _PropList
 {
   const gchar *name;
-  xmlNodePtr (*func) (PathHandler *, PropFind *, const gchar *, GFileInfo *, xmlNsPtr);
+  PropFunc func;
   gboolean need_info;
   gboolean slow;
 
@@ -544,6 +554,12 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
   xmlNodePtr node;
   GList *stat = NULL;
   gint i;
+  PropFindContext ctx = {
+    .handler = handler,
+    .pf = pf,
+    .path = path,
+    .info = info,
+  };
 
   if (pf->type == PROPFIND_ALLPROP || pf->type == PROPFIND_PROPNAME)
     {
@@ -558,7 +574,7 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
             }
 
           /* perhaps not include the 404? */
-          prop_add (&stat, prop_list[i].func (handler, pf, path, info, ns));
+          prop_add (&stat, prop_list[i].func (&ctx, ns));
         }
 
       if (info)
@@ -584,7 +600,7 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
         {
           if (xml_node_has_name (node, prop_list[i].name))
             {
-              node = prop_list[i].func (handler, pf, path, info, ns);
+              node = prop_list[i].func (&ctx, ns);
               break;
             }
         }
