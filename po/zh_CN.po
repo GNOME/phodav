@@ -2,101 +2,160 @@
 # Copyright (C) 2020 phodav's COPYRIGHT HOLDER
 # This file is distributed under the same license as the phodav package.
 # Damned <damnedlies@163.com>, 2020.
-# lumingzh <lumingzh@qq.com>, 2022.
+# lumingzh <lumingzh@qq.com>, 2022-2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2022-04-19 13:18+0000\n"
-"PO-Revision-Date: 2022-04-21 19:48+0800\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/-/issues/\n"
+"POT-Creation-Date: 2026-10-22 10:25+0000\n"
+"PO-Revision-Date: 2026-10-23 09:37+0800\n"
 "Last-Translator: lumingzh <lumingzh@qq.com>\n"
-"Language-Team: Chinese - China <i18n-zh@googlegroups.com>\n"
+"Language-Team: Chinese (China) <i18n-zh@googlegroups.com>\n"
 "Language: zh_CN\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Gtranslator 42.0\n"
-"Plural-Forms: nplurals=1; plural=0\n"
+"X-Generator: Gtranslator 51.0\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:142
+msgid "--tls-cert contains no private key, pass it with --tls-key\n"
+msgstr "--tls-cert 未包含私钥，使用 --tls-key 传递它\n"
+
+#: bin/chezdav.c:179
 msgid "Print program version"
 msgstr "打印程序版本"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:180
 msgid "Be verbose"
 msgstr "显示详细信息"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:181
+msgid "Unix socket to listen on"
+msgstr "要监听的 Unix 套接字"
+
+#: bin/chezdav.c:182
 msgid "Port to listen to"
 msgstr "要监听的端口"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:183
 msgid "Listen on loopback only"
 msgstr "仅监听回环接口"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:184
 msgid "Listen on all interfaces"
 msgstr "监听所有接口"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:185
 msgid "Path to export"
 msgstr "导出路径"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:186
 msgid "Path to htdigest file"
 msgstr "Htdigest 文件的路径"
 
-#: bin/chezdav.c:127
+#: bin/chezdav.c:187
 msgid "DIGEST realm"
 msgstr "摘要领域"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:188
 msgid "Read-only access"
 msgstr "只读访问"
 
-#: bin/chezdav.c:130
+#: bin/chezdav.c:189
+msgid "Refuse uploads over SIZE bytes (0 for no limit)"
+msgstr "拒绝超过 SIZE 字节的上传（0 为无限制）"
+
+#: bin/chezdav.c:189
+msgid "SIZE"
+msgstr "SIZE"
+
+#: bin/chezdav.c:190
+msgid ""
+"Serve HTTPS, with the TLS certificate in CERT (which must include the "
+"private key, unless --tls-key is given)"
+msgstr ""
+"服务 HTTPS，使用 CERT 中的 TLS 证书（必须包括私钥，除非使用 --tls-key）"
+
+#: bin/chezdav.c:190
+msgid "CERT"
+msgstr "CERT"
+
+#: bin/chezdav.c:191
+msgid "Path to the TLS private key, when it is not in the certificate file"
+msgstr "不在证书文件中时使用的 TLS 私钥路径"
+
+#: bin/chezdav.c:191
+msgid "KEY"
+msgstr "KEY"
+
+#: bin/chezdav.c:193
 msgid "Skip mDNS service announcement"
 msgstr "跳过 mDNS 服务公告"
 
-#: bin/chezdav.c:142
+#: bin/chezdav.c:205
 msgid "- simple WebDAV server"
 msgstr "- 简单的 WebDAV 服务器"
 
-#: bin/chezdav.c:143
+#: bin/chezdav.c:206
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "向 <%s> 报告错误"
 
-#: bin/chezdav.c:150
+#: bin/chezdav.c:212
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "无法解析选项：%s\n"
 
-#: bin/chezdav.c:154
+#: bin/chezdav.c:219
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "不支持的额外参数：%s …\n"
 
-#: bin/chezdav.c:163
+#: bin/chezdav.c:228
+msgid "--socket and --local are mutually exclusive\n"
+msgstr "--socket 和 --local 是互斥的\n"
+
+#: bin/chezdav.c:230
+msgid "--socket and --public are mutually exclusive\n"
+msgstr "--socket 和 --public 是互斥的\n"
+
+#: bin/chezdav.c:232
+msgid "--socket and --port are mutually exclusive\n"
+msgstr "--socket 和 --port 是互斥的\n"
+
+#: bin/chezdav.c:234
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local 和 --public 是互斥的\n"
 
-#: bin/chezdav.c:189
+#: bin/chezdav.c:237
+msgid "--max-upload must not be negative\n"
+msgstr "--max-upload 不能为负值\n"
+
+#: bin/chezdav.c:240
+msgid "--tls-key requires --tls-cert\n"
+msgstr "--tls-key 需要 --tls-cert\n"
+
+#: bin/chezdav.c:280
+#, c-format
+msgid "Failed to load the certificate: %s\n"
+msgstr "加载证书失败：%s\n"
+
+#: bin/chezdav.c:308
 #, c-format
 msgid "Failed to open htdigest: %s\n"
-msgstr "无法打开 htdigest：%s\n"
+msgstr "打开 htdigest 失败：%s\n"
 
-#: bin/chezdav.c:205
+#: bin/chezdav.c:322
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS 失败：%s\n"
 
-#: bin/chezdav.c:216
-msgid "Internal error, should not happen\n"
-msgstr "内部错误，不应发生\n"
-
-#: bin/chezdav.c:219
+#: bin/chezdav.c:345
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "监听失败：%s\n"
+
+#~ msgid "Internal error, should not happen\n"
+#~ msgstr "内部错误，不应发生\n"
