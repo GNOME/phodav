@@ -52,7 +52,7 @@ status_node_new (xmlNsPtr ns, gint status)
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg, const gchar *path, GList *props)
+add_propstat (xmlNodePtr parent, xmlNsPtr ns, GList *props)
 {
   xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
   GList *s;
@@ -122,7 +122,7 @@ set_response_multistatus (SoupServerMessage *msg,
       xmlAddChild (href, xmlNewText (BAD_CAST text));
 
       if (resp->props)
-        add_propstat (response, ns, msg, path, resp->props);
+        add_propstat (response, ns, resp->props);
       else if (resp->status)
         xmlAddChild (response, status_node_new (ns, resp->status));
     }

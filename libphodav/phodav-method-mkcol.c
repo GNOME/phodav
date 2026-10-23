@@ -10,7 +10,7 @@
 #include "phodav-priv.h"
 
 static gint
-do_mkcol_file (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **err)
+do_mkcol_file (GFile *file, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_CREATED;
@@ -51,7 +51,7 @@ phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *
     goto end;
 
   file = handler_get_file_for_path (handler, path);
-  status = do_mkcol_file (msg, file, cancellable, err);
+  status = do_mkcol_file (file, cancellable, err);
 
 end:
   g_clear_object (&file);

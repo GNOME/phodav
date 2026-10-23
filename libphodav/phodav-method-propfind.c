@@ -767,6 +767,15 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
       goto end;
     }
 
+  if (depth == DEPTH_INFINITY)
+    {
+      /* RFC 4918 section 9.1: a server may refuse to walk the whole
+       * tree of a depth-infinity PROPFIND */
+      g_debug ("PROPFIND: refusing the depth-infinity request on %s", path);
+      status = SOUP_STATUS_FORBIDDEN;
+      goto end;
+    }
+
   if (!request_body || !request_body->length)
     {
       /* Win kludge: http://code.google.com/p/sabredav/wiki/Windows */
@@ -793,18 +802,12 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
   /* parse_propfind() only returns a PropFind with one of the three
-   * request types: only the depth decides how it is answered */
+   * request types: only the depth decides how it is answered, and the
+   * depth-infinity request was refused above */
   if (depth == DEPTH_ZERO)
     status = propfind_query_zero (handler, pf, path, mstatus, ns);
-  else if (depth == DEPTH_ONE)
-    status = propfind_query_one (handler, pf, path, mstatus, ns);
   else
-    {
-      /* RFC 4918 section 9.1: a server may refuse to walk the whole
-       * tree of a depth-infinity PROPFIND */
-      g_debug ("PROPFIND: refusing the depth-infinity request on %s", path);
-      status = SOUP_STATUS_FORBIDDEN;
-    }
+    status = propfind_query_one (handler, pf, path, mstatus, ns);
 
   if (status != SOUP_STATUS_OK)
     goto end;
@@ -812,9 +815,6 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
   status = set_response_multistatus (msg, mstatus);
 
 end:
-  /* the parsed request and the responses are no longer needed */
-  g_clear_pointer (&pf, propfind_free);
-  g_clear_pointer (&mstatus, g_hash_table_unref);
   if (ns)
     xmlFreeNs (ns);
   return status;
