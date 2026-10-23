@@ -153,8 +153,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
    * and an empty first segment ("//"), which g_file_get_child()
    * would resolve against the filesystem root */
   udest = g_uri_unescape_string (dest, "/");
-  if (!udest || *udest != '/' || g_path_is_absolute (udest + 1) ||
-      path_has_dot_dot_segment (udest))
+  if (!phodav_path_is_safe (udest))
     {
       g_debug ("invalid destination path: %s", dest);
       status = SOUP_STATUS_BAD_REQUEST;

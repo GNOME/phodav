@@ -20,6 +20,14 @@ remove_trailing (gchar *str, gchar c)
 }
 
 gboolean
+phodav_path_is_safe (const gchar *path)
+{
+  return path && *path == '/' &&
+         !g_path_is_absolute (path + 1) &&
+         !path_has_dot_dot_segment (path);
+}
+
+gboolean
 path_has_dot_dot_segment (const gchar *path)
 {
   const gchar *p = path;

@@ -777,12 +777,8 @@ request_path_is_valid (SoupServerMessage *msg, const gchar *path)
 {
   GUri *uri = soup_server_message_get_uri (msg);
 
-  if (!(path && *path == '/'))
-    g_debug ("path must begin with /");
-  else if (g_path_is_absolute (path + 1))
-    g_debug ("path cannot be absolute: %s", path);
-  else if (path_has_dot_dot_segment (path))
-    g_debug ("path cannot contain dot-dot segments: %s", path);
+  if (!phodav_path_is_safe (path))
+    g_debug ("invalid request path: %s", path ?: "");
   else if (!(uri && g_uri_get_fragment (uri) == NULL))
     g_debug ("using fragments in query is not supported");
   else

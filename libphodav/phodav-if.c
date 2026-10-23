@@ -268,8 +268,7 @@ eval_if_tag (PathHandler *handler, IfState *state)
    * would resolve such a path against the filesystem root */
   path = g_uri_unescape_string (g_uri_get_path (uri), "/");
   g_uri_unref (uri);
-  if (!path || *path != '/' || g_path_is_absolute (path + 1) ||
-      path_has_dot_dot_segment (path))
+  if (!phodav_path_is_safe (path))
     {
       state->error = TRUE;
       return FALSE;

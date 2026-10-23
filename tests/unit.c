@@ -104,6 +104,26 @@ test_path_has_dot_dot_segment (void)
 }
 
 static void
+test_path_is_safe (void)
+{
+  const gchar *safe[] = { "/", "/a", "/a/b", "/..foo", "/a.." };
+  const gchar *unsafe[] = { NULL, "", "a", "a/b", "//a", "/..", "/../a", "/a/../b" };
+
+  for (guint i = 0; i < G_N_ELEMENTS (safe); i++)
+    g_assert_true (phodav_path_is_safe (safe[i]));
+
+  for (guint i = 0; i < G_N_ELEMENTS (unsafe); i++)
+    g_assert_false (phodav_path_is_safe (unsafe[i]));
+
+  /* the backslash separates the path components on Windows only */
+#ifdef G_OS_WIN32
+  g_assert_false (phodav_path_is_safe ("/a\\..\\..\\b"));
+#else
+  g_assert_true (phodav_path_is_safe ("/a\\..\\..\\b"));
+#endif
+}
+
+static void
 test_depth (void)
 {
   DepthType depth = DEPTH_ZERO;
@@ -921,6 +941,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/utils/remove-trailing", test_remove_trailing);
   g_test_add_func ("/utils/dot-dot-segment", test_path_has_dot_dot_segment);
+  g_test_add_func ("/utils/path-is-safe", test_path_is_safe);
   g_test_add_func ("/utils/depth", test_depth);
   g_test_add_func ("/utils/path-is-covered", test_path_is_covered);
   g_test_add_func ("/utils/etag-header-matches", test_etag_header_matches);
