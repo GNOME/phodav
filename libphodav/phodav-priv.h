@@ -74,7 +74,6 @@ typedef gboolean (*PathCb) (const gchar *key,
                             Path *path,
                             gpointer data);
 
-GFile *handler_get_file (PathHandler *handler) G_GNUC_PURE;
 /* the file of a request path, relative to the share root */
 GFile *handler_get_file_for_path (PathHandler *handler, const gchar *path);
 GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;

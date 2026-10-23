@@ -135,12 +135,6 @@ handler_get_server (PathHandler *handler)
   return handler->self;
 }
 
-GFile *
-handler_get_file (PathHandler *handler)
-{
-  return handler->file;
-}
-
 /* the request paths begin with a "/" and are relative to the share
  * root, so that the file is looked up under the root, not the
  * filesystem root */
