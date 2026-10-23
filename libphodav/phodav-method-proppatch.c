@@ -82,55 +82,62 @@ xattr_remove (const gchar *path, const gchar *name)
 }
 
 static gint
-set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem, GCancellable *cancellable)
+prop_set_value (GFile *file, xmlNodePtr attrnode, GCancellable *cancellable)
 {
-  g_autofree gchar *attrname = NULL;
-  gint status = SOUP_STATUS_OK;
+  g_autofree gchar *attrname = xml_node_get_xattr_name (attrnode, "xattr::");
   g_autoptr(GError) error = NULL;
+  xmlBufferPtr buf;
+  gboolean ok;
 
-  if (type == G_FILE_ATTRIBUTE_TYPE_INVALID)
+  g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
+
+  buf = node_children_to_string (attrnode);
+  ok = g_file_set_attribute (file, attrname, G_FILE_ATTRIBUTE_TYPE_STRING,
+                             (gpointer) xmlBufferContent (buf),
+                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  xmlBufferFree (buf);
+
+  if (!ok)
     {
-      g_autoptr(GFile) target = NULL;
-      g_autofree gchar *path = NULL;
-
-      attrname = xml_node_get_xattr_name (attrnode, "user.");
-      g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
-
-      target = xattr_target (file);
-      if (!target)
-        return SOUP_STATUS_FORBIDDEN;
-
-      path = g_file_get_path (target);
-      status = xattr_remove (path, attrname);
-    }
-  else
-    {
-      attrname = xml_node_get_xattr_name (attrnode, "xattr::");
-      g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
-
-      g_file_set_attribute (file, attrname, type, mem,
-                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+      g_debug ("PROPPATCH: failed to set the property: %s",
+               error ? error->message : "no error details");
+      return SOUP_STATUS_NOT_FOUND;
     }
 
-  if (error)
-    {
-      g_debug ("PROPPATCH: failed to set the property: %s", error->message);
-      status = SOUP_STATUS_NOT_FOUND;
-    }
-
-  return status;
+  return SOUP_STATUS_OK;
 }
 
 static gint
-prop_set (GFile *file,
-          xmlNodePtr parent,
-          xmlNodePtr *attr,
-          gboolean remove,
-          GCancellable *cancellable)
+prop_remove (GFile *file, xmlNodePtr attrnode)
+{
+  g_autofree gchar *attrname = xml_node_get_xattr_name (attrnode, "user.");
+  g_autoptr(GFile) target = NULL;
+  g_autofree gchar *path = NULL;
+
+  g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
+
+  target = xattr_target (file);
+  if (!target)
+    return SOUP_STATUS_FORBIDDEN;
+
+  path = g_file_get_path (target);
+  return xattr_remove (path, attrname);
+}
+
+typedef enum
+{
+  PROP_OP_SET,
+  PROP_OP_REMOVE,
+} PropOp;
+
+static gint
+prop_apply (GFile *file,
+            xmlNodePtr parent,
+            xmlNodePtr *attr,
+            PropOp op,
+            GCancellable *cancellable)
 {
   xmlNodePtr node, attrnode;
-  gint type = G_FILE_ATTRIBUTE_TYPE_INVALID;
-  gint status;
 
   for (node = parent->children; node; node = node->next)
     {
@@ -139,26 +146,16 @@ prop_set (GFile *file,
 
       if (xml_node_has_name (node, "prop"))
         {
-          xmlBufferPtr buf = NULL;
-
           attrnode = node->children;
           if (!xml_node_is_element (attrnode))
             continue;
 
           *attr = xmlCopyNode (attrnode, 2);
 
-          if (!remove)
-            {
-              buf = node_children_to_string (attrnode);
-              type = G_FILE_ATTRIBUTE_TYPE_STRING;
-            }
+          if (op == PROP_OP_SET)
+            return prop_set_value (file, attrnode, cancellable);
 
-          status = set_attr (file, attrnode, type, (gchar *) xmlBufferContent (buf), cancellable);
-
-          if (buf)
-            xmlBufferFree (buf);
-
-          return status;
+          return prop_remove (file, attrnode);
         }
     }
 
@@ -200,9 +197,9 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
         continue;
 
       if (xml_node_has_name (node, "set"))
-        status = prop_set (file, node, &attr, FALSE, cancellable);
+        status = prop_apply (file, node, &attr, PROP_OP_SET, cancellable);
       else if (xml_node_has_name (node, "remove"))
-        status = prop_set (file, node, &attr, TRUE, cancellable);
+        status = prop_apply (file, node, &attr, PROP_OP_REMOVE, cancellable);
       else
         {
           /* RFC 4918 section 12.13: a propertyupdate carries set and
