@@ -50,7 +50,7 @@ phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   status = do_mkcol_file (msg, file, cancellable, err);
 
 end:

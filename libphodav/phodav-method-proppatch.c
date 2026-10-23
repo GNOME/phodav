@@ -189,7 +189,7 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 

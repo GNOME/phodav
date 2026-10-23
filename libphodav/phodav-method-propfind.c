@@ -365,7 +365,7 @@ prop_quota_available (PathHandler *handler, PropFind *pf, const gchar *path, GFi
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
 
@@ -400,7 +400,7 @@ prop_quota_used (PathHandler *handler, PropFind *pf, const gchar *path, GFileInf
   if (pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
                                   cancellable,
@@ -627,7 +627,7 @@ propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHas
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   info = g_file_query_info (file, FILE_QUERY,
                             G_FILE_QUERY_INFO_NONE, cancellable, &err);
   if (err)
@@ -657,7 +657,7 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
   if (status != SOUP_STATUS_OK)
     return status;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   e = g_file_enumerate_children (file, FILE_QUERY, G_FILE_QUERY_INFO_NONE,
                                  cancellable, &err);
   if (!e)

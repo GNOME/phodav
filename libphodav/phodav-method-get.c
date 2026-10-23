@@ -291,7 +291,7 @@ phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
   GCancellable *cancellable = handler_get_cancellable (handler);
   gint status;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   status = method_get (msg, file, cancellable, err);
   g_object_unref (file);
 

@@ -187,9 +187,9 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       goto end;
     }
 
-  dest_file = g_file_get_child (handler_get_file (handler), udest + 1);
+  dest_file = handler_get_file_for_path (handler, udest);
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
 
   /* take the short path as g_file_copy seems to be rather complicated */
   if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))

@@ -135,7 +135,7 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
 
   g_debug ("check etag %s for %s", etag, path);
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   info = g_file_query_info (file, "etag::*",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)

@@ -140,6 +140,17 @@ handler_get_file (PathHandler *handler)
   return handler->file;
 }
 
+/* the request paths begin with a "/" and are relative to the share
+ * root, so that the file is looked up under the root, not the
+ * filesystem root */
+GFile *
+handler_get_file_for_path (PathHandler *handler, const gchar *path)
+{
+  g_return_val_if_fail (path != NULL && *path == '/', NULL);
+
+  return g_file_get_child (handler->file, path + 1);
+}
+
 GCancellable *
 handler_get_cancellable (PathHandler *handler)
 {

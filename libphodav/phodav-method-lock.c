@@ -62,7 +62,7 @@ lock_ensure_file (PathHandler *handler, const gchar *path, GCancellable *cancell
   g_autoptr(GFile) file = NULL;
   gboolean created = FALSE;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &e);
   created = !!stream;
 

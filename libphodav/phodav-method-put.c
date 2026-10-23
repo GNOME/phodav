@@ -265,7 +265,7 @@ phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   status = put_start (msg, file, &output, cancellable, err);
   if (!output || *err)
     goto end;
