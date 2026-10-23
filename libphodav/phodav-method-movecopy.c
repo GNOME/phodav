@@ -46,70 +46,87 @@ do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancella
   return TRUE;
 }
 
+static gboolean
+movecopy_once (gboolean copy, GFile *file, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+{
+  return copy
+           ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, err)
+           : g_file_move (file, dest, flags, cancellable, NULL, NULL, err);
+}
+
 static gint
 do_movecopy_file (SoupServerMessage *msg, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
-  GError *error = NULL;
-  gboolean overwrite;
-  gint status = SOUP_STATUS_PRECONDITION_FAILED;
+  g_autoptr(GError) error = NULL;
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   GFileCopyFlags flags = G_FILE_COPY_ALL_METADATA;
-  gboolean retry = FALSE;
+  gboolean overwrite;
   gboolean exists;
+  gboolean ok;
 
-  overwrite = !!g_strcmp0 (
-    soup_message_headers_get_one (request_headers, "Overwrite"), "F");
+  overwrite = g_strcmp0 (
+                soup_message_headers_get_one (request_headers, "Overwrite"), "F") != 0;
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
   exists = g_file_query_exists (dest, cancellable);
 
-  /* the request was validated to be depth 0 or infinity */
-again:
-  copy
-    ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
-    : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
+  /* replacing a collection removes it together with its members: delete
+   * it first (RFC 4918 section 9.6.1). This also avoids relying on the
+   * copy error to detect a directory destination: the win32 backend
+   * reports G_IO_ERROR_PERMISSION_DENIED where the POSIX one reports
+   * G_IO_ERROR_IS_DIRECTORY or G_IO_ERROR_WOULD_MERGE. */
+  if (overwrite && exists)
+    {
+      g_autoptr(GFileInfo) src_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                                         G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                                         cancellable, NULL);
+      g_autoptr(GFileInfo) dest_info = g_file_query_info (dest, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                                          G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                                          cancellable, NULL);
 
-  if (overwrite && !retry &&
+      if (src_info && dest_info &&
+          (g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY ||
+           g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY))
+        phodav_delete_file (server, dest_path, dest, NULL, cancellable);
+    }
+
+  /* the request was validated to be depth 0 or infinity */
+  ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
+
+  /* an existing destination of another kind cannot be replaced in
+   * place: remove it, then try again with the destination gone */
+  if (!ok && overwrite &&
       (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
       phodav_delete_file (server, dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
-      retry = TRUE;
-      goto again;
-    }
-  else if (!overwrite &&
-           g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-    {
-      g_clear_error (&error);
-      goto end;
-    }
-  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
-    {
-      g_clear_error (&error);
-      if (copy)
-        {
-          if (depth == DEPTH_INFINITY)
-            do_copy_r (file, dest, flags, cancellable, &error);
-          else
-            g_file_make_directory_with_parents (dest, cancellable, &error);
-        }
-    }
-  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-    {
-      status = SOUP_STATUS_CONFLICT;
-      g_clear_error (&error);
-      goto end;
+      ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
     }
 
-  if (error)
-    g_propagate_error (err, error);
-  else
-    status = exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+  /* a directory cannot be copied in one go; the depth of the request
+   * decides whether its members are copied too */
+  if (!ok && copy &&
+      g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
+    {
+      g_clear_error (&error);
+      ok = depth == DEPTH_INFINITY
+             ? do_copy_r (file, dest, flags, cancellable, &error)
+             : g_file_make_directory_with_parents (dest, cancellable, &error);
+    }
 
-end:
-  return status;
+  if (ok)
+    return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+
+  if (!overwrite && g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    return SOUP_STATUS_PRECONDITION_FAILED;
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    return SOUP_STATUS_CONFLICT;
+
+  g_propagate_error (err, g_steal_pointer (&error));
+  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 }
 
 gint
