@@ -80,6 +80,20 @@ assert_file_contents (const gchar *path, const gchar *expected)
   g_assert_cmpstr (contents, ==, expected);
 }
 
+/* an upload stages its content in a .phodav-*.tmp file next to the
+ * destination; none should survive a request */
+static void
+assert_no_upload_temp_files (const gchar *directory)
+{
+  GDir *dir = g_dir_open (directory, 0, NULL);
+  const gchar *name;
+
+  g_assert_nonnull (dir);
+  while ((name = g_dir_read_name (dir)) != NULL)
+    g_assert_false (g_str_has_prefix (name, ".phodav-"));
+  g_dir_close (dir);
+}
+
 static void
 make_directory (const gchar *dir, const gchar *name)
 {
@@ -799,6 +813,17 @@ test_put (DavFixture *f, gconstpointer user_data)
 
     g_assert_false (g_file_test (missing, G_FILE_TEST_EXISTS));
   }
+
+  /* a collection cannot be replaced with a PUT, RFC 4918 section 9.7.2 */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir", "data", NULL),
+                    ==, SOUP_STATUS_METHOD_NOT_ALLOWED);
+  {
+    g_autofree gchar *inner = g_build_filename (f->dir, "dir/inner.txt", NULL);
+
+    assert_file_contents (inner, "inner\n");
+  }
+
+  assert_no_upload_temp_files (f->dir);
 }
 
 static void
@@ -2151,6 +2176,95 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   assert_file_contents (path, "written");
 }
 
+/* read up to the end of an HTTP header block, so that the caller can
+ * tell the interim 100 Continue response from the final one */
+static void
+read_http_headers (GInputStream *in, gchar *buf, gsize size, GError **error)
+{
+  gsize used = 0;
+
+  buf[0] = '\0';
+  while (used < size - 1)
+    {
+      gssize n = g_input_stream_read (in, buf + used, size - 1 - used, NULL, error);
+
+      if (n <= 0)
+        return;
+
+      used += n;
+      buf[used] = '\0';
+
+      if (strstr (buf, "\r\n\r\n"))
+        return;
+    }
+}
+
+/* a condition which held when the upload started must still hold when
+ * the staged file is committed: a concurrent writer wins with 412,
+ * and the upload does not overwrite its content */
+static void
+test_put_conditional_race (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *etag = NULL;
+  g_autofree gchar *if_match = NULL;
+  g_autofree gchar *path = g_build_filename (f->dir, "race.txt", NULL);
+  g_autofree gchar *request = NULL;
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autoptr(GError) error = NULL;
+  GOutputStream *out;
+  GInputStream *in;
+  gchar buf[1024];
+
+  write_file (f->dir, "race.txt", "initial");
+  {
+    g_autoptr(GFile) file = g_file_new_for_path (path);
+    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
+
+    etag = g_strdup (g_file_info_get_etag (info));
+    g_assert_nonnull (etag);
+  }
+  if_match = g_strdup_printf ("\"%s\"", etag);
+
+  conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri),
+                                          g_uri_get_port (uri), NULL, &error);
+  g_assert_no_error (error);
+  g_socket_set_timeout (g_socket_connection_get_socket (conn), 2);
+
+  out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+  in = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+
+  request = g_strdup_printf ("PUT /race.txt HTTP/1.1\r\n"
+                             "Host: localhost\r\n"
+                             "If-Match: %s\r\n"
+                             "Expect: 100-continue\r\n"
+                             "Content-Length: 10\r\n"
+                             "\r\n",
+                             if_match);
+  g_assert_true (g_output_stream_write_all (out, request, strlen (request), NULL, NULL, &error));
+  g_assert_no_error (error);
+
+  /* the server accepted the preconditions and waits for the body */
+  read_http_headers (in, buf, sizeof (buf), &error);
+  g_assert_no_error (error);
+  g_assert_true (g_str_has_prefix (buf, "HTTP/1.1 100"));
+
+  /* another writer changes the resource while the upload is pending */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/race.txt", "other", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* the staged upload is committed only if the condition still holds */
+  g_assert_true (g_output_stream_write_all (out, "0123456789", 10, NULL, NULL, &error));
+  g_assert_no_error (error);
+  read_http_headers (in, buf, sizeof (buf), &error);
+  g_assert_no_error (error);
+  g_assert_true (g_str_has_prefix (buf, "HTTP/1.1 412"));
+
+  assert_file_contents (path, "other");
+  assert_no_upload_temp_files (f->dir);
+}
+
 static void
 test_unknown_method (DavFixture *f, gconstpointer user_data)
 {
@@ -2423,7 +2537,7 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
   g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
 
   /* the same happens when overwriting an existing file: the upload
-   * fails, and what remains is removed rather than left truncated */
+   * fails, and the original content is preserved */
   {
     g_autofree gchar *data = g_strnfill (64, 'x');
     g_autofree gchar *hello = g_build_filename (f->dir, "hello.txt", NULL);
@@ -2431,8 +2545,10 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
     g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", data, NULL),
                       ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
 
-    g_assert_false (g_file_test (hello, G_FILE_TEST_EXISTS));
+    assert_file_contents (hello, HELLO_CONTENT);
   }
+
+  assert_no_upload_temp_files (f->dir);
 
   signal (SIGXFSZ, SIG_DFL);
   g_assert_cmpint (setrlimit (RLIMIT_FSIZE, &old), ==, 0);
@@ -2546,6 +2662,42 @@ test_put_interrupted (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_OK);
 
   g_assert_false (g_file_test (path, G_FILE_TEST_EXISTS));
+
+  /* an interrupted upload which overwrites an existing resource leaves
+   * the original content untouched */
+  {
+    g_autofree gchar *hello = g_build_filename (f->dir, "hello.txt", NULL);
+    g_autoptr(GSocketConnection) overwrite_conn = NULL;
+    GOutputStream *overwrite_out;
+
+    overwrite_conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri),
+                                                      g_uri_get_port (uri), NULL, &error);
+    g_assert_no_error (error);
+    overwrite_out = g_io_stream_get_output_stream (G_IO_STREAM (overwrite_conn));
+
+    {
+      const gchar *request =
+        "PUT /hello.txt HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Content-Length: 100\r\n"
+        "\r\n"
+        "partial";
+
+      g_assert_true (g_output_stream_write_all (overwrite_out, request, strlen (request),
+                                                NULL, NULL, &error));
+      g_assert_no_error (error);
+    }
+
+    g_assert_true (g_io_stream_close (G_IO_STREAM (overwrite_conn), NULL, &error));
+    g_assert_no_error (error);
+
+    /* dispatch the hang up, then check the destination */
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                      ==, SOUP_STATUS_OK);
+    assert_file_contents (hello, HELLO_CONTENT);
+  }
+
+  assert_no_upload_temp_files (f->dir);
 }
 
 /* the server may cap the size of the PUT uploads: the requests over
@@ -2619,6 +2771,8 @@ test_put_max_upload (DavFixture *f, gconstpointer user_data)
 
     assert_file_contents (chunked, at_limit);
   }
+
+  assert_no_upload_temp_files (f->dir);
 }
 
 /* Send a raw HTTP request line directly over TCP, bypassing the
@@ -2776,6 +2930,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
+  g_test_add ("/dav/put-conditional-race", DavFixture, NULL, dav_fixture_setup, test_put_conditional_race, dav_fixture_teardown);
   g_test_add ("/dav/put-write-error", DavFixture, NULL, dav_fixture_setup, test_put_write_error, dav_fixture_teardown);
   g_test_add ("/dav/put-expect-continue", DavFixture, NULL, dav_fixture_setup, test_put_expect_continue, dav_fixture_teardown);
   g_test_add ("/dav/put-interrupted", DavFixture, NULL, dav_fixture_setup, test_put_interrupted, dav_fixture_teardown);
