@@ -1307,6 +1307,15 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
   doc = parse_multistatus (body);
   g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
 
+  /* removing an already absent property is idempotent */
+  g_clear_object (&msg);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, "PROPPATCH", "/hello.txt", PROPPATCH_REMOVE, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-test"), ==, SOUP_STATUS_OK);
+
   /* a missing resource is reported per-property, in a multistatus */
   {
     g_autoptr(GBytes) missing_body = NULL;
@@ -1314,6 +1323,15 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
     g_autoptr(xmlDoc) missing_doc = NULL;
 
     missing_msg = dav_request (f, "PROPPATCH", "/missing.txt", PROPPATCH_SET, &missing_body, NULL);
+    g_assert_cmpuint (soup_message_get_status (missing_msg), ==, SOUP_STATUS_MULTI_STATUS);
+    missing_doc = parse_multistatus (missing_body);
+    g_assert_cmpuint (prop_status (f, missing_doc, "/missing.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);
+
+    /* the same holds for a removal, which cannot reach the file */
+    g_clear_object (&missing_msg);
+    g_clear_pointer (&missing_doc, xmlFreeDoc);
+    g_clear_pointer (&missing_body, g_bytes_unref);
+    missing_msg = dav_request (f, "PROPPATCH", "/missing.txt", PROPPATCH_REMOVE, &missing_body, NULL);
     g_assert_cmpuint (soup_message_get_status (missing_msg), ==, SOUP_STATUS_MULTI_STATUS);
     missing_doc = parse_multistatus (missing_body);
     g_assert_cmpuint (prop_status (f, missing_doc, "/missing.txt", "user.phodav-test"), ==, SOUP_STATUS_NOT_FOUND);

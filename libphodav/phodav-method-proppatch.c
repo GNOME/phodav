@@ -6,6 +6,7 @@
 
 #include "config.h"
 
+#include <errno.h>
 #include <sys/types.h>
 
 #include "phodav-lock.h"
@@ -28,6 +29,58 @@ node_children_to_string (xmlNodePtr node)
   return buf;
 }
 
+/* the file whose extended attributes back a virtual directory */
+static GFile *
+xattr_target (GFile *file)
+{
+  /* https://gitlab.gnome.org/GNOME/glib/issues/1187 */
+  if (PHODAV_IS_VIRTUAL_DIR (file))
+    return phodav_virtual_dir_root_get_real (PHODAV_VIRTUAL_DIR (file));
+
+  return g_object_ref (file);
+}
+
+static gint
+xattr_remove (const gchar *path, const gchar *name)
+{
+#ifdef HAVE_SYS_XATTR_H
+#if defined(ENOATTR)
+  const gint no_attr = ENOATTR;
+#elif defined(ENODATA)
+  const gint no_attr = ENODATA;
+#else
+  const gint no_attr = ENOENT;
+#endif
+
+  if (!path)
+    return SOUP_STATUS_FORBIDDEN;
+
+#ifdef __APPLE__
+  if (removexattr (path, name, 0) == 0)
+#else
+  if (removexattr (path, name) == 0)
+#endif
+    return SOUP_STATUS_OK;
+
+  /* removing a property which is not set is not an error: PROPPATCH
+   * removals are idempotent, and litmus deletes the same property
+   * twice */
+  if (errno == no_attr)
+    return SOUP_STATUS_OK;
+
+  if (errno == EACCES || errno == EPERM)
+    return SOUP_STATUS_FORBIDDEN;
+
+  if (errno == ENOENT)
+    return SOUP_STATUS_NOT_FOUND;
+
+  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+#else
+  g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
+  return SOUP_STATUS_OK;
+#endif
+}
+
 static gint
 set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem, GCancellable *cancellable)
 {
@@ -37,27 +90,18 @@ set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem,
 
   if (type == G_FILE_ATTRIBUTE_TYPE_INVALID)
     {
+      g_autoptr(GFile) target = NULL;
+      g_autofree gchar *path = NULL;
+
       attrname = xml_node_get_xattr_name (attrnode, "user.");
       g_return_val_if_fail (attrname, SOUP_STATUS_BAD_REQUEST);
 
-      /* https://gitlab.gnome.org/GNOME/glib/issues/1187 */
-      if (PHODAV_IS_VIRTUAL_DIR (file))
-        file = phodav_virtual_dir_root_get_real (PHODAV_VIRTUAL_DIR (file));
-      else
-        g_object_ref (file);
-      if (!file)
+      target = xattr_target (file);
+      if (!target)
         return SOUP_STATUS_FORBIDDEN;
-      g_autofree gchar *path = g_file_get_path (file);
-#ifdef HAVE_SYS_XATTR_H
-#ifdef __APPLE__
-      removexattr (path, attrname, 0);
-#else
-      removexattr (path, attrname);
-#endif
-#else
-      g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
-#endif
-      g_object_unref (file);
+
+      path = g_file_get_path (target);
+      status = xattr_remove (path, attrname);
     }
   else
     {
@@ -78,8 +122,7 @@ set_attr (GFile *file, xmlNodePtr attrnode, GFileAttributeType type, gchar *mem,
 }
 
 static gint
-prop_set (SoupServerMessage *msg,
-          GFile *file,
+prop_set (GFile *file,
           xmlNodePtr parent,
           xmlNodePtr *attr,
           gboolean remove,
@@ -157,9 +200,9 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
         continue;
 
       if (xml_node_has_name (node, "set"))
-        status = prop_set (msg, file, node, &attr, FALSE, cancellable);
+        status = prop_set (file, node, &attr, FALSE, cancellable);
       else if (xml_node_has_name (node, "remove"))
-        status = prop_set (msg, file, node, &attr, TRUE, cancellable);
+        status = prop_set (file, node, &attr, TRUE, cancellable);
       else
         {
           /* RFC 4918 section 12.13: a propertyupdate carries set and
