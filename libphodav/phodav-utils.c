@@ -19,6 +19,27 @@ remove_trailing (gchar *str, gchar c)
   str[len] = '\0';
 }
 
+gchar *
+phodav_path_canonicalize (const gchar *path)
+{
+  g_auto(GStrv) parts = g_strsplit (path, "/", -1);
+  g_autoptr(GString) canonical = g_string_new (NULL);
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      if (!*parts[i])
+        continue;
+
+      g_string_append_c (canonical, '/');
+      g_string_append (canonical, parts[i]);
+    }
+
+  if (!canonical->len)
+    g_string_append_c (canonical, '/');
+
+  return g_string_free_and_steal (g_steal_pointer (&canonical));
+}
+
 gboolean
 phodav_path_is_safe (const gchar *path)
 {

@@ -14,6 +14,11 @@ G_BEGIN_DECLS
 void remove_trailing (gchar *str, gchar c);
 gboolean path_has_dot_dot_segment (const gchar *path);
 
+/* canonicalize a resource path: empty segments ("//") and trailing
+ * slashes are skipped, so that two spellings of the same resource
+ * compare equal */
+gchar *phodav_path_canonicalize (const gchar *path);
+
 /* is @path a resource path under the share root? It must be absolute,
  * with no second absolute anchor (which would escape the root on
  * Windows) and no dot-dot segment. */

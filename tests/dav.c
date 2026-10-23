@@ -853,6 +853,98 @@ test_move_copy (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_CONFLICT);
 }
 
+/* COPY and MOVE must not recurse into themselves: a destination which
+ * is the source or one of its members would create an unbounded tree
+ * of nested copies. */
+static void
+test_movecopy_self_containment (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *inside = g_build_path ("/", f->base_uri, "dir/sub", NULL);
+  g_autofree gchar *inside_slash = g_strconcat (f->base_uri, "dir//sub", NULL);
+  g_autofree gchar *same = g_build_path ("/", f->base_uri, "dir", NULL);
+  g_autofree gchar *same_slash = g_strconcat (f->base_uri, "dir/", NULL);
+  g_autofree gchar *partial = g_build_filename (f->dir, "dir", "sub", NULL);
+
+  /* copying a collection into one of its members would recurse
+   * endlessly, it must be refused before anything is written */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dir", NULL,
+                                "Destination", inside, "Depth", "infinity", NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_false (g_file_test (partial, G_FILE_TEST_EXISTS));
+
+  /* the same destination under another spelling of the path */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dir", NULL,
+                                "Destination", inside_slash, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* the destination cannot be the source either */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dir", NULL,
+                                "Destination", same, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/dir/", NULL,
+                                "Destination", same, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dir", NULL,
+                                "Destination", same_slash, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* MOVE is recursive too */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/dir", NULL,
+                                "Destination", inside, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* replacing one of the source ancestors would delete the source
+   * before it is copied or moved */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dir/inner.txt", NULL,
+                                "Destination", same, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/dir/inner.txt", NULL,
+                                "Destination", same, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* the source is untouched */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/dir/inner.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_false (g_file_test (partial, G_FILE_TEST_EXISTS));
+}
+
+#ifdef G_OS_UNIX
+/* a symbolic link in the destination path could point outside of the
+ * shared directory: refuse to follow one */
+static void
+test_movecopy_symlink_destination (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *outside = g_dir_make_tmp ("phodav-outside-XXXXXX", NULL);
+  g_autofree gchar *link_path = g_build_filename (f->dir, "link", NULL);
+  g_autoptr(GFile) link = g_file_new_for_path (link_path);
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *dest = NULL;
+  g_autofree gchar *dest_link = NULL;
+  g_autofree gchar *copied = NULL;
+
+  g_assert_nonnull (outside);
+  g_assert_true (g_file_make_symbolic_link (link, outside, NULL, &error));
+  g_assert_no_error (error);
+
+  dest = g_strconcat (f->base_uri, "link/copied.txt", NULL);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+
+  copied = g_build_filename (outside, "copied.txt", NULL);
+  g_assert_false (g_file_test (copied, G_FILE_TEST_EXISTS));
+
+  /* a symbolic link as the destination itself is refused too */
+  dest_link = g_strconcat (f->base_uri, "link", NULL);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/hello.txt", NULL,
+                                "Destination", dest_link, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+
+  g_assert_true (g_file_test (link_path, G_FILE_TEST_IS_SYMLINK));
+  g_assert_cmpint (g_rmdir (outside), ==, 0);
+}
+#endif
+
 /* Regression tests for the path traversal fix: encoded slashes and
  * dot-dot segments in the Destination header must be rejected so that
  * COPY/MOVE cannot write outside the shared directory. */
@@ -2670,6 +2762,10 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/request-body-too-large", DavFixture, NULL, dav_fixture_setup, test_request_body_too_large, dav_fixture_teardown);
   g_test_add ("/dav/mkcol", DavFixture, NULL, dav_fixture_setup, test_mkcol, dav_fixture_teardown);
   g_test_add ("/dav/move-copy", DavFixture, NULL, dav_fixture_setup, test_move_copy, dav_fixture_teardown);
+  g_test_add ("/dav/movecopy-self-containment", DavFixture, NULL, dav_fixture_setup, test_movecopy_self_containment, dav_fixture_teardown);
+#ifdef G_OS_UNIX
+  g_test_add ("/dav/movecopy-symlink-destination", DavFixture, NULL, dav_fixture_setup, test_movecopy_symlink_destination, dav_fixture_teardown);
+#endif
   g_test_add ("/dav/movecopy-path-traversal", DavFixture, NULL, dav_fixture_setup, test_movecopy_path_traversal, dav_fixture_teardown);
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);
 

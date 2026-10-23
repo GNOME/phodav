@@ -76,6 +76,8 @@ typedef gboolean (*PathCb) (const gchar *key,
 
 /* the file of a request path, relative to the share root */
 GFile *handler_get_file_for_path (PathHandler *handler, const gchar *path);
+/* the shared root, borrowed */
+GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
 GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 gboolean handler_get_readonly (PathHandler *handler) G_GNUC_PURE;

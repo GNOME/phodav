@@ -80,37 +80,15 @@ static void request_started (SoupServer *server,
 
 static gboolean expire_locks_timeout (gpointer user_data);
 
-/* Canonicalize a request path for use as a key in the paths table:
- * empty segments ("//") and trailing slashes are skipped, so that
- * locks are found again under whatever form the client used in its
- * request. server_foreach_parent_path() walks the keys produced by
- * this function, so the two cannot disagree on the canonical form. */
-static gchar *
-path_key (const gchar *_path)
-{
-  g_auto(GStrv) parts = g_strsplit (_path, "/", -1);
-  g_autoptr(GString) path = g_string_new (NULL);
-
-  for (gint i = 0; parts[i]; i++)
-    {
-      if (!*parts[i])
-        continue;
-
-      g_string_append_c (path, '/');
-      g_string_append (path, parts[i]);
-    }
-
-  if (!path->len)
-    g_string_append_c (path, '/');
-
-  return g_string_free_and_steal (g_steal_pointer (&path));
-}
-
+/* The lock table is keyed on the canonical resource path, so that the
+ * locks are found again under whatever spelling of the path the client
+ * used in its request. server_foreach_parent_path() walks the same
+ * canonical keys, so the two cannot disagree on the canonical form. */
 Path *
 server_get_path (PhodavServer *self, const gchar *_path)
 {
   Path *p;
-  g_autofree gchar *path = path_key (_path);
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
 
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
@@ -144,6 +122,12 @@ handler_get_file_for_path (PathHandler *handler, const gchar *path)
   g_return_val_if_fail (path != NULL && *path == '/', NULL);
 
   return g_file_get_child (handler->file, path + 1);
+}
+
+GFile *
+handler_get_root_file (PathHandler *handler)
+{
+  return handler->file;
 }
 
 GCancellable *
@@ -226,7 +210,7 @@ server_remove_locks (PhodavServer *self, const gchar *_path)
 {
   GHashTableIter iter;
   Path *path;
-  g_autofree gchar *root = path_key (_path);
+  g_autofree gchar *root = phodav_path_canonicalize (_path);
 
   if (g_hash_table_size (self->paths) == 0)
     return;
@@ -547,7 +531,7 @@ phodav_server_class_init (PhodavServerClass *klass)
 gboolean
 server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
-  g_autofree gchar *canonical = path_key (path);
+  g_autofree gchar *canonical = phodav_path_canonicalize (path);
   gboolean ret = FALSE;
   gchar *key = NULL;
   Path *p;
@@ -694,7 +678,7 @@ tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
 gboolean
 server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *lock)
 {
-  g_autofree gchar *path = path_key (_path);
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
   TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
 
   g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);

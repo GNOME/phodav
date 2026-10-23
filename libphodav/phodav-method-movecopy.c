@@ -11,6 +11,54 @@
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
 
+/* whether any component of @path under the share root is a symbolic
+ * link. The destination must not be followed through one: it could
+ * point outside of the share. The components which do not exist yet
+ * cannot be links, stop at the first missing one. */
+static gboolean
+path_has_symlink_component (PathHandler *handler,
+                            const gchar *path,
+                            GCancellable *cancellable)
+{
+  g_auto(GStrv) parts = g_strsplit (path, "/", -1);
+  g_autoptr(GFile) current = g_object_ref (handler_get_root_file (handler));
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      g_autoptr(GFile) next = NULL;
+      g_autoptr(GFileInfo) info = NULL;
+      g_autoptr(GError) error = NULL;
+
+      if (!*parts[i])
+        continue;
+
+      next = g_file_get_child (current, parts[i]);
+      info = g_file_query_info (next, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                cancellable, &error);
+      if (!info)
+        {
+          /* the rest of the path does not exist yet: no symlink to
+           * follow, and the operation fails later if a parent is
+           * needed */
+          if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+            return FALSE;
+
+          g_debug ("cannot inspect %s for symlinks: %s", path,
+                   error ? error->message : "no error details");
+          return TRUE;
+        }
+
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
+        return TRUE;
+
+      g_clear_object (&current);
+      current = g_steal_pointer (&next);
+    }
+
+  return FALSE;
+}
+
 static gboolean
 do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
@@ -174,6 +222,32 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
     {
       g_debug ("invalid destination path: %s", dest);
       status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
+  {
+    g_autofree gchar *canonical = phodav_path_canonicalize (path);
+    g_autofree gchar *dest_canonical = phodav_path_canonicalize (udest);
+
+    /* a COPY or MOVE into itself would recurse endlessly, and
+     * replacing one of the source ancestors would delete the source
+     * before it is copied: the destination and the source must not
+     * cover each other (RFC 4918 sections 9.8.5 and 9.9.4) */
+    if (path_is_covered (dest_canonical, canonical) ||
+        path_is_covered (canonical, dest_canonical))
+      {
+        g_debug ("the destination %s overlaps the source %s", udest, path);
+        status = SOUP_STATUS_CONFLICT;
+        goto end;
+      }
+  }
+
+  /* a symlinked destination could write outside of the shared
+   * directory, refuse to follow one */
+  if (path_has_symlink_component (handler, udest, cancellable))
+    {
+      g_debug ("the destination %s goes through a symbolic link", udest);
+      status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
 
