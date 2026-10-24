@@ -710,6 +710,47 @@ test_server_lock_manager (void)
 }
 
 static void
+test_server_tree_other_locks (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *token = new_token ();
+  g_autofree gchar *other = new_token ();
+  g_autoptr(DAVLock) member_lock = NULL;
+  g_autoptr(DAVLock) outside_lock = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
+  Path *p;
+
+  p = server_get_path (server, "/coll/member");
+  member_lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                              DEPTH_ZERO, NULL, 60);
+  path_add_lock (p, member_lock);
+
+  p = server_get_path (server, "/other");
+  outside_lock = dav_lock_new (p, other, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
+                               DEPTH_ZERO, NULL, 60);
+  path_add_lock (p, outside_lock);
+
+  /* locks on the collection and on its members are in the tree */
+  g_assert_true (server_tree_has_other_locks (server, "/coll", NULL));
+  g_assert_true (server_tree_has_other_locks (server, "/coll/member", NULL));
+
+  /* a lock outside the tree, or on a resource with a similar name,
+   * does not count */
+  g_assert_false (server_tree_has_other_locks (server, "/elsewhere", NULL));
+  g_assert_false (server_tree_has_other_locks (server, "/col", NULL));
+
+  /* an untagged submission on the collection does not submit the token
+   * of a locked member */
+  submitted = g_list_append (NULL, lock_submitted_new ("/coll", token));
+  g_assert_true (server_tree_has_other_locks (server, "/coll", submitted));
+
+  /* the submission for the locked member itself does */
+  lock_submitted_free (submitted->data);
+  submitted->data = lock_submitted_new ("/coll/member", token);
+  g_assert_false (server_tree_has_other_locks (server, "/coll", submitted));
+}
+
+static void
 test_dav_lock_expiry (void)
 {
   /* the path references are released manually, the expiry drives the
@@ -960,6 +1001,7 @@ main (gint argc, gchar *argv[])
 
   g_test_add_func ("/server/paths", test_server_paths);
   g_test_add_func ("/server/lock-manager", test_server_lock_manager);
+  g_test_add_func ("/server/tree-other-locks", test_server_tree_other_locks);
   g_test_add_func ("/lock/expiry", test_dav_lock_expiry);
   g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
   g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);

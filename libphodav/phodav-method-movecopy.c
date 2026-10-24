@@ -182,9 +182,11 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
+  PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
+  gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
@@ -255,7 +257,20 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  if (server_path_has_other_locks (handler_get_server (handler), udest, submitted))
+  /* moving a collection removes its members with it: the tokens of
+   * the locks held on them must be submitted too. A COPY leaves the
+   * source untouched, its locks do not apply. */
+  if (!copy && server_tree_has_other_locks (server, path, submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
+
+  /* overwriting a collection removes its members: their lock tokens
+   * must be submitted too, not only the ones of the destination and
+   * its ancestors */
+  if (server_path_has_other_locks (server, udest, submitted) ||
+      server_tree_has_other_locks (server, udest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
@@ -271,7 +286,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, handler_get_server (handler), file, dest_file, udest, depth,
+  status = do_movecopy_file (msg, server, file, dest_file, udest, depth,
                              cancellable, err);
 
 end:

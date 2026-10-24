@@ -1480,16 +1480,18 @@ test_proppatch_empty_prop (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_BAD_REQUEST);
 }
 
-/* take an exclusive write lock, returns the Lock-Token header value */
+/* take an exclusive write lock, returns the Lock-Token header value;
+ * @expected_status is CREATED when the lock creates the resource, OK
+ * when it already exists */
 static gchar *
-lock_resource (DavFixture *f, const gchar *path, const gchar *timeout)
+lock_resource_full (DavFixture *f, const gchar *path, const gchar *timeout, guint expected_status)
 {
   g_autoptr(GBytes) body = NULL;
   g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", path, LOCK_EXCLUSIVE, &body,
                                             "Timeout", timeout, "Depth", "0", NULL);
   const gchar *token;
 
-  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, expected_status);
   token = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token");
   g_assert_nonnull (token);
   g_assert_true (g_str_has_prefix (token, "<urn:uuid:"));
@@ -1503,6 +1505,12 @@ lock_resource (DavFixture *f, const gchar *path, const gchar *timeout)
   }
 
   return g_strdup (token);
+}
+
+static gchar *
+lock_resource (DavFixture *f, const gchar *path, const gchar *timeout)
+{
+  return lock_resource_full (f, path, timeout, SOUP_STATUS_CREATED);
 }
 
 static void
@@ -1963,25 +1971,32 @@ test_unlock_no_token (DavFixture *f, gconstpointer user_data)
 static void
 test_locked_parent (DavFixture *f, gconstpointer user_data)
 {
-  g_autoptr(SoupMessage) msg = NULL;
-  g_autoptr(GBytes) body = NULL;
-  g_autofree gchar *token = NULL;
-
-  /* lock a file inside the directory */
-  msg = dav_request (f, "LOCK", "/dir/inner.txt", LOCK_EXCLUSIVE, &body, NULL);
-  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
-  token = g_strdup (soup_message_headers_get_one (
-    soup_message_get_response_headers (msg), "Lock-Token"));
-  g_assert_nonnull (token);
-  g_clear_object (&msg);
-  g_clear_pointer (&body, g_bytes_unref);
+  g_autofree gchar *token = lock_resource_full (f, "/dir/inner.txt", "Second-3600",
+                                                SOUP_STATUS_OK);
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+  g_autofree gchar *tagged = g_strdup_printf ("</dir/inner.txt> (%s)", token);
 
   /* modifications of the locked file are rejected without the token */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir/inner.txt", "data", NULL),
                     ==, SOUP_STATUS_LOCKED);
 
-  /* deleting the directory removes the locked member with it */
+  /* deleting the directory also deletes the locked member: the token
+   * of the member must be submitted, not only the ones of the
+   * collection */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dir", NULL, NULL),
+                    ==, SOUP_STATUS_LOCKED);
+
+  /* an untagged If list applies to the request URI (/dir): the token
+   * of the locked member does not satisfy it, and the condition fails
+   * before the lock check */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dir", NULL,
+                                "If", if_header, NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* the tagged list names the locked member, and lets the delete
+   * proceed */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dir", NULL,
+                                "If", tagged, NULL),
                     ==, SOUP_STATUS_NO_CONTENT);
 
   {
@@ -1998,6 +2013,70 @@ test_locked_parent (DavFixture *f, gconstpointer user_data)
   /* deleting something which does not exist */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/nonexistent", NULL, NULL),
                     ==, SOUP_STATUS_NOT_FOUND);
+}
+
+static void
+test_locked_destination (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *token = lock_resource_full (f, "/dir/inner.txt", "Second-3600",
+                                                SOUP_STATUS_OK);
+  g_autofree gchar *if_header = g_strdup_printf ("(%s)", token);
+  g_autofree gchar *tagged = g_strdup_printf ("</dir/inner.txt> (%s)", token);
+  g_autofree gchar *dest = g_build_path ("/", f->base_uri, "dir", NULL);
+
+  /* copying over the collection would delete its locked member: the
+   * token of that member must be submitted */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_LOCKED);
+
+  /* the untagged token applies to the source, not to the destination
+   * member, so the condition fails */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, "If", if_header, NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* the tagged token names the locked member of the destination */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, "If", tagged, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+
+  /* moving a collection also removes its members from the source */
+  make_directory (f->dir, "moving");
+  write_file (f->dir, "moving/member.txt", "member\n");
+  {
+    g_autofree gchar *member_token =
+      lock_resource_full (f, "/moving/member.txt", "Second-3600", SOUP_STATUS_OK);
+    g_autofree gchar *member_if = g_strdup_printf ("(%s)", member_token);
+    g_autofree gchar *member_tagged = g_strdup_printf ("</moving/member.txt> (%s)",
+                                                       member_token);
+    g_autofree gchar *move_dest = g_build_path ("/", f->base_uri, "moved", NULL);
+    g_autofree gchar *copy_dest = g_build_path ("/", f->base_uri, "copied", NULL);
+
+    /* a COPY leaves the source untouched, its member locks do not
+     * block it */
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/moving", NULL,
+                                  "Destination", copy_dest, NULL),
+                      ==, SOUP_STATUS_CREATED);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/moving", NULL,
+                                  "Destination", move_dest, NULL),
+                      ==, SOUP_STATUS_LOCKED);
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/moving", NULL,
+                                  "Destination", move_dest, "If", member_if, NULL),
+                      ==, SOUP_STATUS_PRECONDITION_FAILED);
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/moving", NULL,
+                                  "Destination", move_dest, "If", member_tagged, NULL),
+                      ==, SOUP_STATUS_CREATED);
+
+    {
+      g_autofree gchar *source = g_build_filename (f->dir, "moving", NULL);
+      g_autofree gchar *moved = g_build_filename (f->dir, "moved/member.txt", NULL);
+
+      g_assert_false (g_file_test (source, G_FILE_TEST_EXISTS));
+      assert_file_contents (moved, "member\n");
+    }
+  }
 }
 
 static void
@@ -2974,6 +3053,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock/failed-does-not-leak", DavFixture, NULL, dav_fixture_setup, test_lock_failed_does_not_leak, dav_fixture_teardown);
   g_test_add ("/dav/unlock/no-token", DavFixture, NULL, dav_fixture_setup, test_unlock_no_token, dav_fixture_teardown);
   g_test_add ("/dav/locked-parent", DavFixture, NULL, dav_fixture_setup, test_locked_parent, dav_fixture_teardown);
+  g_test_add ("/dav/locked-destination", DavFixture, NULL, dav_fixture_setup, test_locked_destination, dav_fixture_teardown);
 
   g_test_add ("/dav/readonly", DavFixture, GINT_TO_POINTER (1), dav_fixture_setup, test_readonly, dav_fixture_teardown);
   g_test_add ("/dav/request-path-validation", DavFixture, NULL, dav_fixture_setup, test_request_path_validation, dav_fixture_teardown);

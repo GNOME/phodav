@@ -655,6 +655,39 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
 }
 
+/* does the tree rooted at @_path contain a lock which is not among
+ * the submitted @locks? Operations which modify or replace a whole
+ * collection (DELETE, MOVE, or a COPY/MOVE overwriting a collection)
+ * must submit the tokens of the locks held on its members too
+ * (RFC 4918 sections 7.1 and 9.6.1). */
+gboolean
+server_tree_has_other_locks (PhodavServer *self, const gchar *_path, GList *locks)
+{
+  g_autofree gchar *root = phodav_path_canonicalize (_path);
+  GHashTableIter iter;
+  Path *path;
+
+  if (g_hash_table_size (self->paths) == 0)
+    return FALSE;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      GList *l;
+
+      path_expire_locks (path);
+
+      if (!path_is_covered (path->path, root))
+        continue;
+
+      for (l = path->locks; l != NULL; l = l->next)
+        if (!locks_submitted_has (locks, l->data))
+          return TRUE;
+    }
+
+  return FALSE;
+}
+
 typedef struct _TreeLockCheck
 {
   const gchar *path; /* canonical path of the new lock root */

@@ -96,6 +96,9 @@ DAVLock *server_path_lookup_lock (PhodavServer *server,
 gboolean server_path_has_other_locks (PhodavServer *self,
                                       const gchar *path,
                                       GList *locks);
+gboolean server_tree_has_other_locks (PhodavServer *self,
+                                      const gchar *path,
+                                      GList *locks);
 gboolean server_tree_has_lock_conflict (PhodavServer *self,
                                         const gchar *path,
                                         DAVLock *lock);
