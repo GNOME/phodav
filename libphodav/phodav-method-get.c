@@ -9,6 +9,13 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
+/* the directory listings are generated on the fly in memory, from an
+ * enumeration of the whole directory: cap them, so that a huge
+ * directory cannot exhaust the memory of the server. The limit is
+ * well above what a person browses in a share. */
+#define MAX_DIRECTORY_ENTRIES 4096
+#define MAX_DIRECTORY_LISTING_SIZE (8 * 1024 * 1024)
+
 static gint
 compare_strings (gconstpointer a, gconstpointer b)
 {
@@ -48,6 +55,13 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
       if (info == NULL)
         break; /* the end of the directory */
 
+      if (entries->len >= MAX_DIRECTORY_ENTRIES)
+        {
+          g_set_error_literal (err, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
+                               "The directory has too many entries to list");
+          return NULL;
+        }
+
       dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
       /* remember the directory entries by their trailing slash */
@@ -81,6 +95,15 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
       href = g_uri_escape_string (base, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
       line = g_markup_printf_escaped ("<a href=\"%s%s\">%s</a><br/>\r\n",
                                       href, dir ? "/" : "", base);
+
+      if (listing->len + strlen (line) > MAX_DIRECTORY_LISTING_SIZE)
+        {
+          g_set_error_literal (err, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
+                               "The directory listing is too large");
+          g_string_free (listing, TRUE);
+          return NULL;
+        }
+
       g_string_append (listing, line);
     }
   g_string_append (listing, "</p></body>\r\n</html>\r\n");
@@ -88,24 +111,15 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
   return listing;
 }
 
-static gint
-method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **error)
+/* the headers which are common to the GET and HEAD responses of a
+ * directory */
+static void
+method_get_directory_set_headers (SoupServerMessage *msg)
 {
-  GString *listing;
-  gsize len;
   SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
 
-  listing = get_directory_listing (file, cancellable, error);
-  if (!listing)
-    {
-      /* the directory disappeared or cannot be read since the
-       * query above, answer with the mapped status */
-      return g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
-               ? SOUP_STATUS_NOT_FOUND
-               : SOUP_STATUS_FORBIDDEN;
-    }
-
-  len = listing->len;
+  soup_message_headers_set_content_type (response_headers,
+                                         "text/html; charset=utf-8", NULL);
   /* the listing is generated on the fly, it must not be cached */
   soup_message_headers_append (response_headers, "Cache-Control", "no-cache");
   /* the page lists names taken from the shared folder, which
@@ -113,11 +127,40 @@ method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancell
    * is ever loaded from it */
   soup_message_headers_append (response_headers, "X-Content-Type-Options", "nosniff");
   soup_message_headers_append (response_headers, "Content-Security-Policy", "default-src 'none'");
+}
+
+static gint
+method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **error)
+{
+  GString *listing;
+  gsize len;
+
+  method_get_directory_set_headers (msg);
+
+  /* a HEAD request carries no representation, and the listing is
+   * generated on the fly: do not enumerate the whole directory just
+   * to throw its content away */
+  if (soup_server_message_get_method (msg) == SOUP_METHOD_HEAD)
+    return SOUP_STATUS_OK;
+
+  listing = get_directory_listing (file, cancellable, error);
+  if (!listing)
+    {
+      if (g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE))
+        g_debug ("GET: refusing the oversized directory listing of %s", g_file_peek_path (file));
+
+      /* the directory disappeared, cannot be read, or is too large
+       * to be listed: answer with the mapped status */
+      return g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
+               ? SOUP_STATUS_NOT_FOUND
+               : SOUP_STATUS_FORBIDDEN;
+    }
+
+  len = listing->len;
   /* a listing has no ranges: take the header over, so that
    * libsoup does not apply its own partial-content handling to
    * the generated page */
-  if (soup_server_message_get_method (msg) == SOUP_METHOD_GET)
-    soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
+  soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
   soup_server_message_set_response (msg, "text/html; charset=utf-8",
                                     SOUP_MEMORY_TAKE,
                                     g_string_free_and_steal (listing), len);

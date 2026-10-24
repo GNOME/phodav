@@ -636,6 +636,16 @@ test_get (DavFixture *f, gconstpointer user_data)
     g_assert_cmpstr (soup_message_headers_get_one (response_headers, "Content-Security-Policy"), ==, "default-src 'none'");
   }
 
+  /* HEAD on a directory answers the same headers without building,
+   * or sending, the listing */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  msg = dav_request (f, SOUP_METHOD_HEAD, "/dir", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (g_bytes_get_size (body), ==, 0);
+  g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Content-Type"),
+                   ==, "text/html; charset=utf-8");
+
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL, NULL), ==, SOUP_STATUS_OK);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/missing.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
 }
@@ -2074,6 +2084,38 @@ test_propfind_quota (DavFixture *f, gconstpointer user_data)
     text = g_strndup (data, size);
   }
   g_assert_nonnull (strstr (text, "<D:quota-used-bytes>"));
+
+  /* the members of a Depth:1 listing are measured too: the members
+   * are disjoint, so the whole walk costs no more than the quota of
+   * the collection itself */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  make_directory (f->dir, "dir/sub");
+  write_file (f->dir, "dir/sub/nested.txt", "nested\n");
+  {
+    g_autoptr(xmlDoc) doc = NULL;
+    g_autofree gchar *used = NULL;
+    g_autofree gchar *nested_used = NULL;
+
+    msg = dav_request (f, "PROPFIND", "/dir",
+                       "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                       "<D:quota-used-bytes/>"
+                       "</D:prop></D:propfind>",
+                       &body, "Depth", "1", NULL);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+    doc = parse_multistatus (body);
+
+    g_assert_cmpuint (prop_status (f, doc, "/dir", "quota-used-bytes"), ==, SOUP_STATUS_OK);
+    g_assert_cmpuint (prop_status (f, doc, "/dir/inner.txt", "quota-used-bytes"),
+                      ==, SOUP_STATUS_OK);
+    g_assert_cmpuint (prop_status (f, doc, "/dir/sub", "quota-used-bytes"),
+                      ==, SOUP_STATUS_OK);
+
+    used = prop_value (f, doc, "/dir/inner.txt", "quota-used-bytes");
+    g_assert_cmpuint (g_ascii_strtoull (used, NULL, 10), >, 0);
+    nested_used = prop_value (f, doc, "/dir/sub", "quota-used-bytes");
+    g_assert_cmpuint (g_ascii_strtoull (nested_used, NULL, 10), >, 0);
+  }
 }
 
 static void
@@ -2362,6 +2404,34 @@ test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
   g_assert_nonnull (strstr (text, ">que?ry#hash.txt</a>"));
   g_assert_nonnull (strstr (text, ">amp&amp;and.txt</a>"));
   g_assert_nonnull (strstr (text, ">tag&lt;le&gt;.txt</a>"));
+}
+
+/* a directory with more entries than the server is willing to list
+ * is refused rather than built in memory */
+static void
+test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  guint i;
+
+  make_directory (f->dir, "large");
+
+  /* one entry more than the cap of phodav-method-get.c */
+  for (i = 0; i <= 4096; i++)
+    {
+      g_autofree gchar *name = g_strdup_printf ("file-%04u", i);
+      g_autofree gchar *path = g_build_filename (f->dir, "large", name, NULL);
+
+      g_assert_true (g_file_set_contents (path, "", 0, NULL));
+    }
+
+  msg = dav_request (f, SOUP_METHOD_GET, "/large", NULL, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_FORBIDDEN);
+
+  /* the directory itself is still there, and so is a file in it */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/large", NULL, NULL), ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/large/file-0000", NULL, NULL), ==, SOUP_STATUS_OK);
 }
 
 static void
@@ -3194,6 +3264,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/get-conditional", DavFixture, NULL, dav_fixture_setup, test_get_conditional, dav_fixture_teardown);
   g_test_add ("/dav/get-range", DavFixture, NULL, dav_fixture_setup, test_get_range, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
+  g_test_add ("/dav/get-listing-too-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_too_large, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
