@@ -135,6 +135,10 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
 
   g_debug ("check etag %s for %s", etag, path);
 
+  /* a tagged resource outside of the share cannot match */
+  if (!handler_path_is_covered (handler, path))
+    return FALSE;
+
   file = handler_get_file_for_path (handler, path);
   info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);

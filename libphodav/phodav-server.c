@@ -35,7 +35,9 @@ struct _PhodavServer
   SoupServer *server;
   GCancellable *cancellable;
   GFile *root_file;
+  gchar *base_path;
   PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
+  gchar *handler_path;       /* the path the handler is registered at */
   GHashTable *paths;
   gboolean readonly;
   guint64 max_upload;
@@ -51,18 +53,13 @@ typedef enum
 {
   PROP_ROOT = 1,
   PROP_ROOT_FILE,
+  PROP_BASE_PATH,
   PROP_SERVER,
   PROP_READONLY,
   PROP_MAX_UPLOAD,
 } PhodavServerProps;
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
-
-static void early_server_callback (SoupServer *server,
-                                   SoupServerMessage *msg,
-                                   const gchar *path,
-                                   GHashTable *query,
-                                   gpointer user_data);
 
 static void server_callback (SoupServer *server,
                              SoupServerMessage *msg,
@@ -130,15 +127,46 @@ handler_get_server (PathHandler *handler)
   return handler->self;
 }
 
+const gchar *
+handler_get_base_path (PathHandler *handler)
+{
+  return handler->self->base_path;
+}
+
+/* does @path belong to the share mounted at the base path? This is
+ * the same prefix test the DAV handlers are registered with: a
+ * request outside it is not phodav's, whatever handler libsoup
+ * routed it to. */
+gboolean
+handler_path_is_covered (PathHandler *handler, const gchar *path)
+{
+  return path && path_is_covered (path, handler->self->base_path);
+}
+
 /* the request paths begin with a "/" and are relative to the share
  * root, so that the file is looked up under the root, not the
- * filesystem root */
+ * filesystem root. The base path is stripped first, so that a share
+ * mounted at "/dav" serves "/dav/hello.txt" as "hello.txt". */
 GFile *
 handler_get_file_for_path (PathHandler *handler, const gchar *path)
 {
+  const gchar *relative = path;
+  gsize base_len;
+
   g_return_val_if_fail (path != NULL && *path == '/', NULL);
 
-  return g_file_get_child (handler->file, path + 1);
+  if (!handler_path_is_covered (handler, path))
+    return NULL;
+
+  base_len = strlen (handler->self->base_path);
+  if (base_len > 1)
+    {
+      relative = path + base_len;
+      if (!*relative)
+        relative = "/";
+    }
+
+  return g_file_get_child (handler->file, relative + 1);
 }
 
 GFile *
@@ -186,6 +214,7 @@ static void
 phodav_server_init (PhodavServer *self)
 {
   self->constructing = TRUE;
+  self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
 
@@ -260,25 +289,29 @@ update_root_handler (PhodavServer *self)
 {
   PathHandler *handler;
 
+  /* the handler is registered at the base path, which may have
+   * changed since the last registration */
+  if (self->root_handler)
+    {
+      if (self->server && self->handler_path)
+        soup_server_remove_handler (self->server, self->handler_path);
+
+      self->root_handler = NULL;
+      g_clear_pointer (&self->handler_path, g_free);
+    }
+
   if (!self->root_file || !self->server)
     return;
 
-  /* the early handler only tags the messages which libsoup routes
-   * to the phodav root handler, like the regular one below: a
-   * request routed to another handler of a user-provided
-   * #SoupServer, at a more specific path, runs neither of them */
-  soup_server_add_early_handler (self->server, "/",
-                                 early_server_callback,
-                                 NULL, NULL);
-
   handler = path_handler_new (self, self->root_file);
 
-  soup_server_add_handler (self->server, "/",
+  soup_server_add_handler (self->server, self->base_path,
                            server_callback,
                            handler,
                            (GDestroyNotify) path_handler_free);
 
   self->root_handler = handler;
+  self->handler_path = g_strdup (self->base_path);
 }
 
 static void
@@ -344,9 +377,13 @@ phodav_server_dispose (GObject *gobject)
    * dispose may run again, the server is already gone then */
   if (self->server)
     {
-      soup_server_remove_handler (self->server, "/");
+      if (self->handler_path)
+        soup_server_remove_handler (self->server, self->handler_path);
       g_signal_handlers_disconnect_by_func (self->server, request_started, self);
     }
+  self->root_handler = NULL;
+  g_clear_pointer (&self->handler_path, g_free);
+  g_clear_pointer (&self->base_path, g_free);
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
@@ -378,6 +415,10 @@ phodav_server_get_property (GObject *gobject,
 
     case PROP_ROOT_FILE:
       g_value_set_object (value, self->root_file);
+      break;
+
+    case PROP_BASE_PATH:
+      g_value_set_string (value, self->base_path);
       break;
 
     case PROP_SERVER:
@@ -430,6 +471,26 @@ phodav_server_set_property (GObject *gobject,
       update_root_handler (self);
       break;
 
+    case PROP_BASE_PATH:
+      {
+        const gchar *path = g_value_get_string (value);
+        g_autofree gchar *canonical = phodav_path_canonicalize (path && *path ? path : "/");
+
+        if (!phodav_path_is_safe (canonical))
+          {
+            g_warning ("invalid base path: %s", path ?: "");
+            break;
+          }
+
+        if (g_strcmp0 (canonical, self->base_path) == 0)
+          break;
+
+        g_free (self->base_path);
+        self->base_path = g_steal_pointer (&canonical);
+        update_root_handler (self);
+      }
+      break;
+
     case PROP_READONLY:
       self->readonly = g_value_get_boolean (value);
       break;
@@ -442,6 +503,7 @@ phodav_server_set_property (GObject *gobject,
       /* construct-only */
       g_return_if_fail (self->server == NULL);
       self->server = g_value_dup_object (value);
+      update_root_handler (self);
       break;
     }
 }
@@ -490,18 +552,39 @@ phodav_server_class_init (PhodavServerClass *klass)
                            G_PARAM_STATIC_STRINGS);
 
   /**
+   * PhodavServer:base-path:
+   *
+   * The path prefix the DAV handlers are registered at on the #SoupServer.
+   *
+   * The default, "/", serves the share at the server root. When the
+   * server is shared with other handlers, set a distinct prefix (for
+   * example "/dav") that no other handler covers: phodav filters the
+   * requests it processes by that prefix, as libsoup does not expose
+   * the handler routing before the request body is received.
+   *
+   * Since: 3.1
+   **/
+  properties[PROP_BASE_PATH] =
+    g_param_spec_string ("base-path",
+                         NULL, NULL,
+                         "/",
+                         G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
+
+  /**
    * PhodavServer:server:
    *
    * The underlying #SoupServer.
    *
    * When constructing a #PhodavServer, an already configured
    * #SoupServer may be given, with listeners, TLS certificates or
-   * auth domains set up for example. phodav registers its DAV
-   * handlers at "/" only: the requests routed to another handler
-   * of @server, at a more specific path, are left to it, except
-   * the authenticated ones on a server with an auth domain, which
-   * phodav cannot tell the routing of. When no server is provided,
+   * auth domains set up for example. When no server is provided,
    * a new one is created.
+   *
+   * phodav registers its DAV handlers at #PhodavServer:base-path.
+   * When the server carries handlers of the embedding application,
+   * set #PhodavServer:base-path to a prefix that no other handler
+   * covers, and leave that subtree to phodav.
    *
    * Since: 3.1
    **/
@@ -855,21 +938,6 @@ got_chunk (SoupServerMessage *msg,
   soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
 }
 
-/* the qdata key of the messages routed to the phodav root handler,
- * set by its early handler */
-#define EARLY_HANDLER_KEY "phodav-early-handler"
-
-/* the early handler of the root path: it does no processing of its
- * own, it only tags the message, so that got_headers() can tell
- * the requests which libsoup will dispatch to the phodav root
- * handler from the ones routed to another handler of a
- * user-provided #SoupServer, at a more specific path. */
-static void
-early_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
-{
-  g_object_set_qdata (G_OBJECT (msg), g_quark_from_static_string (EARLY_HANDLER_KEY), GUINT_TO_POINTER (1));
-}
-
 static void
 got_headers (SoupServerMessage *msg,
              gpointer user_data)
@@ -891,16 +959,14 @@ got_headers (SoupServerMessage *msg,
   if (!self->root_handler)
     return;
 
-  /* the early handler tagged the requests which libsoup routes to
-   * the phodav root handler. It never runs for the requests
-   * accepted by an auth domain though: libsoup returns from its
-   * headers processing on a successful authentication, before
-   * calling the early handlers. Handle those here too, told by the
-   * Authorization header the client sent: on a server with an
-   * auth domain, the routing of an authenticated request cannot be
-   * told apart, and phodav handles them all */
-  if (g_object_get_qdata (G_OBJECT (msg), g_quark_from_static_string (EARLY_HANDLER_KEY)) == NULL &&
-      soup_message_headers_get_one (request_headers, "Authorization") == NULL)
+  /* only the requests under the base path are phodav's. This is
+   * decided by the configured prefix, not by the routing libsoup
+   * performed: an auth domain makes libsoup return from its headers
+   * processing before the early handlers, so the routing cannot be
+   * observed here. When the SoupServer is shared with other
+   * handlers, the base path must be a prefix no other handler
+   * covers. */
+  if (!path || !path_is_covered (path, self->base_path))
     return;
 
   /* a method which streams its request body out while it is
@@ -989,6 +1055,15 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
    * method handler */
   if (soup_server_message_get_status (msg) != 0)
     return;
+
+  /* libsoup matches handlers by a plain string prefix, so it can
+   * also route a path which merely starts with the base path here
+   * ("/davos" for "/dav"): it is not part of the share */
+  if (!handler_path_is_covered (handler, path))
+    {
+      soup_server_message_set_status (msg, SOUP_STATUS_NOT_FOUND, NULL);
+      return;
+    }
 
   /* a streamed method was started from got_headers(), before its
    * request body was received, and is answered from its got-body

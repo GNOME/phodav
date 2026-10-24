@@ -20,8 +20,21 @@ path_has_symlink_component (PathHandler *handler,
                             const gchar *path,
                             GCancellable *cancellable)
 {
-  g_auto(GStrv) parts = g_strsplit (path, "/", -1);
+  const gchar *base = handler_get_base_path (handler);
+  const gchar *relative = path;
+  g_auto(GStrv) parts = NULL;
   g_autoptr(GFile) current = g_object_ref (handler_get_root_file (handler));
+
+  /* inspect the path relative to the share root, not the request
+   * path including the base path */
+  if (strlen (base) > 1)
+    {
+      relative = path + strlen (base);
+      if (!*relative)
+        relative = "/";
+    }
+
+  parts = g_strsplit (relative, "/", -1);
 
   for (gint i = 0; parts[i]; i++)
     {
@@ -220,7 +233,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
    * and an empty first segment ("//"), which g_file_get_child()
    * would resolve against the filesystem root */
   udest = g_uri_unescape_string (dest, "/");
-  if (!phodav_path_is_safe (udest))
+  if (!phodav_path_is_safe (udest) || !handler_path_is_covered (handler, udest))
     {
       g_debug ("invalid destination path: %s", dest);
       status = SOUP_STATUS_BAD_REQUEST;

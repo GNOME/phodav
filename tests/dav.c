@@ -58,6 +58,7 @@ typedef struct _DavFixture
   GThread *thread;
   SoupSession *session;
   gchar *base_uri;
+  gchar *auth_header;
   gboolean thread_done;
 } DavFixture;
 
@@ -221,6 +222,13 @@ foreign_handler_cb (SoupServer *server, SoupServerMessage *msg, const gchar *pat
   soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 }
 
+static gboolean
+shared_auth_cb (SoupAuthDomain *domain, SoupServerMessage *msg, const gchar *username, const gchar *password, gpointer user_data)
+{
+  return g_strcmp0 (username, "user") == 0 &&
+         g_strcmp0 (password, "pass") == 0;
+}
+
 /* a fixture server sharing the SoupServer of the embedding
  * application, which carries a foreign handler of its own */
 static void
@@ -244,9 +252,24 @@ dav_fixture_setup_shared (DavFixture *f, gconstpointer user_data)
   server = soup_server_new (NULL, NULL);
   soup_server_add_handler (server, "/upload", foreign_handler_cb, NULL, NULL);
 
+  /* the auth domain covers the whole server, the foreign handler
+   * included: libsoup answers the authenticated requests before its
+   * early handlers run, so phodav cannot observe the routing */
+  {
+    g_autoptr(SoupAuthDomain) auth = soup_auth_domain_basic_new ("realm", "test", NULL);
+    g_autofree gchar *credentials = g_base64_encode ((const guchar *) "user:pass", strlen ("user:pass"));
+
+    soup_auth_domain_add_path (auth, "/");
+    soup_auth_domain_basic_set_auth_callback (auth, shared_auth_cb, NULL, NULL);
+    soup_server_add_auth_domain (server, auth);
+
+    f->auth_header = g_strdup_printf ("Basic %s", credentials);
+  }
+
   f->phodav = g_object_new (PHODAV_TYPE_SERVER,
                             "root", f->dir,
                             "server", server,
+                            "base-path", "/dav",
                             NULL);
 
   g_assert_true (phodav_server_get_soup_server (f->phodav) == server);
@@ -295,6 +318,7 @@ dav_fixture_teardown (DavFixture *f, gconstpointer user_data)
   remove_recursive (file);
 
   g_free (f->base_uri);
+  g_free (f->auth_header);
   g_free (f->dir);
 }
 
@@ -320,6 +344,10 @@ dav_request (DavFixture *f, const gchar *method, const gchar *path, const gchar 
 
   uri = g_build_path ("/", f->base_uri, path, NULL);
   msg = soup_message_new (method, uri);
+
+  if (f->auth_header)
+    soup_message_headers_append (soup_message_get_request_headers (msg),
+                                 "Authorization", f->auth_header);
 
   va_start (ap, response_body);
   while ((name = va_arg (ap, const gchar *)))
@@ -376,6 +404,10 @@ dav_status (DavFixture *f, const gchar *method, const gchar *path, const gchar *
 
     msg = soup_message_new (method, uri);
   }
+
+  if (f->auth_header)
+    soup_message_headers_append (soup_message_get_request_headers (msg),
+                                 "Authorization", f->auth_header);
 
   va_start (ap, body);
   while ((name = va_arg (ap, const gchar *)))
@@ -1955,6 +1987,7 @@ static void
 test_server_properties (DavFixture *f, gconstpointer user_data)
 {
   g_autofree gchar *root = NULL;
+  g_autofree gchar *base_path = NULL;
   g_autoptr(GFile) root_file = NULL;
   g_autoptr(SoupServer) server = NULL;
   gboolean readonly;
@@ -1964,6 +1997,7 @@ test_server_properties (DavFixture *f, gconstpointer user_data)
   g_object_get (f->phodav,
                 "root", &root,
                 "root-file", &root_file,
+                "base-path", &base_path,
                 "server", &server,
                 "read-only", &readonly,
                 "max-upload", &max_upload,
@@ -1971,6 +2005,7 @@ test_server_properties (DavFixture *f, gconstpointer user_data)
 
   g_assert_cmpstr (root, ==, f->dir);
   g_assert_nonnull (root_file);
+  g_assert_cmpstr (base_path, ==, "/");
   g_assert_true (SOUP_IS_SERVER (server));
   g_assert_false (readonly);
   g_assert_cmpuint (max_upload, ==, 0);
@@ -3097,10 +3132,11 @@ test_request_path_validation (DavFixture *f, gconstpointer user_data)
 static void
 test_shared_server (DavFixture *f, gconstpointer user_data)
 {
-  /* the DAV requests are served as usual on the shared server */
-  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+  /* the share is mounted at its base path, the DAV requests are
+   * served as usual there */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/dav/hello.txt", NULL, NULL),
                     ==, SOUP_STATUS_OK);
-  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dav.txt", "data", NULL),
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dav/dav.txt", "data", NULL),
                     ==, SOUP_STATUS_CREATED);
   {
     g_autofree gchar *path = g_build_filename (f->dir, "dav.txt", NULL);
@@ -3108,8 +3144,26 @@ test_shared_server (DavFixture *f, gconstpointer user_data)
     assert_file_contents (path, "data");
   }
 
-  /* a PUT to the foreign handler is not streamed into the share by
-   * phodav: the foreign handler answers, and nothing is written */
+  /* a COPY destination is resolved relative to the base path too */
+  {
+    g_autofree gchar *dest = g_build_path ("/", f->base_uri, "/dav/copied.txt", NULL);
+    g_autofree gchar *path = g_build_filename (f->dir, "copied.txt", NULL);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/dav/dav.txt", NULL,
+                                  "Destination", dest, NULL),
+                      ==, SOUP_STATUS_CREATED);
+    assert_file_contents (path, "data");
+  }
+
+  /* the share is not served at the server root */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+
+  /* an authenticated PUT to the foreign handler is not streamed into
+   * the share by phodav: the foreign handler answers, and nothing is
+   * written. This is the path libsoup routes without running the
+   * early handlers, which the Authorization header inference used to
+   * mistake for a phodav request. */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/upload/foreign.txt", "data", NULL),
                     ==, SOUP_STATUS_OK);
   {
@@ -3119,7 +3173,8 @@ test_shared_server (DavFixture *f, gconstpointer user_data)
   }
 
   /* the phodav request guards do not apply either: an oversized
-   * body for the foreign handler is not refused with 413 */
+   * authenticated body for the foreign handler is not refused with
+   * 413 */
   {
     g_autofree gchar *big = g_strnfill (1024 * 1024 + 1, 'x');
 

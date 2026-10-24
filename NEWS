@@ -26,8 +26,9 @@ New features:
 - get: serve byte-range requests
 - get: answer conditional requests with Not Modified
 - put: implement If-Match and If-None-Match conditionals
-- server: allow constructing with an existing SoupServer, and add a
-  max-upload property
+- server: allow constructing with an existing SoupServer, add
+  max-upload and base-path properties, and leave the handlers of a
+  shared server alone when an auth domain is configured
 - virtual-dir: report a modification time and etag
 - virtual-dir: implement the GFile URI, dup, prefix and relative path
   operations
