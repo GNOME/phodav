@@ -83,16 +83,44 @@ assert_file_contents (const gchar *path, const gchar *expected)
 
 /* an upload stages its content in a .phodav-*.tmp file next to the
  * destination; none should survive a request */
-static void
-assert_no_upload_temp_files (const gchar *directory)
+static gboolean
+upload_temp_files_exist (const gchar *directory)
 {
   GDir *dir = g_dir_open (directory, 0, NULL);
   const gchar *name;
+  gboolean found = FALSE;
 
   g_assert_nonnull (dir);
   while ((name = g_dir_read_name (dir)) != NULL)
-    g_assert_false (g_str_has_prefix (name, ".phodav-"));
+    {
+      if (g_str_has_prefix (name, ".phodav-"))
+        {
+          found = TRUE;
+          break;
+        }
+    }
   g_dir_close (dir);
+
+  return found;
+}
+
+static void
+assert_no_upload_temp_files (const gchar *directory)
+{
+  g_assert_false (upload_temp_files_exist (directory));
+}
+
+/* the staged file of an interrupted upload is removed once the write
+ * which is still in flight, if any, completes */
+static void
+wait_no_upload_temp_files (const gchar *directory)
+{
+  guint i;
+
+  for (i = 0; i < 500 && upload_temp_files_exist (directory); i++)
+    g_usleep (10 * 1000);
+
+  assert_no_upload_temp_files (directory);
 }
 
 static void
@@ -648,6 +676,36 @@ test_get (DavFixture *f, gconstpointer user_data)
 
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL, NULL), ==, SOUP_STATUS_OK);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/missing.txt", NULL, NULL), ==, SOUP_STATUS_NOT_FOUND);
+}
+
+/* a large chunked upload exercises the asynchronous write path: the
+ * chunks must all be written, in order, before the file is committed */
+static void
+test_put_large_chunked (DavFixture *f, gconstpointer user_data)
+{
+  const gsize size = 1024 * 1024;
+  g_autofree gchar *data = g_strnfill (size, 'x');
+  g_autofree gchar *uri = g_build_path ("/", f->base_uri, "/large.txt", NULL);
+  g_autofree gchar *path = g_build_filename (f->dir, "large.txt", NULL);
+  g_autofree gchar *contents = NULL;
+  g_autoptr(SoupMessage) msg = soup_message_new (SOUP_METHOD_PUT, uri);
+  g_autoptr(GInputStream) stream = g_memory_input_stream_new_from_data (data, size, NULL);
+  g_autoptr(GBytes) response = NULL;
+  g_autoptr(GError) error = NULL;
+  gsize contents_size;
+
+  /* a chunked body has no Content-Length */
+  soup_message_set_request_body (msg, NULL, stream, -1);
+
+  response = soup_session_send_and_read (f->session, msg, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+
+  g_assert_true (g_file_get_contents (path, &contents, &contents_size, NULL));
+  g_assert_cmpuint (contents_size, ==, size);
+  g_assert_cmpmem (contents, contents_size, data, size);
+
+  assert_no_upload_temp_files (f->dir);
 }
 
 static void
@@ -2880,6 +2938,59 @@ test_put_write_error (DavFixture *f, gconstpointer user_data)
  * has been received and the file committed: answering a success
  * right away would tell such a client its upload succeeded before it
  * sent the body at all, and the server would commit an empty file. */
+/* an upload which is paused waiting for its next chunk must not keep
+ * the server from answering the other connections */
+static void
+test_put_does_not_block (DavFixture *f, gconstpointer user_data)
+{
+  const gsize sent = 256 * 1024;
+  g_autofree gchar *payload = g_strnfill (sent, 'x');
+  g_autofree gchar *request = NULL;
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autoptr(GError) error = NULL;
+  GOutputStream *out;
+
+  conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri),
+                                          g_uri_get_port (uri), NULL, &error);
+  g_assert_no_error (error);
+
+  out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+  request = g_strdup_printf ("PUT /slow.txt HTTP/1.1\r\n"
+                             "Host: localhost\r\n"
+                             "Content-Length: %" G_GSIZE_FORMAT "\r\n"
+                             "\r\n",
+                             sent * 4);
+  g_assert_true (g_output_stream_write_all (out, request, strlen (request), NULL, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_output_stream_write_all (out, payload, sent, NULL, NULL, &error));
+  g_assert_no_error (error);
+
+  /* the upload is now waiting for the rest of its body: the server
+   * must still serve another connection */
+  {
+    g_autoptr(SoupSession) session = soup_session_new_with_options ("timeout", 3, NULL);
+    g_autofree gchar *hello_uri = g_build_path ("/", f->base_uri, "hello.txt", NULL);
+    g_autoptr(SoupMessage) msg = soup_message_new (SOUP_METHOD_GET, hello_uri);
+    g_autoptr(GBytes) body = soup_session_send_and_read (session, msg, NULL, &error);
+
+    g_assert_no_error (error);
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+    g_assert_cmpuint (g_bytes_get_size (body), ==, HELLO_LENGTH);
+  }
+
+  /* hang up: the interrupted upload is discarded */
+  g_assert_true (g_io_stream_close (G_IO_STREAM (conn), NULL, &error));
+  g_assert_no_error (error);
+
+  /* the server dispatches the pending hangup while handling this
+   * request, like the next one of the test suite */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+  wait_no_upload_temp_files (f->dir);
+}
+
 static void
 test_put_expect_continue (DavFixture *f, gconstpointer user_data)
 {
@@ -3014,7 +3125,7 @@ test_put_interrupted (DavFixture *f, gconstpointer user_data)
     assert_file_contents (hello, HELLO_CONTENT);
   }
 
-  assert_no_upload_temp_files (f->dir);
+  wait_no_upload_temp_files (f->dir);
 }
 
 /* the server may cap the size of the PUT uploads: the requests over
@@ -3267,9 +3378,11 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/get-listing-too-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_too_large, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
+  g_test_add ("/dav/put-large-chunked", DavFixture, NULL, dav_fixture_setup, test_put_large_chunked, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional", DavFixture, NULL, dav_fixture_setup, test_put_conditional, dav_fixture_teardown);
   g_test_add ("/dav/put-conditional-race", DavFixture, NULL, dav_fixture_setup, test_put_conditional_race, dav_fixture_teardown);
   g_test_add ("/dav/put-write-error", DavFixture, NULL, dav_fixture_setup, test_put_write_error, dav_fixture_teardown);
+  g_test_add ("/dav/put-does-not-block", DavFixture, NULL, dav_fixture_setup, test_put_does_not_block, dav_fixture_teardown);
   g_test_add ("/dav/put-expect-continue", DavFixture, NULL, dav_fixture_setup, test_put_expect_continue, dav_fixture_teardown);
   g_test_add ("/dav/put-interrupted", DavFixture, NULL, dav_fixture_setup, test_put_interrupted, dav_fixture_teardown);
   g_test_add ("/dav/put-max-upload", DavFixture, GSIZE_TO_POINTER (16), dav_fixture_setup_max_upload, test_put_max_upload, dav_fixture_teardown);
