@@ -32,7 +32,7 @@ typedef struct _PropFindContext
   GFileInfo *info;
 } PropFindContext;
 
-typedef xmlNodePtr (*PropFunc) (const PropFindContext *ctx, xmlNsPtr ns);
+typedef ResponseProp *(*PropFunc) (const PropFindContext *ctx, xmlNsPtr ns);
 
 /* the requested properties are collected in a table keyed on the
  * element name and namespace href, so that duplicated <prop> entries
@@ -79,14 +79,7 @@ propfind_free (PropFind *pf)
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (PropFind, propfind_free)
 
-#define PROP_SET_STATUS(Node, Status)            \
-  G_STMT_START                                   \
-  {                                              \
-    (Node)->_private = GINT_TO_POINTER (Status); \
-  }                                              \
-  G_STMT_END
-
-static xmlNodePtr
+static ResponseProp *
 prop_resourcetype (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -106,11 +99,10 @@ prop_resourcetype (const PropFindContext *ctx, xmlNsPtr ns)
     }
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_supportedlock (const PropFindContext *ctx, xmlNsPtr ns)
 {
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "supportedlock");
@@ -135,8 +127,7 @@ prop_supportedlock (const PropFindContext *ctx, xmlNsPtr ns)
   }
 
 end:
-  PROP_SET_STATUS (node, SOUP_STATUS_OK);
-  return node;
+  return response_prop_new (node, SOUP_STATUS_OK);
 }
 
 static gboolean
@@ -156,7 +147,7 @@ lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
   return TRUE;
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_lockdiscovery (const PropFindContext *ctx, xmlNsPtr ns)
 {
   PhodavServer *server = handler_get_server (ctx->handler);
@@ -168,8 +159,7 @@ prop_lockdiscovery (const PropFindContext *ctx, xmlNsPtr ns)
   server_foreach_parent_path (server, ctx->path, lockdiscovery_cb, node);
 
 end:
-  PROP_SET_STATUS (node, SOUP_STATUS_OK);
-  return node;
+  return response_prop_new (node, SOUP_STATUS_OK);
 }
 
 typedef enum
@@ -198,7 +188,7 @@ node_add_time (xmlNodePtr node, guint64 time, NodeDateFormat format)
   xmlAddChild (node, xmlNewText (BAD_CAST text));
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_creationdate (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -222,11 +212,10 @@ prop_creationdate (const PropFindContext *ctx, xmlNsPtr ns)
     node_add_time (node, time, NODE_DATE_FORMAT_ISO8601);
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_getlastmodified (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -245,11 +234,10 @@ prop_getlastmodified (const PropFindContext *ctx, xmlNsPtr ns)
     node_add_time (node, time, NODE_DATE_FORMAT_HTTP);
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_getcontentlength (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -265,11 +253,10 @@ prop_getcontentlength (const PropFindContext *ctx, xmlNsPtr ns)
   xmlAddChild (node, xmlNewText (BAD_CAST text));
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_getcontenttype (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -286,11 +273,10 @@ prop_getcontenttype (const PropFindContext *ctx, xmlNsPtr ns)
     xmlAddChild (node, xmlNewText (BAD_CAST type));
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_displayname (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -307,11 +293,10 @@ prop_displayname (const PropFindContext *ctx, xmlNsPtr ns)
     xmlAddChild (node, xmlNewText (BAD_CAST name));
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_getetag (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
@@ -333,11 +318,10 @@ prop_getetag (const PropFindContext *ctx, xmlNsPtr ns)
     }
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_executable (const PropFindContext *ctx, xmlNsPtr ns G_GNUC_UNUSED)
 {
   gint status = SOUP_STATUS_OK;
@@ -356,11 +340,10 @@ prop_executable (const PropFindContext *ctx, xmlNsPtr ns G_GNUC_UNUSED)
   xmlAddChild (node, xmlNewText (exec ? BAD_CAST "T" : BAD_CAST "F"));
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
 {
   g_autoptr(GFile) file = NULL;
@@ -392,11 +375,10 @@ prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
-  PROP_SET_STATUS (node, status);
-  return node;
+  return response_prop_new (node, status);
 }
 
-static xmlNodePtr
+static ResponseProp *
 prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
 {
   GFile *file = NULL;
@@ -428,21 +410,13 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
 
 end:
   g_clear_object (&file);
-  PROP_SET_STATUS (node, status);
-  return node;
-}
-
-static gint
-node_compare_int (xmlNodePtr a,
-                  xmlNodePtr b)
-{
-  return GPOINTER_TO_INT (a->_private) - GPOINTER_TO_INT (b->_private);
+  return response_prop_new (node, status);
 }
 
 static void
-prop_add (GList **stat, xmlNodePtr node)
+prop_add (GList **stat, ResponseProp *prop)
 {
-  *stat = g_list_insert_sorted (*stat, node, (GCompareFunc) node_compare_int);
+  *stat = g_list_append (*stat, prop);
 }
 
 #define PROP(Name, Info) { G_STRINGIFY (Name), G_PASTE (prop_, Name), Info }
@@ -476,7 +450,7 @@ static const struct _PropList
   }
 };
 
-static xmlNodePtr
+static ResponseProp *
 prop_xattr (const gchar *xattr)
 {
   xmlNodePtr node;
@@ -497,8 +471,7 @@ prop_xattr (const gchar *xattr)
   else
     node = xmlNewNode (NULL, BAD_CAST attr);
 
-  PROP_SET_STATUS (node, SOUP_STATUS_OK);
-  return node;
+  return response_prop_new (node, SOUP_STATUS_OK);
 }
 
 #ifdef HAVE_SYS_XATTR_H
@@ -551,7 +524,7 @@ static GList *
 propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
 {
   GHashTableIter iter;
-  xmlNodePtr node;
+  xmlNodePtr requested;
   GList *stat = NULL;
   gint i;
   PropFindContext ctx = {
@@ -582,10 +555,7 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
           gchar **attrs = g_file_info_list_attributes (info, "xattr");
 
           for (i = 0; attrs[i]; i++)
-            {
-              node = prop_xattr (attrs[i]);
-              prop_add (&stat, node);
-            }
+            prop_add (&stat, prop_xattr (attrs[i]));
 
           g_strfreev (attrs);
         }
@@ -594,22 +564,25 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
     }
 
   g_hash_table_iter_init (&iter, pf->props);
-  while (g_hash_table_iter_next (&iter, (gpointer *) &node, NULL))
+  while (g_hash_table_iter_next (&iter, (gpointer *) &requested, NULL))
     {
+      ResponseProp *prop = NULL;
+
       for (i = 0; i < G_N_ELEMENTS (prop_list); i++)
         {
-          if (xml_node_has_name (node, prop_list[i].name))
+          if (xml_node_has_name (requested, prop_list[i].name))
             {
-              node = prop_list[i].func (&ctx, ns);
+              prop = prop_list[i].func (&ctx, ns);
               break;
             }
         }
 
       if (i == G_N_ELEMENTS (prop_list))
         {
-          g_autofree gchar *xattr = xml_node_get_xattr_name (node, "xattr::");
+          g_autofree gchar *xattr = xml_node_get_xattr_name (requested, "xattr::");
           g_autofree gchar *val = NULL;
-          node = xmlCopyNode (node, 2);
+          xmlNodePtr node = xmlCopyNode (requested, 2);
+          gint status = SOUP_STATUS_NOT_FOUND;
 
           if (xattr)
             val = xattr_get_value (file, info, xattr);
@@ -617,16 +590,15 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
           if (val)
             {
               xmlAddChild (node, xmlNewText (BAD_CAST val));
-              PROP_SET_STATUS (node, SOUP_STATUS_OK);
+              status = SOUP_STATUS_OK;
             }
           else
-            {
-              xml_node_debug (node);
-              PROP_SET_STATUS (node, SOUP_STATUS_NOT_FOUND);
-            }
+            xml_node_debug (node);
+
+          prop = response_prop_new (node, status);
         }
 
-      prop_add (&stat, node);
+      prop_add (&stat, prop);
     }
 
 end:

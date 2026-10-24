@@ -1397,6 +1397,20 @@ test_propfind_errors (DavFixture *f, gconstpointer user_data)
                     ==, SOUP_STATUS_FORBIDDEN);
 }
 
+/* dead properties are stored as user xattrs, which is not supported
+ * by every filesystem */
+static gboolean
+dead_properties_supported (DavFixture *f)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
+  g_autoptr(GFile) file = g_file_new_for_path (path);
+  g_autoptr(GError) error = NULL;
+
+  return g_file_set_attribute (file, "xattr::user.phodav-probe",
+                               G_FILE_ATTRIBUTE_TYPE_STRING, "probe",
+                               G_FILE_QUERY_INFO_NONE, NULL, &error);
+}
+
 static void
 test_proppatch (DavFixture *f, gconstpointer user_data)
 {
@@ -1407,21 +1421,12 @@ test_proppatch (DavFixture *f, gconstpointer user_data)
   g_autoptr(GError) error = NULL;
   gboolean supported;
 
-  /* dead properties are stored as user xattrs, which is not supported
-   * by every filesystem */
-  {
-    g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-
-    supported = g_file_set_attribute (file, "xattr::user.phodav-probe",
-                                      G_FILE_ATTRIBUTE_TYPE_STRING, "probe",
-                                      G_FILE_QUERY_INFO_NONE, NULL, &error);
-    if (!supported)
-      {
-        g_test_skip ("user xattrs are not supported by the filesystem");
-        return;
-      }
-  }
+  supported = dead_properties_supported (f);
+  if (!supported)
+    {
+      g_test_skip ("user xattrs are not supported by the filesystem");
+      return;
+    }
 
   msg = dav_request (f, "PROPPATCH", "/hello.txt", PROPPATCH_SET, &body, NULL);
   g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
@@ -1525,6 +1530,114 @@ test_proppatch_empty_prop (DavFixture *f, gconstpointer user_data)
                                 "</D:set></D:propertyupdate>",
                                 NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);
+}
+
+/* all the properties of a <prop> element are set, not just the first
+ * one (RFC 4918 section 9.9) */
+static void
+test_proppatch_multiple (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *one = NULL;
+  g_autofree gchar *two = NULL;
+
+  if (!dead_properties_supported (f))
+    {
+      g_test_skip ("user xattrs are not supported by the filesystem");
+      return;
+    }
+
+  msg = dav_request (f, "PROPPATCH", "/hello.txt",
+                     "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                     "<user.phodav-one>one</user.phodav-one>"
+                     "<user.phodav-two>two</user.phodav-two>"
+                     "</D:prop></D:set></D:propertyupdate>",
+                     &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  /* both properties are reported with their own status */
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-one"),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-two"),
+                    ==, SOUP_STATUS_OK);
+
+  /* and both are stored */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  msg = dav_request (f, "PROPFIND", "/hello.txt",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<user.phodav-one/><user.phodav-two/>"
+                     "</D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  one = prop_value (f, doc, "/hello.txt", "user.phodav-one");
+  two = prop_value (f, doc, "/hello.txt", "user.phodav-two");
+  g_assert_cmpstr (one, ==, "one");
+  g_assert_cmpstr (two, ==, "two");
+}
+
+/* a failed property change undoes the changes already applied, and
+ * the other properties are reported as failed dependencies */
+static void
+test_proppatch_atomic (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *long_name = NULL;
+  g_autofree gchar *request = NULL;
+  g_autofree gchar *value = NULL;
+
+  if (!dead_properties_supported (f))
+    {
+      g_test_skip ("user xattrs are not supported by the filesystem");
+      return;
+    }
+
+  /* set the value which the failed request must restore */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                                "<user.phodav-rollback>before</user.phodav-rollback>"
+                                "</D:prop></D:set></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+
+  /* a property name longer than the extended attribute name limit
+   * makes the second change fail after the first one was applied */
+  long_name = g_strnfill (300, 'n');
+  request = g_strdup_printf ("<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                             "<user.phodav-rollback>after</user.phodav-rollback>"
+                             "<%s>fail</%s>"
+                             "</D:prop></D:set></D:propertyupdate>",
+                             long_name, long_name);
+  msg = dav_request (f, "PROPPATCH", "/hello.txt", request, &body, NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  /* the applied change was undone and depends on the failure */
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", "user.phodav-rollback"),
+                    ==, SOUP_STATUS_FAILED_DEPENDENCY);
+  g_assert_cmpuint (prop_status (f, doc, "/hello.txt", long_name),
+                    ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+
+  /* the previous value is still set */
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+  g_clear_pointer (&doc, xmlFreeDoc);
+  msg = dav_request (f, "PROPFIND", "/hello.txt",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<user.phodav-rollback/>"
+                     "</D:prop></D:propfind>",
+                     &body, "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+  value = prop_value (f, doc, "/hello.txt", "user.phodav-rollback");
+  g_assert_cmpstr (value, ==, "before");
 }
 
 /* take an exclusive write lock, returns the Lock-Token header value;
@@ -3082,6 +3195,8 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/propfind/errors", DavFixture, NULL, dav_fixture_setup, test_propfind_errors, dav_fixture_teardown);
   g_test_add ("/dav/proppatch", DavFixture, NULL, dav_fixture_setup, test_proppatch, dav_fixture_teardown);
   g_test_add ("/dav/proppatch/empty-prop", DavFixture, NULL, dav_fixture_setup, test_proppatch_empty_prop, dav_fixture_teardown);
+  g_test_add ("/dav/proppatch/multiple", DavFixture, NULL, dav_fixture_setup, test_proppatch_multiple, dav_fixture_teardown);
+  g_test_add ("/dav/proppatch/atomic", DavFixture, NULL, dav_fixture_setup, test_proppatch_atomic, dav_fixture_teardown);
 
   g_test_add ("/dav/lock", DavFixture, NULL, dav_fixture_setup, test_lock, dav_fixture_teardown);
   g_test_add ("/dav/delete-locked", DavFixture, NULL, dav_fixture_setup, test_delete_locked, dav_fixture_teardown);
