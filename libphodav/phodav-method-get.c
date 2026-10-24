@@ -216,7 +216,7 @@ method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, cons
 static gint
 method_get_file (SoupServerMessage *msg, GFile *file, GFileInfo *info)
 {
-  const gchar *etag = g_file_info_get_etag (info);
+  g_autofree gchar *etag = phodav_etag_from_info (info);
   guint64 mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
   const gchar *content_type;
   SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
@@ -273,7 +273,7 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
   g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
 
-  info = g_file_query_info (file, "standard::*,etag::*,time::modified",
+  info = g_file_query_info (file, "standard::*,etag::*,time::modified,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     goto end;

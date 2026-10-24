@@ -131,12 +131,12 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
   g_autoptr(GFile) file = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
-  const gchar *fetag;
+  g_autofree gchar *fetag = NULL;
 
   g_debug ("check etag %s for %s", etag, path);
 
   file = handler_get_file_for_path (handler, path);
-  info = g_file_query_info (file, "etag::*",
+  info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     {
@@ -147,7 +147,7 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
       return FALSE;
     }
 
-  fetag = g_file_info_get_etag (info);
+  fetag = phodav_etag_from_info (info);
   g_warn_if_fail (fetag != NULL);
 
   return !g_strcmp0 (etag, fetag);

@@ -348,6 +348,22 @@ dav_request (DavFixture *f, const gchar *method, const gchar *path, const gchar 
   return g_steal_pointer (&msg);
 }
 
+/* the entity tag of a resource, as a client gets it from a GET
+ * response (quoted, ready for an If-Match or If-None-Match header) */
+static gchar *
+get_etag (DavFixture *f, const gchar *path)
+{
+  g_autoptr(SoupMessage) msg = dav_request (f, SOUP_METHOD_GET, path, NULL, NULL, NULL);
+  const gchar *etag;
+
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+
+  etag = soup_message_headers_get_one (soup_message_get_response_headers (msg), "ETag");
+  g_assert_nonnull (etag);
+
+  return g_strdup (etag);
+}
+
 static guint
 dav_status (DavFixture *f, const gchar *method, const gchar *path, const gchar *body, ...)
 {
@@ -1177,14 +1193,8 @@ test_propfind_prop (DavFixture *f, gconstpointer user_data)
   content = prop_value (f, doc, "/hello.txt", "getcontentlength");
   g_assert_cmpstr (content, ==, G_STRINGIFY (HELLO_LENGTH));
 
-  /* the reported etag is the GIO etag, in quotes */
-  {
-    g_autofree gchar *path = g_build_filename (f->dir, "hello.txt", NULL);
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    etag = g_strdup_printf ("\"%s\"", g_file_info_get_etag (info));
-  }
+  /* the reported etag is the one a GET reports */
+  etag = get_etag (f, "/hello.txt");
   g_clear_pointer (&content, g_free);
   content = prop_value (f, doc, "/hello.txt", "getetag");
   g_assert_cmpstr (content, ==, etag);
@@ -1883,16 +1893,10 @@ test_if_etag (DavFixture *f, gconstpointer user_data)
 
   {
     g_autofree gchar *path = g_build_filename (f->dir, "etag.txt", NULL);
-    g_autoptr(GFile) file = NULL;
-    g_autoptr(GFileInfo) info = NULL;
 
     assert_file_contents (path, "data");
-    file = g_file_new_for_path (path);
-    info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    etag = g_strdup (g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
   }
+  etag = get_etag (f, "/etag.txt");
 
   /* a failing etag condition */
   if_header = g_strdup_printf ("([\"not-the-etag\"])");
@@ -1902,7 +1906,7 @@ test_if_etag (DavFixture *f, gconstpointer user_data)
 
   /* the matching etag satisfies the condition */
   g_clear_pointer (&if_header, g_free);
-  if_header = g_strdup_printf ("([\"%s\"])", etag);
+  if_header = g_strdup_printf ("([%s])", etag);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/etag.txt", NULL,
                                 "If", if_header, NULL),
                     ==, SOUP_STATUS_NO_CONTENT);
@@ -2334,14 +2338,8 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
 
   /* the etag of the fixture file, as a client would have got it from
    * a GET response or a PROPFIND */
-  {
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    etag = g_strdup (g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
-  }
-  if_match = g_strdup_printf ("\"%s\"", etag);
+  etag = get_etag (f, "/hello.txt");
+  if_match = g_strdup (etag);
 
   /* If-Match with the current etag allows the write */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "matched",
@@ -2350,15 +2348,9 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
   assert_file_contents (path, "matched");
 
   /* the write happened, the etag changed with it */
-  {
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    g_set_str (&etag, g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
-    g_clear_pointer (&if_match, g_free);
-    if_match = g_strdup_printf ("\"%s\"", etag);
-  }
+  g_clear_pointer (&etag, g_free);
+  etag = get_etag (f, "/hello.txt");
+  g_set_str (&if_match, etag);
 
   /* a failing If-Match must not overwrite the resource,
    * RFC 9110 section 13.1.1 */
@@ -2395,15 +2387,9 @@ test_put_conditional (DavFixture *f, gconstpointer user_data)
 
   /* the current etag fails an If-None-Match too; the writes above
    * changed it, fetch it again */
-  {
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    g_set_str (&etag, g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
-    g_clear_pointer (&if_match, g_free);
-    if_match = g_strdup_printf ("\"%s\"", etag);
-  }
+  g_clear_pointer (&etag, g_free);
+  etag = get_etag (f, "/hello.txt");
+  g_set_str (&if_match, etag);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
                                 "If-None-Match", if_match, NULL),
                     ==, SOUP_STATUS_PRECONDITION_FAILED);
@@ -2457,14 +2443,8 @@ test_put_conditional_race (DavFixture *f, gconstpointer user_data)
   gchar buf[1024];
 
   write_file (f->dir, "race.txt", "initial");
-  {
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    etag = g_strdup (g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
-  }
-  if_match = g_strdup_printf ("\"%s\"", etag);
+  etag = get_etag (f, "/race.txt");
+  if_match = g_strdup (etag);
 
   conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri),
                                           g_uri_get_port (uri), NULL, &error);
@@ -2610,15 +2590,8 @@ test_lock_refresh_forms (DavFixture *f, gconstpointer user_data)
 
   /* an If header matching the resource etag but carrying no lock
    * token does not identify a lock to refresh */
-  {
-    g_autofree gchar *path = g_build_filename (f->dir, "refresh-forms.txt", NULL);
-    g_autoptr(GFile) file = g_file_new_for_path (path);
-    g_autoptr(GFileInfo) info = g_file_query_info (file, "etag::*", G_FILE_QUERY_INFO_NONE, NULL, NULL);
-
-    etag = g_strdup (g_file_info_get_etag (info));
-    g_assert_nonnull (etag);
-  }
-  etag_if = g_strdup_printf ("([\"%s\"])", etag);
+  etag = get_etag (f, "/refresh-forms.txt");
+  etag_if = g_strdup_printf ("([%s])", etag);
   g_assert_cmpuint (dav_status (f, "LOCK", "/refresh-forms.txt", NULL,
                                 "If", etag_if, NULL),
                     ==, SOUP_STATUS_BAD_REQUEST);

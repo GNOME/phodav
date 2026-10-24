@@ -207,6 +207,28 @@ path_is_covered (const gchar *path, const gchar *root)
   return g_str_has_prefix (path, root) && path[len] == '/';
 }
 
+gchar *
+phodav_etag_from_info (GFileInfo *info)
+{
+  const gchar *etag = g_file_info_get_etag (info);
+  g_autoptr(GString) strong = NULL;
+
+  if (!etag)
+    return NULL;
+
+  strong = g_string_new (etag);
+
+  if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
+    g_string_append_printf (strong, ":%" G_GOFFSET_FORMAT,
+                            g_file_info_get_size (info));
+
+  if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_UNIX_INODE))
+    g_string_append_printf (strong, ":%" G_GUINT64_FORMAT,
+                            g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_UNIX_INODE));
+
+  return g_string_free_and_steal (g_steal_pointer (&strong));
+}
+
 /* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
  * match the current @etag of the resource, which exists per @exists? */
 gboolean

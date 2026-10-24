@@ -226,7 +226,7 @@ put_query_destination (GFile *file, GCancellable *cancellable, GError **error)
   g_autoptr(GError) local_error = NULL;
   GFileInfo *info;
 
-  info = g_file_query_info (file, "standard::type,etag::*",
+  info = g_file_query_info (file, "standard::type,standard::size,etag::*,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &local_error);
   if (info)
     return info;
@@ -245,7 +245,7 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
-  const gchar *etag = NULL;
+  g_autofree gchar *etag = NULL;
   gboolean exists = FALSE;
 
   info = put_query_destination (ctx->file, cancellable, &error);
@@ -258,7 +258,7 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
   if (info)
     {
       exists = TRUE;
-      etag = g_file_info_get_etag (info);
+      etag = phodav_etag_from_info (info);
 
       if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
         return SOUP_STATUS_METHOD_NOT_ALLOWED;
@@ -337,7 +337,7 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
   g_autoptr(GFile) temp_file = NULL;
   GFileOutputStream *output = NULL;
   gboolean exists = FALSE;
-  const gchar *etag = NULL;
+  g_autofree gchar *etag = NULL;
   const gchar *if_match, *if_none_match;
   SoupMessageHeaders *headers = soup_server_message_get_request_headers (msg);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
@@ -354,7 +354,7 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
   if (info)
     {
       exists = TRUE;
-      etag = g_file_info_get_etag (info);
+      etag = phodav_etag_from_info (info);
 
       if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
         {

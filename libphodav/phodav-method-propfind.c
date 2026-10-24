@@ -301,12 +301,12 @@ prop_getetag (const PropFindContext *ctx, xmlNsPtr ns)
 {
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "getetag");
-  const gchar *etag;
+  g_autofree gchar *etag = NULL;
 
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  etag = g_file_info_get_etag (ctx->info);
+  etag = phodav_etag_from_info (ctx->info);
   if (etag)
     {
       g_autofree gchar *tmp = g_strdup_printf ("\"%s\"", etag);
@@ -519,7 +519,7 @@ xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
   return g_strdup (g_file_info_get_attribute_string (info, xattr));
 }
 
-#define FILE_QUERY "standard::*,time::*,access::*,etag::*,xattr::*"
+#define FILE_QUERY "standard::*,time::*,access::*,etag::*,unix::inode,xattr::*"
 static GList *
 propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
 {

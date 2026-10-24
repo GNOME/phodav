@@ -38,6 +38,14 @@ guint timeout_from_string (const gchar *timeout);
 /* is @path the tree rooted at @root, or one of its members? */
 gboolean path_is_covered (const gchar *path, const gchar *root);
 
+/* a strong ETag for the representation described by @info. GIO builds
+ * the local file ETags from the modification time only: two writes
+ * within the same filesystem timestamp tick produce the same one.
+ * Include the size and the inode when the file backend reports them,
+ * so that the tag changes with the representation. Returns NULL when
+ * @info has no ETag. */
+gchar *phodav_etag_from_info (GFileInfo *info);
+
 /* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
  * match the current @etag of the resource, which exists per @exists? */
 gboolean etag_header_matches (const gchar *header, const gchar *etag, gboolean exists);
