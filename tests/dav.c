@@ -1114,6 +1114,53 @@ test_propfind_allprop (DavFixture *f, gconstpointer user_data)
   }
 }
 
+/* A Depth: 1 PROPFIND lists the members of a collection: the
+ * properties of each member must be queried on the member itself,
+ * not on the collection it was listed from. */
+static void
+test_propfind_depth_one_child_properties (DavFixture *f, gconstpointer user_data)
+{
+  g_autoptr(GBytes) body = NULL;
+  g_autoptr(SoupMessage) msg = NULL;
+  g_autoptr(xmlDoc) doc = NULL;
+  g_autofree gchar *token = NULL;
+  xmlNodePtr response, propstat;
+
+  /* lock a member, the collection itself stays unlocked */
+  msg = dav_request (f, "LOCK", "/dir/inner.txt", LOCK_EXCLUSIVE, &body,
+                     "Timeout", "Second-3600", "Depth", "0", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  token = g_strdup (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Lock-Token"));
+  g_assert_nonnull (token);
+  g_clear_object (&msg);
+  g_clear_pointer (&body, g_bytes_unref);
+
+  msg = dav_request (f, "PROPFIND", "/dir",
+                     "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                     "<D:lockdiscovery/></D:prop></D:propfind>",
+                     &body, "Depth", "1", NULL);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_MULTI_STATUS);
+  doc = parse_multistatus (body);
+
+  /* the locked member reports its lock */
+  response = find_response (f, doc, "/dir/inner.txt");
+  g_assert_nonnull (response);
+  propstat = find_propstat (response, "lockdiscovery");
+  g_assert_nonnull (propstat);
+  g_assert_nonnull (find_child (find_child (propstat, "prop"), "lockdiscovery")->children);
+
+  /* the collection is not locked, so its lockdiscovery is empty */
+  response = find_response (f, doc, "/dir");
+  g_assert_nonnull (response);
+  propstat = find_propstat (response, "lockdiscovery");
+  g_assert_nonnull (propstat);
+  g_assert_null (find_child (find_child (propstat, "prop"), "lockdiscovery")->children);
+
+  g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir/inner.txt", NULL,
+                                "Lock-Token", token, NULL),
+                    ==, SOUP_STATUS_NO_CONTENT);
+}
+
 static void
 test_propfind_prop (DavFixture *f, gconstpointer user_data)
 {
@@ -3026,6 +3073,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/delete", DavFixture, NULL, dav_fixture_setup, test_delete, dav_fixture_teardown);
 
   g_test_add ("/dav/propfind/allprop", DavFixture, NULL, dav_fixture_setup, test_propfind_allprop, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/depth-one-child-properties", DavFixture, NULL, dav_fixture_setup, test_propfind_depth_one_child_properties, dav_fixture_teardown);
   g_test_add ("/dav/propfind/prop", DavFixture, NULL, dav_fixture_setup, test_propfind_prop, dav_fixture_teardown);
   g_test_add ("/dav/propfind/propname", DavFixture, NULL, dav_fixture_setup, test_propfind_propname, dav_fixture_teardown);
   g_test_add ("/dav/propfind/dedup", DavFixture, NULL, dav_fixture_setup, test_propfind_dedup, dav_fixture_teardown);

@@ -686,11 +686,15 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
       if (!info)
         break;
 
+      g_autofree gchar *child_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
       g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
-      stat = propfind_populate (handler, child, path, pf, info, ns);
+
+      /* the properties of a member are queried on the member, not
+       * on the collection it was listed from */
+      stat = propfind_populate (handler, child, child_path, pf, info, ns);
       /* the multistatus keys are the decoded resource paths, the
        * hrefs are escaped when the response is built */
-      g_hash_table_insert (path_resp, g_build_path ("/", path, g_file_info_get_name (info), NULL),
+      g_hash_table_insert (path_resp, g_steal_pointer (&child_path),
                            response_new (stat, 0));
     }
 
