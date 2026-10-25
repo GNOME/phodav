@@ -55,21 +55,51 @@ try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
 }
 
 static gboolean
-lock_ensure_file (PathHandler *handler, const gchar *path, GCancellable *cancellable, GError **err)
+lock_resource_exists (PathHandler *handler, const gchar *path, GCancellable *cancellable)
 {
-  g_autoptr(GError) e = NULL;
+  g_autoptr(GFile) file = handler_get_file_for_path (handler, path);
+
+  return g_file_query_exists (file, cancellable);
+}
+
+/* create the empty resource of a LOCK on a URL which is not mapped
+ * yet (RFC 4918 section 7.3), when the backend supports it. The
+ * request is rolled back by the caller when this fails. */
+static gint
+lock_create_resource (PathHandler *handler, const gchar *path, GCancellable *cancellable, GError **err)
+{
+  g_autoptr(GError) error = NULL;
   g_autoptr(GFileOutputStream) stream = NULL;
   g_autoptr(GFile) file = NULL;
-  gboolean created = FALSE;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
-  stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &e);
-  created = !!stream;
+  file = handler_get_file_for_path (handler, path);
+  stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &error);
+  if (stream)
+    return SOUP_STATUS_CREATED;
 
-  if (e && !g_error_matches (e, G_IO_ERROR, G_IO_ERROR_EXISTS))
-    g_propagate_error (err, g_steal_pointer (&e));
+  /* the resource appeared after it was queried: there is nothing to
+   * create anymore */
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    return SOUP_STATUS_OK;
 
-  return created;
+  /* a backend which does not implement create() (the virtual
+   * directories) cannot hold a null resource: treat the resource as
+   * existing rather than failing the lock */
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
+    {
+      g_debug ("LOCK: %s cannot be created, locking it as it is", path);
+      return SOUP_STATUS_OK;
+    }
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    return SOUP_STATUS_CONFLICT;
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED) ||
+      g_error_matches (error, G_IO_ERROR, G_IO_ERROR_READ_ONLY))
+    return SOUP_STATUS_FORBIDDEN;
+
+  g_propagate_error (err, g_steal_pointer (&error));
+  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 }
 
 static DAVLockScopeType
@@ -132,7 +162,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   g_autolist(LockSubmitted) submitted = NULL;
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
-  gboolean created;
+  gboolean exists;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageBody *request_body;
 
@@ -216,8 +246,10 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
 
   uuid = g_uuid_string_random ();
   token = g_strdup_printf ("urn:uuid:%s", uuid);
-  ltoken = g_strdup_printf ("<%s>", token);
-  soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
+
+  /* an existing resource is locked in place; only an unmapped URL
+   * needs an empty resource */
+  exists = lock_resource_exists (handler, path, cancellable);
 
   lpath = server_get_path (handler_get_server (handler), path);
   {
@@ -227,6 +259,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
       {
         g_debug ("lock failed");
         status = SOUP_STATUS_LOCKED;
+        server_remove_path_if_empty (handler_get_server (handler), path);
         goto end;
       }
 
@@ -234,11 +267,24 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
     lock = g_steal_pointer (&new_lock);
   }
 
-  created = lock_ensure_file (handler, path, cancellable, err);
-  if (*err)
-    goto end;
+  if (!exists)
+    {
+      status = lock_create_resource (handler, path, cancellable, err);
+      if (status != SOUP_STATUS_CREATED && status != SOUP_STATUS_OK)
+        {
+          /* the empty resource could not be created: do not leave the
+           * lock behind, a second LOCK would be refused with 423 */
+          g_clear_pointer (&lock, dav_lock_free);
+          server_remove_path_if_empty (handler_get_server (handler), path);
+          goto end;
+        }
+    }
+  else
+    status = SOUP_STATUS_OK;
 
-  status = created ? SOUP_STATUS_CREATED : SOUP_STATUS_OK;
+  /* the lock is committed: advertise its token */
+  ltoken = g_strdup_printf ("<%s>", token);
+  soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
 
 body:
   root = xmlNewNode (NULL, BAD_CAST "prop");

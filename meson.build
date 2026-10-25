@@ -36,7 +36,7 @@ else
   deps += dependency('gio-unix-2.0', version : glib_ver)
 endif
 
-deps += dependency('libsoup-3.0', version : '>= 3.0.0')
+deps += dependency('libsoup-3.0', version : '>= 3.2.0')
 deps += dependency('libxml-2.0')
 
 d1 = dependency('avahi-gobject', required : get_option('avahi'))
@@ -59,8 +59,8 @@ endif
 add_project_arguments(
   '-DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_80',
   '-DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_80',
-  '-DSOUP_VERSION_MIN_REQUIRED=SOUP_VERSION_3_0',
-  '-DSOUP_VERSION_MAX_ALLOWED=SOUP_VERSION_3_0',
+  '-DSOUP_VERSION_MIN_REQUIRED=SOUP_VERSION_3_2',
+  '-DSOUP_VERSION_MAX_ALLOWED=SOUP_VERSION_3_2',
   language : 'c',
 )
 

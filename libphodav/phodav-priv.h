@@ -74,7 +74,14 @@ typedef gboolean (*PathCb) (const gchar *key,
                             Path *path,
                             gpointer data);
 
-GFile *handler_get_file (PathHandler *handler) G_GNUC_PURE;
+/* the file of a request path, relative to the share root */
+GFile *handler_get_file_for_path (PathHandler *handler, const gchar *path);
+/* the path prefix the share is mounted at on the SoupServer */
+const gchar *handler_get_base_path (PathHandler *handler) G_GNUC_PURE;
+/* is @path part of the share mounted at the base path? */
+gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNUC_PURE;
+/* the shared root, borrowed */
+GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
 GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 gboolean handler_get_readonly (PathHandler *handler) G_GNUC_PURE;
@@ -93,6 +100,9 @@ DAVLock *server_path_lookup_lock (PhodavServer *server,
 gboolean server_path_has_other_locks (PhodavServer *self,
                                       const gchar *path,
                                       GList *locks);
+gboolean server_tree_has_other_locks (PhodavServer *self,
+                                      const gchar *path,
+                                      GList *locks);
 gboolean server_tree_has_lock_conflict (PhodavServer *self,
                                         const gchar *path,
                                         DAVLock *lock);
@@ -101,6 +111,8 @@ void server_remove_locks (PhodavServer *self,
                           const gchar *_path);
 Path *server_get_path (PhodavServer *self,
                        const gchar *_path);
+void server_remove_path_if_empty (PhodavServer *self,
+                                  const gchar *_path);
 
 gint phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
 gint phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);

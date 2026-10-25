@@ -35,7 +35,9 @@ struct _PhodavServer
   SoupServer *server;
   GCancellable *cancellable;
   GFile *root_file;
-  PathHandler *root_handler; /* weak ref */
+  gchar *base_path;
+  PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
+  gchar *handler_path;       /* the path the handler is registered at */
   GHashTable *paths;
   gboolean readonly;
   guint64 max_upload;
@@ -51,6 +53,7 @@ typedef enum
 {
   PROP_ROOT = 1,
   PROP_ROOT_FILE,
+  PROP_BASE_PATH,
   PROP_SERVER,
   PROP_READONLY,
   PROP_MAX_UPLOAD,
@@ -74,36 +77,15 @@ static void request_started (SoupServer *server,
 
 static gboolean expire_locks_timeout (gpointer user_data);
 
-/* Canonicalize a request path for use as a key in the paths table:
- * empty segments ("//") and trailing slashes are skipped, just like
- * the walk in server_foreach_parent_path() does, so that locks are
- * found again under whatever form the client used in its request. */
-static gchar *
-path_key (const gchar *_path)
-{
-  g_auto(GStrv) parts = g_strsplit (_path, "/", -1);
-  g_autoptr(GString) path = g_string_new (NULL);
-
-  for (gint i = 0; parts[i]; i++)
-    {
-      if (!*parts[i])
-        continue;
-
-      g_string_append_c (path, '/');
-      g_string_append (path, parts[i]);
-    }
-
-  if (!path->len)
-    g_string_append_c (path, '/');
-
-  return g_string_free_and_steal (g_steal_pointer (&path));
-}
-
+/* The lock table is keyed on the canonical resource path, so that the
+ * locks are found again under whatever spelling of the path the client
+ * used in its request. server_foreach_parent_path() walks the same
+ * canonical keys, so the two cannot disagree on the canonical form. */
 Path *
 server_get_path (PhodavServer *self, const gchar *_path)
 {
   Path *p;
-  g_autofree gchar *path = path_key (_path);
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
 
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
@@ -114,6 +96,23 @@ server_get_path (PhodavServer *self, const gchar *_path)
     }
 
   return p;
+}
+
+/* drop the path from the lock table when it holds no lock anymore;
+ * called when a LOCK request is rolled back, so that a failed request
+ * does not leave an empty entry behind */
+void
+server_remove_path_if_empty (PhodavServer *self, const gchar *_path)
+{
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
+  Path *p = g_hash_table_lookup (self->paths, path);
+
+  if (!p)
+    return;
+
+  path_expire_locks (p);
+  if (!p->locks)
+    g_hash_table_remove (self->paths, path);
 }
 
 struct _PathHandler
@@ -128,8 +127,50 @@ handler_get_server (PathHandler *handler)
   return handler->self;
 }
 
+const gchar *
+handler_get_base_path (PathHandler *handler)
+{
+  return handler->self->base_path;
+}
+
+/* does @path belong to the share mounted at the base path? This is
+ * the same prefix test the DAV handlers are registered with: a
+ * request outside it is not phodav's, whatever handler libsoup
+ * routed it to. */
+gboolean
+handler_path_is_covered (PathHandler *handler, const gchar *path)
+{
+  return path && path_is_covered (path, handler->self->base_path);
+}
+
+/* the request paths begin with a "/" and are relative to the share
+ * root, so that the file is looked up under the root, not the
+ * filesystem root. The base path is stripped first, so that a share
+ * mounted at "/dav" serves "/dav/hello.txt" as "hello.txt". */
 GFile *
-handler_get_file (PathHandler *handler)
+handler_get_file_for_path (PathHandler *handler, const gchar *path)
+{
+  const gchar *relative = path;
+  gsize base_len;
+
+  g_return_val_if_fail (path != NULL && *path == '/', NULL);
+
+  if (!handler_path_is_covered (handler, path))
+    return NULL;
+
+  base_len = strlen (handler->self->base_path);
+  if (base_len > 1)
+    {
+      relative = path + base_len;
+      if (!*relative)
+        relative = "/";
+    }
+
+  return g_file_get_child (handler->file, relative + 1);
+}
+
+GFile *
+handler_get_root_file (PathHandler *handler)
 {
   return handler->file;
 }
@@ -173,6 +214,7 @@ static void
 phodav_server_init (PhodavServer *self)
 {
   self->constructing = TRUE;
+  self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
 
@@ -214,7 +256,7 @@ server_remove_locks (PhodavServer *self, const gchar *_path)
 {
   GHashTableIter iter;
   Path *path;
-  g_autofree gchar *root = path_key (_path);
+  g_autofree gchar *root = phodav_path_canonicalize (_path);
 
   if (g_hash_table_size (self->paths) == 0)
     return;
@@ -247,17 +289,29 @@ update_root_handler (PhodavServer *self)
 {
   PathHandler *handler;
 
+  /* the handler is registered at the base path, which may have
+   * changed since the last registration */
+  if (self->root_handler)
+    {
+      if (self->server && self->handler_path)
+        soup_server_remove_handler (self->server, self->handler_path);
+
+      self->root_handler = NULL;
+      g_clear_pointer (&self->handler_path, g_free);
+    }
+
   if (!self->root_file || !self->server)
     return;
 
   handler = path_handler_new (self, self->root_file);
 
-  soup_server_add_handler (self->server, "/",
+  soup_server_add_handler (self->server, self->base_path,
                            server_callback,
                            handler,
                            (GDestroyNotify) path_handler_free);
 
   self->root_handler = handler;
+  self->handler_path = g_strdup (self->base_path);
 }
 
 static void
@@ -275,10 +329,10 @@ phodav_server_constructed (GObject *gobject)
     self->server = soup_server_new ("server-header", "PhodavServer",
                                     NULL);
 
-  /* when a server was given at construction, the root handler is
-   * already registered on it */
-  if (!self->root_handler)
-    update_root_handler (self);
+  /* the root handlers are registered as soon as the root and the
+   * server are both known; the registration in set_property() may
+   * have happened already, registering again only replaces them */
+  update_root_handler (self);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
 
@@ -323,9 +377,13 @@ phodav_server_dispose (GObject *gobject)
    * dispose may run again, the server is already gone then */
   if (self->server)
     {
-      soup_server_remove_handler (self->server, "/");
+      if (self->handler_path)
+        soup_server_remove_handler (self->server, self->handler_path);
       g_signal_handlers_disconnect_by_func (self->server, request_started, self);
     }
+  self->root_handler = NULL;
+  g_clear_pointer (&self->handler_path, g_free);
+  g_clear_pointer (&self->base_path, g_free);
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
@@ -357,6 +415,10 @@ phodav_server_get_property (GObject *gobject,
 
     case PROP_ROOT_FILE:
       g_value_set_object (value, self->root_file);
+      break;
+
+    case PROP_BASE_PATH:
+      g_value_set_string (value, self->base_path);
       break;
 
     case PROP_SERVER:
@@ -409,6 +471,26 @@ phodav_server_set_property (GObject *gobject,
       update_root_handler (self);
       break;
 
+    case PROP_BASE_PATH:
+      {
+        const gchar *path = g_value_get_string (value);
+        g_autofree gchar *canonical = phodav_path_canonicalize (path && *path ? path : "/");
+
+        if (!phodav_path_is_safe (canonical))
+          {
+            g_warning ("invalid base path: %s", path ?: "");
+            break;
+          }
+
+        if (g_strcmp0 (canonical, self->base_path) == 0)
+          break;
+
+        g_free (self->base_path);
+        self->base_path = g_steal_pointer (&canonical);
+        update_root_handler (self);
+      }
+      break;
+
     case PROP_READONLY:
       self->readonly = g_value_get_boolean (value);
       break;
@@ -421,6 +503,7 @@ phodav_server_set_property (GObject *gobject,
       /* construct-only */
       g_return_if_fail (self->server == NULL);
       self->server = g_value_dup_object (value);
+      update_root_handler (self);
       break;
     }
 }
@@ -469,14 +552,39 @@ phodav_server_class_init (PhodavServerClass *klass)
                            G_PARAM_STATIC_STRINGS);
 
   /**
+   * PhodavServer:base-path:
+   *
+   * The path prefix the DAV handlers are registered at on the #SoupServer.
+   *
+   * The default, "/", serves the share at the server root. When the
+   * server is shared with other handlers, set a distinct prefix (for
+   * example "/dav") that no other handler covers: phodav filters the
+   * requests it processes by that prefix, as libsoup does not expose
+   * the handler routing before the request body is received.
+   *
+   * Since: 3.1
+   **/
+  properties[PROP_BASE_PATH] =
+    g_param_spec_string ("base-path",
+                         NULL, NULL,
+                         "/",
+                         G_PARAM_READWRITE |
+                           G_PARAM_STATIC_STRINGS);
+
+  /**
    * PhodavServer:server:
    *
    * The underlying #SoupServer.
    *
    * When constructing a #PhodavServer, an already configured
    * #SoupServer may be given, with listeners, TLS certificates or
-   * auth domains set up for example. When no server is provided, a
-   * new one is created.
+   * auth domains set up for example. When no server is provided,
+   * a new one is created.
+   *
+   * phodav registers its DAV handlers at #PhodavServer:base-path.
+   * When the server carries handlers of the embedding application,
+   * set #PhodavServer:base-path to a prefix that no other handler
+   * covers, and leave that subtree to phodav.
    *
    * Since: 3.1
    **/
@@ -523,23 +631,19 @@ phodav_server_class_init (PhodavServerClass *klass)
 gboolean
 server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
-  g_auto(GStrv) pathv = NULL;
-  g_autofree gchar *partial = g_strdup ("/");
+  g_autofree gchar *canonical = phodav_path_canonicalize (path);
   gboolean ret = FALSE;
   gchar *key = NULL;
   Path *p;
-  gint i;
+  const gchar *segment = canonical + 1;
 
-  pathv = g_strsplit (path, "/", -1);
-
-  for (i = 0; pathv[i]; i++)
+  /* canonical is "/" or "/segment[/segment...]"; visit each prefix
+   * from the first segment down to the whole path */
+  while (*segment)
     {
-      if (!*pathv[i])
-        continue;
-
-      gchar *tmp = g_build_path ("/", partial, pathv[i], NULL);
-      g_free (partial);
-      partial = tmp;
+      const gchar *slash = strchr (segment, '/');
+      gsize len = slash ? (gsize) (slash - canonical) : strlen (canonical);
+      g_autofree gchar *partial = g_strndup (canonical, len);
 
       if (g_hash_table_lookup_extended (self->paths, partial,
                                         (gpointer *) &key, (gpointer *) &p))
@@ -547,6 +651,11 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
           if (!cb (key, p, data))
             goto end;
         }
+
+      if (!slash)
+        break;
+
+      segment = slash + 1;
     }
 
   ret = TRUE;
@@ -629,6 +738,39 @@ server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks
   return !server_foreach_parent_path (self, path, other_lock_exists, locks);
 }
 
+/* does the tree rooted at @_path contain a lock which is not among
+ * the submitted @locks? Operations which modify or replace a whole
+ * collection (DELETE, MOVE, or a COPY/MOVE overwriting a collection)
+ * must submit the tokens of the locks held on its members too
+ * (RFC 4918 sections 7.1 and 9.6.1). */
+gboolean
+server_tree_has_other_locks (PhodavServer *self, const gchar *_path, GList *locks)
+{
+  g_autofree gchar *root = phodav_path_canonicalize (_path);
+  GHashTableIter iter;
+  Path *path;
+
+  if (g_hash_table_size (self->paths) == 0)
+    return FALSE;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      GList *l;
+
+      path_expire_locks (path);
+
+      if (!path_is_covered (path->path, root))
+        continue;
+
+      for (l = path->locks; l != NULL; l = l->next)
+        if (!locks_submitted_has (locks, l->data))
+          return TRUE;
+    }
+
+  return FALSE;
+}
+
 typedef struct _TreeLockCheck
 {
   const gchar *path; /* canonical path of the new lock root */
@@ -669,7 +811,7 @@ tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
 gboolean
 server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *lock)
 {
-  g_autofree gchar *path = path_key (_path);
+  g_autofree gchar *path = phodav_path_canonicalize (_path);
   TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
 
   g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
@@ -747,18 +889,20 @@ dav_methods_allow (void)
 /* the DAV requests operate on the resources under the share root:
  * their path must be absolute (it begins with a "/"), but relative
  * to the root (no second "/" may follow the first one, or the path
- * would read as absolute on Windows too), and their URI must carry
- * no fragment. The dot segments were removed by libsoup already. A
- * request which does not qualify is answered with 400 BAD REQUEST. */
+ * would read as absolute on Windows too), carry no dot-dot segment,
+ * and their URI must carry no fragment. The dot segments are
+ * removed when the request URI is parsed, and the ones surviving
+ * the path decoding are refused by libsoup: checking them here too
+ * guards the traversal on its own, should the URI handling change.
+ * A request which does not qualify is answered with 400 BAD
+ * REQUEST. */
 static gboolean
 request_path_is_valid (SoupServerMessage *msg, const gchar *path)
 {
   GUri *uri = soup_server_message_get_uri (msg);
 
-  if (!(path && *path == '/'))
-    g_debug ("path must begin with /");
-  else if (g_path_is_absolute (path + 1))
-    g_debug ("path cannot be absolute: %s", path);
+  if (!phodav_path_is_safe (path))
+    g_debug ("invalid request path: %s", path ?: "");
   else if (!(uri && g_uri_get_fragment (uri) == NULL))
     g_debug ("using fragments in query is not supported");
   else
@@ -805,14 +949,24 @@ got_headers (SoupServerMessage *msg,
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   const DavMethod *m = dav_method_lookup (method);
 
-  /* libsoup handlers ran first, the request may have been rejected
-   * already (invalid path, authentication...) */
+  /* the requests already answered (an authentication challenge, an
+   * invalid path...) are not phodav's to handle */
   if (soup_server_message_get_status (msg) != 0)
     return;
 
   /* without a shared root, no handler is registered: the requests
    * are answered by libsoup, phodav has nothing to do with them */
   if (!self->root_handler)
+    return;
+
+  /* only the requests under the base path are phodav's. This is
+   * decided by the configured prefix, not by the routing libsoup
+   * performed: an auth domain makes libsoup return from its headers
+   * processing before the early handlers, so the routing cannot be
+   * observed here. When the SoupServer is shared with other
+   * handlers, the base path must be a prefix no other handler
+   * covers. */
+  if (!path || !path_is_covered (path, self->base_path))
     return;
 
   /* a method which streams its request body out while it is
@@ -901,6 +1055,15 @@ server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, 
    * method handler */
   if (soup_server_message_get_status (msg) != 0)
     return;
+
+  /* libsoup matches handlers by a plain string prefix, so it can
+   * also route a path which merely starts with the base path here
+   * ("/davos" for "/dav"): it is not part of the share */
+  if (!handler_path_is_covered (handler, path))
+    {
+      soup_server_message_set_status (msg, SOUP_STATUS_NOT_FOUND, NULL);
+      return;
+    }
 
   /* a streamed method was started from got_headers(), before its
    * request body was received, and is answered from its got-body

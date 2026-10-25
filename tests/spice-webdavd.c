@@ -260,12 +260,58 @@ test_mux (void)
   close (pts_slave_keep);
 }
 
+/* A channel which cannot be opened is not fatal: the daemon keeps
+ * listening and retries opening it, and stops cleanly when asked to.
+ * (The channel breaking on its own cannot be tested here: a pseudo
+ * terminal cannot be reconnected to a new master, so the daemon
+ * would wait for the host forever.) */
+static void
+test_mux_open_retry (void)
+{
+  g_autoptr(GSocketClient) client = NULL;
+  g_autoptr(GSocketConnection) connection = NULL;
+  g_autoptr(GSubprocess) daemon = NULL;
+  g_autoptr(GError) error = NULL;
+  const gchar *daemon_path = g_getenv ("SPICE_WEBDAVD");
+  g_autofree gchar *port_str = NULL;
+  guint16 port;
+
+  g_assert_nonnull (daemon_path);
+
+  port = find_free_port ();
+  port_str = g_strdup_printf ("%u", port);
+
+  daemon = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                             &error, daemon_path,
+                             "--port", port_str,
+                             "--mux-path", "/nonexistent-phodav-mux-path",
+                             NULL);
+  g_assert_no_error (error);
+
+  /* the daemon retries opening the channel every second, rather than
+   * exiting; after several failed attempts, it is still listening */
+  g_usleep (2500000);
+
+  client = g_socket_client_new ();
+  connection = g_socket_client_connect_to_host (client, "127.0.0.1", port, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (connection);
+
+  /* and it stops cleanly when asked to */
+  g_subprocess_send_signal (daemon, SIGINT);
+  g_assert_true (g_subprocess_wait (daemon, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_subprocess_get_if_exited (daemon));
+  g_assert_cmpint (g_subprocess_get_exit_status (daemon), ==, 0);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
   g_test_add_func ("/spice-webdavd/mux", test_mux);
+  g_test_add_func ("/spice-webdavd/mux-open-retry", test_mux_open_retry);
 
   return g_test_run ();
 }

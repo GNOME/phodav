@@ -94,7 +94,15 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  /* deleting a collection also deletes its members: the tokens of
+   * the locks held on them must be submitted too */
+  if (server_tree_has_other_locks (handler_get_server (handler), path, submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
+
+  file = handler_get_file_for_path (handler, path);
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 

@@ -131,12 +131,16 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
   g_autoptr(GFile) file = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
-  const gchar *fetag;
+  g_autofree gchar *fetag = NULL;
 
   g_debug ("check etag %s for %s", etag, path);
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
-  info = g_file_query_info (file, "etag::*",
+  /* a tagged resource outside of the share cannot match */
+  if (!handler_path_is_covered (handler, path))
+    return FALSE;
+
+  file = handler_get_file_for_path (handler, path);
+  info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     {
@@ -147,7 +151,7 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
       return FALSE;
     }
 
-  fetag = g_file_info_get_etag (info);
+  fetag = phodav_etag_from_info (info);
   g_warn_if_fail (fetag != NULL);
 
   return !g_strcmp0 (etag, fetag);
@@ -268,8 +272,7 @@ eval_if_tag (PathHandler *handler, IfState *state)
    * would resolve such a path against the filesystem root */
   path = g_uri_unescape_string (g_uri_get_path (uri), "/");
   g_uri_unref (uri);
-  if (!path || *path != '/' || g_path_is_absolute (path + 1) ||
-      path_has_dot_dot_segment (path))
+  if (!phodav_path_is_safe (path))
     {
       state->error = TRUE;
       return FALSE;

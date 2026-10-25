@@ -14,6 +14,16 @@ G_BEGIN_DECLS
 void remove_trailing (gchar *str, gchar c);
 gboolean path_has_dot_dot_segment (const gchar *path);
 
+/* canonicalize a resource path: empty segments ("//") and trailing
+ * slashes are skipped, so that two spellings of the same resource
+ * compare equal */
+gchar *phodav_path_canonicalize (const gchar *path);
+
+/* is @path a resource path under the share root? It must be absolute,
+ * with no second absolute anchor (which would escape the root on
+ * Windows) and no dot-dot segment. */
+gboolean phodav_path_is_safe (const gchar *path);
+
 /* parse a Depth header value: a missing header defaults to DEPTH_INFINITY
  * (RFC 4918 section 9.1); returns FALSE for a syntactically invalid
  * value, which the caller must reject with 400 */
@@ -27,6 +37,14 @@ guint timeout_from_string (const gchar *timeout);
 
 /* is @path the tree rooted at @root, or one of its members? */
 gboolean path_is_covered (const gchar *path, const gchar *root);
+
+/* a strong ETag for the representation described by @info. GIO builds
+ * the local file ETags from the modification time only: two writes
+ * within the same filesystem timestamp tick produce the same one.
+ * Include the size and the inode when the file backend reports them,
+ * so that the tag changes with the representation. Returns NULL when
+ * @info has no ETag. */
+gchar *phodav_etag_from_info (GFileInfo *info);
 
 /* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
  * match the current @etag of the resource, which exists per @exists? */

@@ -11,6 +11,67 @@
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
 
+/* whether any component of @path under the share root is a symbolic
+ * link. The destination must not be followed through one: it could
+ * point outside of the share. The components which do not exist yet
+ * cannot be links, stop at the first missing one. */
+static gboolean
+path_has_symlink_component (PathHandler *handler,
+                            const gchar *path,
+                            GCancellable *cancellable)
+{
+  const gchar *base = handler_get_base_path (handler);
+  const gchar *relative = path;
+  g_auto(GStrv) parts = NULL;
+  g_autoptr(GFile) current = g_object_ref (handler_get_root_file (handler));
+
+  /* inspect the path relative to the share root, not the request
+   * path including the base path */
+  if (strlen (base) > 1)
+    {
+      relative = path + strlen (base);
+      if (!*relative)
+        relative = "/";
+    }
+
+  parts = g_strsplit (relative, "/", -1);
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      g_autoptr(GFile) next = NULL;
+      g_autoptr(GFileInfo) info = NULL;
+      g_autoptr(GError) error = NULL;
+
+      if (!*parts[i])
+        continue;
+
+      next = g_file_get_child (current, parts[i]);
+      info = g_file_query_info (next, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                cancellable, &error);
+      if (!info)
+        {
+          /* the rest of the path does not exist yet: no symlink to
+           * follow, and the operation fails later if a parent is
+           * needed */
+          if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+            return FALSE;
+
+          g_debug ("cannot inspect %s for symlinks: %s", path,
+                   error ? error->message : "no error details");
+          return TRUE;
+        }
+
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
+        return TRUE;
+
+      g_clear_object (&current);
+      current = g_steal_pointer (&next);
+    }
+
+  return FALSE;
+}
+
 static gboolean
 do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
@@ -46,70 +107,87 @@ do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancella
   return TRUE;
 }
 
+static gboolean
+movecopy_once (gboolean copy, GFile *file, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+{
+  return copy
+           ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, err)
+           : g_file_move (file, dest, flags, cancellable, NULL, NULL, err);
+}
+
 static gint
 do_movecopy_file (SoupServerMessage *msg, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
-  GError *error = NULL;
-  gboolean overwrite;
-  gint status = SOUP_STATUS_PRECONDITION_FAILED;
+  g_autoptr(GError) error = NULL;
   gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   GFileCopyFlags flags = G_FILE_COPY_ALL_METADATA;
-  gboolean retry = FALSE;
+  gboolean overwrite;
   gboolean exists;
+  gboolean ok;
 
-  overwrite = !!g_strcmp0 (
-    soup_message_headers_get_one (request_headers, "Overwrite"), "F");
+  overwrite = g_strcmp0 (
+                soup_message_headers_get_one (request_headers, "Overwrite"), "F") != 0;
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
   exists = g_file_query_exists (dest, cancellable);
 
-  /* the request was validated to be depth 0 or infinity */
-again:
-  copy
-    ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, &error)
-    : g_file_move (file, dest, flags, cancellable, NULL, NULL, &error);
+  /* replacing a collection removes it together with its members: delete
+   * it first (RFC 4918 section 9.6.1). This also avoids relying on the
+   * copy error to detect a directory destination: the win32 backend
+   * reports G_IO_ERROR_PERMISSION_DENIED where the POSIX one reports
+   * G_IO_ERROR_IS_DIRECTORY or G_IO_ERROR_WOULD_MERGE. */
+  if (overwrite && exists)
+    {
+      g_autoptr(GFileInfo) src_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                                         G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                                         cancellable, NULL);
+      g_autoptr(GFileInfo) dest_info = g_file_query_info (dest, G_FILE_ATTRIBUTE_STANDARD_TYPE,
+                                                          G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                                          cancellable, NULL);
 
-  if (overwrite && !retry &&
+      if (src_info && dest_info &&
+          (g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY ||
+           g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY))
+        phodav_delete_file (server, dest_path, dest, NULL, cancellable);
+    }
+
+  /* the request was validated to be depth 0 or infinity */
+  ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
+
+  /* an existing destination of another kind cannot be replaced in
+   * place: remove it, then try again with the destination gone */
+  if (!ok && overwrite &&
       (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
       phodav_delete_file (server, dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
-      retry = TRUE;
-      goto again;
-    }
-  else if (!overwrite &&
-           g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-    {
-      g_clear_error (&error);
-      goto end;
-    }
-  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
-    {
-      g_clear_error (&error);
-      if (copy)
-        {
-          if (depth == DEPTH_INFINITY)
-            do_copy_r (file, dest, flags, cancellable, &error);
-          else
-            g_file_make_directory_with_parents (dest, cancellable, &error);
-        }
-    }
-  else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-    {
-      status = SOUP_STATUS_CONFLICT;
-      g_clear_error (&error);
-      goto end;
+      ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
     }
 
-  if (error)
-    g_propagate_error (err, error);
-  else
-    status = exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+  /* a directory cannot be copied in one go; the depth of the request
+   * decides whether its members are copied too */
+  if (!ok && copy &&
+      g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE))
+    {
+      g_clear_error (&error);
+      ok = depth == DEPTH_INFINITY
+             ? do_copy_r (file, dest, flags, cancellable, &error)
+             : g_file_make_directory_with_parents (dest, cancellable, &error);
+    }
 
-end:
-  return status;
+  if (ok)
+    return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+
+  if (!overwrite && g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+    return SOUP_STATUS_PRECONDITION_FAILED;
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+    return SOUP_STATUS_CONFLICT;
+
+  g_propagate_error (err, g_steal_pointer (&error));
+  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 }
 
 gint
@@ -117,9 +195,11 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
 {
   GFile *file = NULL, *dest_file = NULL;
   GCancellable *cancellable = handler_get_cancellable (handler);
+  PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
+  gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
@@ -153,11 +233,36 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
    * and an empty first segment ("//"), which g_file_get_child()
    * would resolve against the filesystem root */
   udest = g_uri_unescape_string (dest, "/");
-  if (!udest || *udest != '/' || g_path_is_absolute (udest + 1) ||
-      path_has_dot_dot_segment (udest))
+  if (!phodav_path_is_safe (udest) || !handler_path_is_covered (handler, udest))
     {
       g_debug ("invalid destination path: %s", dest);
       status = SOUP_STATUS_BAD_REQUEST;
+      goto end;
+    }
+
+  {
+    g_autofree gchar *canonical = phodav_path_canonicalize (path);
+    g_autofree gchar *dest_canonical = phodav_path_canonicalize (udest);
+
+    /* a COPY or MOVE into itself would recurse endlessly, and
+     * replacing one of the source ancestors would delete the source
+     * before it is copied: the destination and the source must not
+     * cover each other (RFC 4918 sections 9.8.5 and 9.9.4) */
+    if (path_is_covered (dest_canonical, canonical) ||
+        path_is_covered (canonical, dest_canonical))
+      {
+        g_debug ("the destination %s overlaps the source %s", udest, path);
+        status = SOUP_STATUS_CONFLICT;
+        goto end;
+      }
+  }
+
+  /* a symlinked destination could write outside of the shared
+   * directory, refuse to follow one */
+  if (path_has_symlink_component (handler, udest, cancellable))
+    {
+      g_debug ("the destination %s goes through a symbolic link", udest);
+      status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
 
@@ -165,15 +270,28 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  if (server_path_has_other_locks (handler_get_server (handler), udest, submitted))
+  /* moving a collection removes its members with it: the tokens of
+   * the locks held on them must be submitted too. A COPY leaves the
+   * source untouched, its locks do not apply. */
+  if (!copy && server_tree_has_other_locks (server, path, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
     }
 
-  dest_file = g_file_get_child (handler_get_file (handler), udest + 1);
+  /* overwriting a collection removes its members: their lock tokens
+   * must be submitted too, not only the ones of the destination and
+   * its ancestors */
+  if (server_path_has_other_locks (server, udest, submitted) ||
+      server_tree_has_other_locks (server, udest, submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  dest_file = handler_get_file_for_path (handler, udest);
+
+  file = handler_get_file_for_path (handler, path);
 
   /* take the short path as g_file_copy seems to be rather complicated */
   if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))
@@ -181,7 +299,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, handler_get_server (handler), file, dest_file, udest, depth,
+  status = do_movecopy_file (msg, server, file, dest_file, udest, depth,
                              cancellable, err);
 
 end:

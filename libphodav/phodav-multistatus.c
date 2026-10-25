@@ -10,6 +10,41 @@
 
 #include "phodav-utils.h"
 
+ResponseProp *
+response_prop_new (xmlNodePtr node, gint status)
+{
+  ResponseProp *prop;
+
+  g_return_val_if_fail (node != NULL, NULL);
+
+  prop = g_new0 (ResponseProp, 1);
+  prop->node = node;
+  prop->status = status;
+
+  return prop;
+}
+
+void
+response_prop_free (ResponseProp *prop)
+{
+  if (!prop)
+    return;
+
+  if (prop->node)
+    xmlFreeNode (prop->node);
+
+  g_free (prop);
+}
+
+static gint
+response_prop_compare (gconstpointer a, gconstpointer b)
+{
+  const ResponseProp *pa = a;
+  const ResponseProp *pb = b;
+
+  return pa->status - pb->status;
+}
+
 Response *
 response_new (GList *props, gint status)
 {
@@ -19,7 +54,8 @@ response_new (GList *props, gint status)
 
   r = g_new0 (Response, 1);
   r->status = status;
-  r->props = props;
+  /* the response groups the properties by status */
+  r->props = g_list_sort (props, response_prop_compare);
 
   return r;
 }
@@ -27,7 +63,7 @@ response_new (GList *props, gint status)
 void
 response_free (Response *h)
 {
-  g_list_free_full (h->props, (GDestroyNotify) xmlFreeNode);
+  g_list_free_full (h->props, (GDestroyNotify) response_prop_free);
   g_free (h);
 }
 
@@ -52,19 +88,21 @@ status_node_new (xmlNsPtr ns, gint status)
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg, const gchar *path, GList *props)
+add_propstat (xmlNodePtr parent, xmlNsPtr ns, GList *props)
 {
   xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
   GList *s;
   gint status = -1;
 
-  /* better if sorted by status */
+  /* the response_new() list is sorted by status */
   for (s = props; s != NULL; s = s->next)
     {
-      node = s->data;
-      if (GPOINTER_TO_INT (node->_private) != status)
+      ResponseProp *response_prop = s->data;
+
+      node = response_prop->node;
+      if (response_prop->status != status)
         {
-          status = GPOINTER_TO_INT (node->_private);
+          status = response_prop->status;
           if (stnode)
             xmlAddChild (propstat, stnode);
 
@@ -74,7 +112,8 @@ add_propstat (xmlNodePtr parent, xmlNsPtr ns, SoupServerMessage *msg, const gcha
         }
       g_return_if_fail (prop != NULL);
       xmlAddChild (prop, node);
-      s->data = NULL;
+      /* the response propstat owns the node now */
+      response_prop->node = NULL;
     }
 
   if (stnode)
@@ -122,7 +161,7 @@ set_response_multistatus (SoupServerMessage *msg,
       xmlAddChild (href, xmlNewText (BAD_CAST text));
 
       if (resp->props)
-        add_propstat (response, ns, msg, path, resp->props);
+        add_propstat (response, ns, resp->props);
       else if (resp->status)
         xmlAddChild (response, status_node_new (ns, resp->status));
     }

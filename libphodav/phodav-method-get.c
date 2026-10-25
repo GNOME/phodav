@@ -9,6 +9,13 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
+/* the directory listings are generated on the fly in memory, from an
+ * enumeration of the whole directory: cap them, so that a huge
+ * directory cannot exhaust the memory of the server. The limit is
+ * well above what a person browses in a share. */
+#define MAX_DIRECTORY_ENTRIES 4096
+#define MAX_DIRECTORY_LISTING_SIZE (8 * 1024 * 1024)
+
 static gint
 compare_strings (gconstpointer a, gconstpointer b)
 {
@@ -48,6 +55,13 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
       if (info == NULL)
         break; /* the end of the directory */
 
+      if (entries->len >= MAX_DIRECTORY_ENTRIES)
+        {
+          g_set_error_literal (err, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
+                               "The directory has too many entries to list");
+          return NULL;
+        }
+
       dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
       /* remember the directory entries by their trailing slash */
@@ -81,6 +95,15 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
       href = g_uri_escape_string (base, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
       line = g_markup_printf_escaped ("<a href=\"%s%s\">%s</a><br/>\r\n",
                                       href, dir ? "/" : "", base);
+
+      if (listing->len + strlen (line) > MAX_DIRECTORY_LISTING_SIZE)
+        {
+          g_set_error_literal (err, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE,
+                               "The directory listing is too large");
+          g_string_free (listing, TRUE);
+          return NULL;
+        }
+
       g_string_append (listing, line);
     }
   g_string_append (listing, "</p></body>\r\n</html>\r\n");
@@ -88,68 +111,66 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
   return listing;
 }
 
-static gint
-method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **err)
+/* the headers which are common to the GET and HEAD responses of a
+ * directory */
+static void
+method_get_directory_set_headers (SoupServerMessage *msg)
 {
-  g_autoptr(GError) error = NULL;
-  gint status = SOUP_STATUS_NOT_FOUND;
-  g_autoptr(GFileInfo) info = NULL;
-  const gchar *etag;
-  guint64 mtime;
-  const gchar *content_type;
-  SoupMessageHeaders *response_headers;
-  const gchar *method;
+  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
 
-  info = g_file_query_info (file, "standard::*,etag::*,time::modified",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
-  if (!info)
-    goto end;
+  soup_message_headers_set_content_type (response_headers,
+                                         "text/html; charset=utf-8", NULL);
+  /* the listing is generated on the fly, it must not be cached */
+  soup_message_headers_append (response_headers, "Cache-Control", "no-cache");
+  /* the page lists names taken from the shared folder, which
+   * must not be mistaken for another content type, and nothing
+   * is ever loaded from it */
+  soup_message_headers_append (response_headers, "X-Content-Type-Options", "nosniff");
+  soup_message_headers_append (response_headers, "Content-Security-Policy", "default-src 'none'");
+}
 
-  if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+static gint
+method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **error)
+{
+  GString *listing;
+  gsize len;
+
+  method_get_directory_set_headers (msg);
+
+  /* a HEAD request carries no representation, and the listing is
+   * generated on the fly: do not enumerate the whole directory just
+   * to throw its content away */
+  if (soup_server_message_get_method (msg) == SOUP_METHOD_HEAD)
+    return SOUP_STATUS_OK;
+
+  listing = get_directory_listing (file, cancellable, error);
+  if (!listing)
     {
-      GString *listing;
-      gsize len;
+      if (g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE))
+        g_debug ("GET: refusing the oversized directory listing of %s", g_file_peek_path (file));
 
-      listing = get_directory_listing (file, cancellable, &error);
-      if (!listing)
-        {
-          /* the directory disappeared or cannot be read since the
-           * query above, answer with the mapped status */
-          status = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
-                     ? SOUP_STATUS_NOT_FOUND
-                     : SOUP_STATUS_FORBIDDEN;
-          goto end;
-        }
-
-      len = listing->len;
-      /* the listing is generated on the fly, it must not be cached */
-      soup_message_headers_append (soup_server_message_get_response_headers (msg),
-                                   "Cache-Control", "no-cache");
-      /* the page lists names taken from the shared folder, which
-       * must not be mistaken for another content type, and nothing
-       * is ever loaded from it */
-      soup_message_headers_append (soup_server_message_get_response_headers (msg),
-                                   "X-Content-Type-Options", "nosniff");
-      soup_message_headers_append (soup_server_message_get_response_headers (msg),
-                                   "Content-Security-Policy", "default-src 'none'");
-      /* a listing has no ranges: take the header over, so that
-       * libsoup does not apply its own partial-content handling to
-       * the generated page */
-      if (soup_server_message_get_method (msg) == SOUP_METHOD_GET)
-        soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
-      soup_server_message_set_response (msg, "text/html; charset=utf-8",
-                                        SOUP_MEMORY_TAKE,
-                                        g_string_free_and_steal (listing), len);
-      status = SOUP_STATUS_OK;
-      goto end;
+      /* the directory disappeared, cannot be read, or is too large
+       * to be listed: answer with the mapped status */
+      return g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
+               ? SOUP_STATUS_NOT_FOUND
+               : SOUP_STATUS_FORBIDDEN;
     }
 
-  etag = g_file_info_get_etag (info);
-  mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
-  g_warn_if_fail (etag != NULL);
+  len = listing->len;
+  /* a listing has no ranges: take the header over, so that
+   * libsoup does not apply its own partial-content handling to
+   * the generated page */
+  soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
+  soup_server_message_set_response (msg, "text/html; charset=utf-8",
+                                    SOUP_MEMORY_TAKE,
+                                    g_string_free_and_steal (listing), len);
 
-  response_headers = soup_server_message_get_response_headers (msg);
+  return SOUP_STATUS_OK;
+}
 
+static void
+method_get_add_validators (SoupMessageHeaders *response_headers, const gchar *etag, guint64 mtime)
+{
   /* the validators allow a client to revalidate its cached
    * representation with a cheap conditional request, answered
    * with Not Modified */
@@ -169,14 +190,91 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
 
   /* the content may only be reused after revalidation */
   soup_message_headers_append (response_headers, "Cache-Control", "no-cache");
+}
+
+static gint
+method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, const gchar *etag, guint64 mtime)
+{
+  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+  GMappedFile *mapping;
+  g_autoptr(GBytes) buffer = NULL;
+  g_autofree gchar *path = g_file_get_path (file);
+  guint64 size = (guint64) g_file_info_get_size (info);
+  guint64 first = 0, last = 0;
+  HttpRangeType range;
+
+  range = http_request_range (request_headers, etag, mtime, size, &first, &last);
+
+  /* the range has been evaluated here: take the request header
+   * over, so that libsoup does not apply its own partial-content
+   * handling on top of the answer (it ignores the If-Range
+   * precondition, and answers unsatisfiable ranges with 200) */
+  soup_message_headers_remove (request_headers, "Range");
+
+  /* there is no satisfiable byte in the representation,
+   * RFC 9110 section 14.2 */
+  if (range == HTTP_RANGE_UNSATISFIABLE)
+    {
+      g_autofree gchar *content_range = g_strdup_printf ("bytes */%" G_GUINT64_FORMAT, size);
+
+      soup_message_headers_append (response_headers, "Content-Range", content_range);
+      return SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE;
+    }
+
+  mapping = g_mapped_file_new (path, FALSE, NULL);
+  if (!mapping)
+    return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+  buffer = g_bytes_new_with_free_func (g_mapped_file_get_contents (mapping),
+                                       g_mapped_file_get_length (mapping),
+                                       (GDestroyNotify) g_mapped_file_unref,
+                                       mapping);
+
+  /* the file may have changed since it was queried, do not
+   * serve bytes out of the content which is actually mapped */
+  if (range == HTTP_RANGE_PARTIAL && last >= (guint64) g_bytes_get_size (buffer))
+    range = HTTP_RANGE_NONE;
+
+  if (range == HTTP_RANGE_PARTIAL)
+    {
+      g_autoptr(GBytes) slice = g_bytes_new_from_bytes (buffer, first, last - first + 1);
+      g_autofree gchar *content_range =
+        g_strdup_printf ("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%" G_GUINT64_FORMAT,
+                         first, last, size);
+
+      soup_message_body_append_bytes (soup_server_message_get_response_body (msg), slice);
+      soup_message_headers_append (response_headers, "Content-Range", content_range);
+      return SOUP_STATUS_PARTIAL_CONTENT;
+    }
+
+  /* an empty file has no content to append, libsoup refuses
+   * empty bodies */
+  if (g_bytes_get_size (buffer) > 0)
+    soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
+
+  return SOUP_STATUS_OK;
+}
+
+static gint
+method_get_file (SoupServerMessage *msg, GFile *file, GFileInfo *info)
+{
+  g_autofree gchar *etag = phodav_etag_from_info (info);
+  guint64 mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+  const gchar *content_type;
+  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+  const gchar *method;
+
+  g_warn_if_fail (etag != NULL);
+
+  method_get_add_validators (response_headers, etag, mtime);
 
   if (http_request_not_modified (soup_server_message_get_request_headers (msg), etag, mtime))
     {
       /* RFC 9110 section 15.4.5: no body, and no representation
        * metadata beyond the validators */
       soup_message_headers_remove (response_headers, "Content-Type");
-      status = SOUP_STATUS_NOT_MODIFIED;
-      goto end;
+      return SOUP_STATUS_NOT_MODIFIED;
     }
 
   /* special files may have no content type, do not leave the
@@ -191,72 +289,9 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
 
   method = soup_server_message_get_method (msg);
   if (method == SOUP_METHOD_GET)
-    {
-      GMappedFile *mapping;
-      g_autoptr(GBytes) buffer = NULL;
-      g_autofree gchar *path = g_file_get_path (file);
-      guint64 size = (guint64) g_file_info_get_size (info);
-      guint64 first = 0, last = 0;
-      HttpRangeType range;
+    return method_get_file_body (msg, file, info, etag, mtime);
 
-      range = http_request_range (soup_server_message_get_request_headers (msg),
-                                  etag, mtime, size, &first, &last);
-
-      /* the range has been evaluated here: take the request header
-       * over, so that libsoup does not apply its own partial-content
-       * handling on top of the answer (it ignores the If-Range
-       * precondition, and answers unsatisfiable ranges with 200) */
-      soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
-
-      /* there is no satisfiable byte in the representation,
-       * RFC 9110 section 14.2 */
-      if (range == HTTP_RANGE_UNSATISFIABLE)
-        {
-          g_autofree gchar *content_range = g_strdup_printf ("bytes */%" G_GUINT64_FORMAT, size);
-
-          soup_message_headers_append (response_headers, "Content-Range", content_range);
-          status = SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE;
-          goto end;
-        }
-
-      mapping = g_mapped_file_new (path, FALSE, NULL);
-      if (!mapping)
-        {
-          status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
-          goto end;
-        }
-
-      buffer = g_bytes_new_with_free_func (g_mapped_file_get_contents (mapping),
-                                           g_mapped_file_get_length (mapping),
-                                           (GDestroyNotify) g_mapped_file_unref,
-                                           mapping);
-
-      /* the file may have changed since it was queried, do not
-       * serve bytes out of the content which is actually mapped */
-      if (range == HTTP_RANGE_PARTIAL && last >= (guint64) g_bytes_get_size (buffer))
-        range = HTTP_RANGE_NONE;
-
-      if (range == HTTP_RANGE_PARTIAL)
-        {
-          g_autoptr(GBytes) slice = g_bytes_new_from_bytes (buffer, first, last - first + 1);
-          g_autofree gchar *content_range =
-            g_strdup_printf ("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%" G_GUINT64_FORMAT,
-                             first, last, size);
-
-          soup_message_body_append_bytes (soup_server_message_get_response_body (msg), slice);
-          soup_message_headers_append (response_headers, "Content-Range", content_range);
-          status = SOUP_STATUS_PARTIAL_CONTENT;
-        }
-      else
-        {
-          /* an empty file has no content to append, libsoup refuses
-           * empty bodies */
-          if (g_bytes_get_size (buffer) > 0)
-            soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
-          status = SOUP_STATUS_OK;
-        }
-    }
-  else if (method == SOUP_METHOD_HEAD)
+  if (method == SOUP_METHOD_HEAD)
     {
       g_autofree gchar *length = NULL;
 
@@ -267,10 +302,29 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
       length = g_strdup_printf ("%" G_GUINT64_FORMAT, g_file_info_get_size (info));
       soup_message_headers_append (response_headers, "Content-Length", length);
 
-      status = SOUP_STATUS_OK;
+      return SOUP_STATUS_OK;
     }
+
+  g_warn_if_reached ();
+  return SOUP_STATUS_NOT_FOUND;
+}
+
+static gint
+method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **err)
+{
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GFileInfo) info = NULL;
+  gint status = SOUP_STATUS_NOT_FOUND;
+
+  info = g_file_query_info (file, "standard::*,etag::*,time::modified,unix::inode",
+                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  if (!info)
+    goto end;
+
+  if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+    status = method_get_directory (msg, file, cancellable, &error);
   else
-    g_warn_if_reached ();
+    status = method_get_file (msg, file, info);
 
 end:
   if (error)
@@ -291,7 +345,7 @@ phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *pa
   GCancellable *cancellable = handler_get_cancellable (handler);
   gint status;
 
-  file = g_file_get_child (handler_get_file (handler), path + 1);
+  file = handler_get_file_for_path (handler, path);
   status = method_get (msg, file, cancellable, err);
   g_object_unref (file);
 

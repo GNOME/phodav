@@ -19,6 +19,35 @@ remove_trailing (gchar *str, gchar c)
   str[len] = '\0';
 }
 
+gchar *
+phodav_path_canonicalize (const gchar *path)
+{
+  g_auto(GStrv) parts = g_strsplit (path, "/", -1);
+  g_autoptr(GString) canonical = g_string_new (NULL);
+
+  for (gint i = 0; parts[i]; i++)
+    {
+      if (!*parts[i])
+        continue;
+
+      g_string_append_c (canonical, '/');
+      g_string_append (canonical, parts[i]);
+    }
+
+  if (!canonical->len)
+    g_string_append_c (canonical, '/');
+
+  return g_string_free_and_steal (g_steal_pointer (&canonical));
+}
+
+gboolean
+phodav_path_is_safe (const gchar *path)
+{
+  return path && *path == '/' &&
+         !g_path_is_absolute (path + 1) &&
+         !path_has_dot_dot_segment (path);
+}
+
 gboolean
 path_has_dot_dot_segment (const gchar *path)
 {
@@ -176,6 +205,28 @@ path_is_covered (const gchar *path, const gchar *root)
     return path[0] == '/';
 
   return g_str_has_prefix (path, root) && path[len] == '/';
+}
+
+gchar *
+phodav_etag_from_info (GFileInfo *info)
+{
+  const gchar *etag = g_file_info_get_etag (info);
+  g_autoptr(GString) strong = NULL;
+
+  if (!etag)
+    return NULL;
+
+  strong = g_string_new (etag);
+
+  if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
+    g_string_append_printf (strong, ":%" G_GOFFSET_FORMAT,
+                            g_file_info_get_size (info));
+
+  if (g_file_info_has_attribute (info, G_FILE_ATTRIBUTE_UNIX_INODE))
+    g_string_append_printf (strong, ":%" G_GUINT64_FORMAT,
+                            g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_UNIX_INODE));
+
+  return g_string_free_and_steal (g_steal_pointer (&strong));
 }
 
 /* does an If-Match / If-None-Match header value (RFC 9110 section 13.1)
