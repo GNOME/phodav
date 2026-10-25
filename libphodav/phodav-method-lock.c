@@ -12,25 +12,15 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
-static gboolean
-lock_resource_exists (PathHandler *handler, const gchar *path, GCancellable *cancellable)
-{
-  g_autoptr(GFile) file = handler_get_file_for_path (handler, path);
-
-  return g_file_query_exists (file, cancellable);
-}
-
 /* create the empty resource of a LOCK on a URL which is not mapped
  * yet (RFC 4918 section 7.3), when the backend supports it. The
  * request is rolled back by the caller when this fails. */
 static gint
-lock_create_resource (PathHandler *handler, const gchar *path, GCancellable *cancellable, GError **err)
+lock_create_resource (GFile *file, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileOutputStream) stream = NULL;
-  g_autoptr(GFile) file = NULL;
 
-  file = handler_get_file_for_path (handler, path);
   stream = g_file_create (file, G_FILE_CREATE_NONE, cancellable, &error);
   if (stream)
     return SOUP_STATUS_CREATED;
@@ -45,7 +35,8 @@ lock_create_resource (PathHandler *handler, const gchar *path, GCancellable *can
    * existing rather than failing the lock */
   if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
     {
-      g_debug ("LOCK: %s cannot be created, locking it as it is", path);
+      g_debug ("LOCK: %s cannot be created, locking it as it is",
+               g_file_peek_path (file));
       return SOUP_STATUS_OK;
     }
 
@@ -123,6 +114,7 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   PhodavLockGuard *guard = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean exists;
+  g_autoptr(GFile) file = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body;
 
@@ -204,7 +196,11 @@ phodav_method_lock (PhodavRequest *req, GError **err)
 
   /* an existing resource is locked in place; only an unmapped URL
    * needs an empty resource */
-  exists = lock_resource_exists (handler, path, cancellable);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!file)
+    goto end;
+
+  exists = g_file_query_exists (file, cancellable);
 
   {
     PhodavServer *server = handler_get_server (handler);
@@ -223,7 +219,7 @@ phodav_method_lock (PhodavRequest *req, GError **err)
 
     if (!exists)
       {
-        status = lock_create_resource (handler, path, cancellable, err);
+        status = lock_create_resource (file, cancellable, err);
         if (status != SOUP_STATUS_CREATED && status != SOUP_STATUS_OK)
           {
             /* the empty resource could not be created: do not leave the

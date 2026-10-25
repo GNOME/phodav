@@ -568,14 +568,15 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
   if (!put_preconditions_hold (ctx->if_match, ctx->if_none_match, etag, exists))
     return SOUP_STATUS_PRECONDITION_FAILED;
 
-  if (!g_file_move (ctx->temp_file, ctx->file, G_FILE_COPY_OVERWRITE,
-                    cancellable, NULL, NULL, &error))
+  if (!phodav_path_rename (ctx->temp_file, ctx->file, cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         return SOUP_STATUS_CONFLICT;
 
+      gint status = phodav_status_from_error (error);
+
       g_propagate_error (err, g_steal_pointer (&error));
-      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+      return status;
     }
 
   /* the rename consumed the staged file */
@@ -760,7 +761,10 @@ put_start_task (GTask *task,
   if (start->status != SOUP_STATUS_OK)
     goto out;
 
-  file = handler_get_file_for_path (handler, path);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &start->status);
+  if (!file)
+    goto out;
+
   start->status = put_start (req, file, &start->ctx, cancellable, &error);
   if (!start->ctx)
     start->error = g_steal_pointer (&error);

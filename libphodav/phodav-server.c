@@ -97,20 +97,6 @@ handler_get_relative_path (PathHandler *handler, const gchar *path)
   return relative;
 }
 
-/* the request paths begin with a "/" and are relative to the share
- * root, so that the file is looked up under the root, not the
- * filesystem root. */
-GFile *
-handler_get_file_for_path (PathHandler *handler, const gchar *path)
-{
-  const gchar *relative = handler_get_relative_path (handler, path);
-
-  if (!relative)
-    return NULL;
-
-  return g_file_get_child (handler->file, relative + 1);
-}
-
 GFile *
 handler_get_root_file (PathHandler *handler)
 {

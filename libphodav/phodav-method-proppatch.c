@@ -417,7 +417,11 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = handler_get_file_for_path (handler, path);
+  /* a missing resource is reported per property in the multistatus */
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!file)
+    goto end;
+
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 

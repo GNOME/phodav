@@ -116,8 +116,20 @@ typedef gboolean (*PathCb) (const gchar *key,
                             Path *path,
                             gpointer data);
 
-/* the file of a request path, relative to the share root */
-GFile *handler_get_file_for_path (PathHandler *handler, const gchar *path);
+typedef enum
+{
+  PHODAV_PATH_EXISTING,
+  PHODAV_PATH_CREATE,
+} PhodavPathMode;
+
+/* the single filesystem policy entry point: it rejects symlinked
+ * components, enforces the requested existence mode, and maps any
+ * failure to an HTTP status in @status */
+GFile *phodav_path_resolve (PathHandler *handler, const gchar *path, PhodavPathMode mode, gint *status);
+gint phodav_status_from_error (const GError *error);
+gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
+gboolean phodav_path_rename (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
+
 /* the share-relative path of @path, borrowed; NULL when @path is not
  * part of the share mounted at the base path */
 const gchar *handler_get_relative_path (PathHandler *handler, const gchar *path) G_GNUC_PURE;

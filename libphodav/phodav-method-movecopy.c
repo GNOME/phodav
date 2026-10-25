@@ -11,69 +11,16 @@
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
 
-/* whether any component of @path under the share root is a symbolic
- * link. The destination must not be followed through one: it could
- * point outside of the share. The components which do not exist yet
- * cannot be links, stop at the first missing one. */
 static gboolean
-path_has_symlink_component (PathHandler *handler,
-                            const gchar *path,
-                            GCancellable *cancellable)
-{
-  const gchar *relative = handler_get_relative_path (handler, path);
-  g_auto(GStrv) parts = NULL;
-  g_autoptr(GFile) current = g_object_ref (handler_get_root_file (handler));
-
-  if (!relative)
-    return TRUE;
-
-  parts = g_strsplit (relative, "/", -1);
-
-  for (gint i = 0; parts[i]; i++)
-    {
-      g_autoptr(GFile) next = NULL;
-      g_autoptr(GFileInfo) info = NULL;
-      g_autoptr(GError) error = NULL;
-
-      if (!*parts[i])
-        continue;
-
-      next = g_file_get_child (current, parts[i]);
-      info = g_file_query_info (next, G_FILE_ATTRIBUTE_STANDARD_TYPE,
-                                G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                cancellable, &error);
-      if (!info)
-        {
-          /* the rest of the path does not exist yet: no symlink to
-           * follow, and the operation fails later if a parent is
-           * needed */
-          if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-            return FALSE;
-
-          g_debug ("cannot inspect %s for symlinks: %s", path,
-                   error ? error->message : "no error details");
-          return TRUE;
-        }
-
-      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
-        return TRUE;
-
-      g_clear_object (&current);
-      current = g_steal_pointer (&next);
-    }
-
-  return FALSE;
-}
-
-static gboolean
-do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GFileEnumerator) e = NULL;
 
   if (!g_file_make_directory_with_parents (dest, cancellable, err))
     return FALSE;
 
-  e = g_file_enumerate_children (src, "standard::*", G_FILE_QUERY_INFO_NONE,
+  e = g_file_enumerate_children (src, "standard::*",
+                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                  cancellable, err);
   if (!e)
     return FALSE;
@@ -81,16 +28,58 @@ do_copy_r (GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancella
   while (1)
     {
       g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, err);
+      g_autoptr(GFile) src_child = NULL;
+      g_autoptr(GFile) dest_child = NULL;
+      g_autofree gchar *src_child_path = NULL;
+      g_autofree gchar *dest_child_path = NULL;
+      g_autofree gchar *name = NULL;
+      gint status;
+      gboolean isdir;
+
       if (!info)
         break;
 
-      g_autoptr(GFile) src_child = g_file_get_child (src, g_file_info_get_name (info));
-      g_autoptr(GFile) dest_child = g_file_get_child (dest, g_file_info_get_name (info));
-      gboolean isdir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
+      if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
+        {
+          g_set_error_literal (err, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+                               "COPY does not follow symbolic links");
+          return FALSE;
+        }
+
+      name = g_strdup (g_file_info_get_name (info));
+      src_child_path = g_build_path ("/", src_path, name, NULL);
+      dest_child_path = g_build_path ("/", dest_path, name, NULL);
+
+      src_child = phodav_path_resolve (handler, src_child_path,
+                                       PHODAV_PATH_EXISTING, &status);
+      if (!src_child)
+        {
+          g_set_error_literal (err, G_IO_ERROR,
+                               status == SOUP_STATUS_FORBIDDEN
+                                 ? G_IO_ERROR_PERMISSION_DENIED
+                                 : G_IO_ERROR_FAILED,
+                               "Cannot resolve the COPY source");
+          return FALSE;
+        }
+
+      dest_child = phodav_path_resolve (handler, dest_child_path,
+                                        PHODAV_PATH_CREATE, &status);
+      if (!dest_child)
+        {
+          g_set_error_literal (err, G_IO_ERROR,
+                               status == SOUP_STATUS_FORBIDDEN
+                                 ? G_IO_ERROR_PERMISSION_DENIED
+                                 : G_IO_ERROR_FAILED,
+                               "Cannot resolve the COPY destination");
+          return FALSE;
+        }
+
+      isdir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
       if (isdir)
         {
-          if (!do_copy_r (src_child, dest_child, flags, cancellable, err))
+          if (!do_copy_r (handler, src_child_path, dest_child_path,
+                          src_child, dest_child, flags, cancellable, err))
             return FALSE;
         }
       else if (!g_file_copy (src_child, dest_child, flags, cancellable, NULL, NULL, err))
@@ -109,7 +98,7 @@ movecopy_once (gboolean copy, GFile *file, GFile *dest, GFileCopyFlags flags, GC
 }
 
 static gint
-do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
@@ -166,7 +155,8 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
     {
       g_clear_error (&error);
       ok = depth == DEPTH_INFINITY
-             ? do_copy_r (file, dest, flags, cancellable, &error)
+             ? do_copy_r (phodav_request_get_handler (req), src_path, dest_path,
+                          file, dest, flags, cancellable, &error)
              : g_file_make_directory_with_parents (dest, cancellable, &error);
     }
 
@@ -253,15 +243,6 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       }
   }
 
-  /* a symlinked destination could write outside of the shared
-   * directory, refuse to follow one */
-  if (path_has_symlink_component (handler, udest, cancellable))
-    {
-      g_debug ("the destination %s goes through a symbolic link", udest);
-      status = SOUP_STATUS_FORBIDDEN;
-      goto end;
-    }
-
   status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
@@ -294,9 +275,19 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  dest_file = handler_get_file_for_path (handler, udest);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    {
+      /* a missing MOVE/COPY source is a conflict, like the backend
+       * error the copy operation used to report */
+      if (status == SOUP_STATUS_NOT_FOUND)
+        status = SOUP_STATUS_CONFLICT;
+      goto end;
+    }
 
-  file = handler_get_file_for_path (handler, path);
+  dest_file = phodav_path_resolve (handler, udest, PHODAV_PATH_CREATE, &status);
+  if (!dest_file)
+    goto end;
 
   /* take the short path as g_file_copy seems to be rather complicated */
   if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))
@@ -304,7 +295,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (req, server, file, dest_file, udest, depth,
+  status = do_movecopy_file (req, server, file, dest_file, path, udest, depth,
                              cancellable, err);
 
 end:

@@ -132,6 +132,7 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancell
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *fetag = NULL;
+  gint status;
 
   g_debug ("check etag %s for %s", etag, path);
 
@@ -139,7 +140,10 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancell
   if (!handler_path_is_covered (handler, path))
     return FALSE;
 
-  file = handler_get_file_for_path (handler, path);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    return FALSE;
+
   info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)

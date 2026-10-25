@@ -334,7 +334,11 @@ prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (ctx->handler, ctx->path);
+  file = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                              &status);
+  if (!file)
+    goto end;
+
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
 
@@ -368,7 +372,11 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (ctx->handler, ctx->path);
+  file = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                              &status);
+  if (!file)
+    goto end;
+
   if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
                                   cancellable,
@@ -582,7 +590,10 @@ propfind_query_zero (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xm
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
-  file = handler_get_file_for_path (handler, path);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    return status;
+
   info = g_file_query_info (file, FILE_QUERY,
                             G_FILE_QUERY_INFO_NONE, cancellable, &err);
   if (err)
@@ -614,8 +625,12 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   if (status != SOUP_STATUS_OK)
     return status;
 
-  file = handler_get_file_for_path (handler, path);
-  e = g_file_enumerate_children (file, FILE_QUERY, G_FILE_QUERY_INFO_NONE,
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    return status;
+
+  e = g_file_enumerate_children (file, FILE_QUERY,
+                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                  cancellable, &err);
   if (!e)
     goto end;
@@ -628,7 +643,16 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
         break;
 
       g_autofree gchar *child_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
-      g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
+      g_autoptr(GFile) child = NULL;
+      gint child_status;
+
+      if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
+        continue;
+
+      child = phodav_path_resolve (handler, child_path, PHODAV_PATH_EXISTING,
+                                   &child_status);
+      if (!child)
+        continue;
 
       /* the properties of a member are queried on the member, not
        * on the collection it was listed from */

@@ -11,17 +11,6 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
-static gint
-error_to_status (GError *err)
-{
-  if (g_error_matches (err, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-    return SOUP_STATUS_NOT_FOUND;
-  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-    return SOUP_STATUS_NOT_FOUND;
-
-  return SOUP_STATUS_FORBIDDEN;
-}
-
 gint
 phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
 {
@@ -29,7 +18,8 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
   g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NO_CONTENT;
 
-  e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
+  e = g_file_enumerate_children (file, "standard::*",
+                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                  cancellable, NULL);
   if (e)
     {
@@ -42,6 +32,18 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
           /* the multistatus keys are the decoded resource paths, the
            * hrefs are escaped when the response is built */
           g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
+
+          if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
+            {
+              g_autoptr(GError) link_error = NULL;
+
+              if (!g_file_delete (del, cancellable, &link_error) && mstatus)
+                g_hash_table_insert (mstatus, g_strdup (del_path),
+                                     response_new (NULL,
+                                                   phodav_status_from_error (link_error)));
+              continue;
+            }
+
           phodav_delete_file (server, del_path, del, mstatus, cancellable);
         }
 
@@ -56,7 +58,7 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
     {
       if (mstatus)
         {
-          status = error_to_status (del_error);
+          status = phodav_status_from_error (del_error);
 
           g_hash_table_insert (mstatus, g_strdup (path),
                                response_new (NULL, status));
@@ -113,7 +115,9 @@ phodav_method_delete (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = handler_get_file_for_path (handler, path);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    goto end;
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 

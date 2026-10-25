@@ -17,15 +17,8 @@ do_mkcol_file (GFile *file, GCancellable *cancellable, GError **err)
 
   if (!g_file_make_directory (file, cancellable, &error))
     {
-      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        status = SOUP_STATUS_CONFLICT;
-      else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-        status = SOUP_STATUS_METHOD_NOT_ALLOWED;
-      else
-        {
-          status = SOUP_STATUS_FORBIDDEN;
-          g_propagate_error (err, g_steal_pointer (&error));
-        }
+      status = phodav_status_from_error (error);
+      g_propagate_error (err, g_steal_pointer (&error));
     }
 
   return status;
@@ -67,7 +60,10 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = handler_get_file_for_path (handler, path);
+  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!file)
+    goto end;
+
   status = do_mkcol_file (file, cancellable, err);
 
 end:

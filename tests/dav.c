@@ -1067,6 +1067,11 @@ test_movecopy_symlink_destination (DavFixture *f, gconstpointer user_data)
   g_assert_true (g_file_make_symbolic_link (link, outside, NULL, &error));
   g_assert_no_error (error);
 
+  /* the same policy applies to every method: a symlinked GET source
+   * is refused instead of following the link out of the share */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/link", NULL, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+
   dest = g_strconcat (f->base_uri, "link/copied.txt", NULL);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
                                 "Destination", dest, NULL),

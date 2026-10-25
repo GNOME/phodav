@@ -61,7 +61,8 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
   if (g_strcmp0 (phodav_request_get_method (req), "HEAD") == 0)
     return SOUP_STATUS_OK;
 
-  e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
+  e = g_file_enumerate_children (file, "standard::*",
+                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                  cancellable, error);
   if (!e)
     return g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
@@ -96,6 +97,9 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
 
       if (info == NULL)
         break;
+
+      if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
+        continue;
 
       dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
       base = g_strdup (g_file_info_get_name (info));
@@ -359,9 +363,13 @@ phodav_method_get (PhodavRequest *req, GError **err)
   PathHandler *handler = phodav_request_get_handler (req);
   GFile *file;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
-  gint status;
+  gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  file = handler_get_file_for_path (handler, phodav_request_get_path (req));
+  file = phodav_path_resolve (handler, phodav_request_get_path (req),
+                              PHODAV_PATH_EXISTING, &status);
+  if (!file)
+    return status;
+
   status = method_get (req, file, cancellable, err);
   g_object_unref (file);
 
