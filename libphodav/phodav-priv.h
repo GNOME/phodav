@@ -109,7 +109,6 @@ gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNU
 GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
 GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
-gboolean handler_get_readonly (PathHandler *handler) G_GNUC_PURE;
 guint64 handler_get_max_upload (PathHandler *handler) G_GNUC_PURE;
 
 /* the SoupServer callbacks, registered and disconnected by the

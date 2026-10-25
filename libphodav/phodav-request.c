@@ -99,8 +99,16 @@ request_path_is_valid (SoupServerMessage *msg, const gchar *path)
   else
     return TRUE;
 
-  soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
   return FALSE;
+}
+
+/* refuse a request before its body is parsed, and drain whatever the
+ * client is still sending rather than accumulating it */
+static void
+request_refuse (SoupServerMessage *msg, guint status)
+{
+  soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+  soup_server_message_set_status (msg, status, NULL);
 }
 
 /* a body which is not delimited by a Content-Length cannot be
@@ -160,6 +168,21 @@ got_headers (SoupServerMessage *msg,
   if (!path || !path_is_covered (path, self->base_path))
     return;
 
+  /* the request admission policy is applied here, before any body is
+   * received: the streamed and non-streamed methods cannot diverge on
+   * the path and read-only guards */
+  if (!request_path_is_valid (msg, path))
+    {
+      request_refuse (msg, SOUP_STATUS_BAD_REQUEST);
+      return;
+    }
+
+  if (m && self->readonly && m->mutating)
+    {
+      request_refuse (msg, SOUP_STATUS_FORBIDDEN);
+      return;
+    }
+
   /* a method which streams its request body out while it is
    * received (PUT) is started from here, before the body arrives:
    * it is answered from its got-body callback, not by
@@ -167,25 +190,6 @@ got_headers (SoupServerMessage *msg,
   if (m && m->headers_handler)
     {
       g_autoptr(GError) err = NULL;
-
-      /* the request is validated like server_callback() validates
-       * the ones of the other methods; a refused client may still
-       * be sending its body: have it drained, not accumulated */
-      if (!request_path_is_valid (msg, path))
-        {
-          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-          return;
-        }
-
-      /* a read-only server refuses the mutating methods before
-       * their upload is started, like server_callback() does for
-       * the other ones */
-      if (self->readonly && m->mutating)
-        {
-          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-          soup_server_message_set_status (msg, SOUP_STATUS_FORBIDDEN, NULL);
-          return;
-        }
 
       m->headers_handler (self->root_handler, msg, path, &err);
 
@@ -202,8 +206,7 @@ got_headers (SoupServerMessage *msg,
   if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
     {
       g_debug ("refusing the oversized request body");
-      soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-      soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
+      request_refuse (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
       return;
     }
 
@@ -264,9 +267,6 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
   if (m && m->headers_handler)
     return;
 
-  if (!request_path_is_valid (msg, path))
-    return;
-
   params = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
   g_hash_table_insert (params, g_strdup ("charset"), g_strdup ("utf-8"));
   response_headers = soup_server_message_get_response_headers (msg);
@@ -292,8 +292,6 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
           /* rather than warning, answer that the method is not implemented */
           g_debug ("unsupported method %s", method);
         }
-      else if (handler_get_readonly (handler) && m->mutating)
-        status = SOUP_STATUS_FORBIDDEN;
       else
         status = m->handler (handler, msg, path, &err);
     }

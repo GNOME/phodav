@@ -110,12 +110,6 @@ handler_get_cancellable (PathHandler *handler)
   return handler->self->cancellable;
 }
 
-gboolean
-handler_get_readonly (PathHandler *handler)
-{
-  return handler->self->readonly;
-}
-
 guint64
 handler_get_max_upload (PathHandler *handler)
 {
