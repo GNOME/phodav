@@ -211,6 +211,12 @@ handler_get_root_file (PathHandler *handler)
   return handler->file;
 }
 
+PhodavBackend *
+handler_get_backend (PathHandler *handler)
+{
+  return handler->backend;
+}
+
 static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
@@ -218,6 +224,7 @@ path_handler_new (PhodavServer *self, GFile *file)
 
   h->self = self;
   h->file = g_object_ref (file);
+  h->backend = phodav_backend_new (file);
   /* the base path may change on the main thread, but this handler is
    * replaced with its registration at the same time: keep an
    * immutable snapshot for the requests already routed to it */
@@ -241,6 +248,7 @@ path_handler_unref (PathHandler *h)
     return;
 
   g_object_unref (h->file);
+  phodav_backend_unref (h->backend);
   g_free (h->base_path);
   g_free (h);
 }

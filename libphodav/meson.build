@@ -7,6 +7,10 @@ headers = [
 install_headers(headers, subdir : 'libphodav-3.0/libphodav')
 
 sources = [
+  'phodav-backend.c',
+  'phodav-backend-gfile.c',
+  'phodav-backend-native.c',
+  'phodav-backend-virtual.c',
   'phodav-if.c',
   'phodav-lock.c',
   'phodav-lock-store.c',

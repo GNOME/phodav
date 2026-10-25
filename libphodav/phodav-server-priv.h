@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "phodav-backend.h"
 #include "phodav-priv.h"
 
 G_BEGIN_DECLS
@@ -47,7 +48,8 @@ struct _PathHandler
 {
   PhodavServer *self; /* borrowed, kept alive by the request */
   GFile *file;
-  gchar *base_path; /* immutable snapshot of the server base path */
+  PhodavBackend *backend; /* selected from @file, owns the resolution policy */
+  gchar *base_path;       /* immutable snapshot of the server base path */
   gint ref_count;
 };
 

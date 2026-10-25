@@ -124,6 +124,8 @@ const gchar *handler_get_relative_path (PathHandler *handler, const gchar *path)
 gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNUC_PURE;
 /* the shared root, borrowed */
 GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
+/* the filesystem backend selected for the shared root, borrowed */
+struct _PhodavBackend *handler_get_backend (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 PathHandler *path_handler_ref (PathHandler *handler);
 void path_handler_unref (PathHandler *handler);
