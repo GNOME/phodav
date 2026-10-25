@@ -69,7 +69,7 @@ handler_get_server (PathHandler *handler)
 gboolean
 handler_path_is_covered (PathHandler *handler, const gchar *path)
 {
-  return path && path_is_covered (path, handler->self->base_path);
+  return path && path_is_covered (path, handler->base_path);
 }
 
 /* the share-relative path of @path, borrowed: the base path is
@@ -86,7 +86,7 @@ handler_get_relative_path (PathHandler *handler, const gchar *path)
   if (!handler_path_is_covered (handler, path))
     return NULL;
 
-  base_len = strlen (handler->self->base_path);
+  base_len = strlen (handler->base_path);
   if (base_len > 1)
     {
       relative = path + base_len;
@@ -116,6 +116,10 @@ path_handler_new (PhodavServer *self, GFile *file)
 
   h->self = self;
   h->file = g_object_ref (file);
+  /* the base path may change on the main thread, but this handler is
+   * replaced with its registration at the same time: keep an
+   * immutable snapshot for the requests already routed to it */
+  h->base_path = g_strdup (self->base_path);
   h->ref_count = 1;
   return h;
 }
@@ -135,6 +139,7 @@ path_handler_unref (PathHandler *h)
     return;
 
   g_object_unref (h->file);
+  g_free (h->base_path);
   g_free (h);
 }
 

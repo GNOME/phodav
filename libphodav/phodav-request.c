@@ -814,7 +814,7 @@ got_headers (SoupServerMessage *msg,
    * observed here. When the SoupServer is shared with other
    * handlers, the base path must be a prefix no other handler
    * covers. */
-  if (!path || !path_is_covered (path, self->base_path))
+  if (!path || !handler_path_is_covered (self->root_handler, path))
     return;
 
   /* the request admission policy is applied here, before any body is

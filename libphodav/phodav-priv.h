@@ -109,6 +109,7 @@ struct _PathHandler
 {
   PhodavServer *self; /* borrowed, kept alive by the request */
   GFile *file;
+  gchar *base_path; /* immutable snapshot of the server base path */
   gint ref_count;
 };
 
