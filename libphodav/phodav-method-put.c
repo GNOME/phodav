@@ -10,6 +10,21 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
+/* the upload phases:
+ *
+ * RECEIVING -> DONE        the staged file was committed
+ * RECEIVING -> DISCARDING  the request failed; cleanup waits for writes
+ * DISCARDING -> DISCARDED  no write is in flight, the staged file is gone
+ *
+ * The phase is never left once it is decided. */
+typedef enum
+{
+  PUT_PHASE_RECEIVING,
+  PUT_PHASE_DONE,
+  PUT_PHASE_DISCARDING,
+  PUT_PHASE_DISCARDED,
+} PutPhase;
+
 typedef struct _PutContext
 {
   gint ref_count;
@@ -21,17 +36,16 @@ typedef struct _PutContext
   GFileOutputStream *output;
   gchar *if_match; /* the conditional headers, rechecked before the rename */
   gchar *if_none_match;
-  GQueue *chunks;           /* the received chunks waiting for their turn on disk */
-  GBytes *chunk;            /* the chunk being written */
-  guint64 written;          /* bytes streamed to the file so far */
-  gint status;              /* the success status, answered once the file is committed */
-  gboolean closed;          /* the output stream was closed */
-  gboolean done;            /* the outcome is decided: the file is committed or discarded */
-  gboolean writing;         /* an asynchronous write is in flight */
-  gboolean body_done;       /* the whole request body was received */
-  gboolean paused;          /* the message I/O is paused while a write is in flight */
-  gboolean finished;        /* the message is done, it must not be touched anymore */
-  gboolean discard_pending; /* the staged file is cleaned up once the write ends */
+  GQueue *chunks;     /* the received chunks waiting for their turn on disk */
+  GBytes *chunk;      /* the chunk being written */
+  guint64 written;    /* bytes streamed to the file so far */
+  gint status;        /* the success status, answered once the file is committed */
+  gboolean closed;    /* the output stream was closed */
+  PutPhase phase;     /* the upload outcome, see above */
+  gboolean writing;   /* an asynchronous write is in flight */
+  gboolean body_done; /* the whole request body was received */
+  gboolean paused;    /* the message I/O is paused while a write is in flight */
+  gboolean finished;  /* the message is done, it must not be touched anymore */
 } PutContext;
 
 static void put_write_next (PutContext *ctx);
@@ -78,6 +92,25 @@ put_context_cleanup_files (PutContext *ctx)
     g_debug ("PUT: failed to remove the staged file: %s", delete_error->message);
 
   g_clear_object (&ctx->temp_file);
+}
+
+static gboolean
+put_context_is_decided (const PutContext *ctx)
+{
+  return ctx->phase != PUT_PHASE_RECEIVING;
+}
+
+/* the staged file is removed once no write is in flight anymore:
+ * closing a GFileOutputStream while an asynchronous write is pending
+ * races with that write */
+static void
+put_context_discard_if_idle (PutContext *ctx)
+{
+  if (ctx->phase == PUT_PHASE_DISCARDING && !ctx->writing)
+    {
+      put_context_cleanup_files (ctx);
+      ctx->phase = PUT_PHASE_DISCARDED;
+    }
 }
 
 static void
@@ -161,27 +194,16 @@ put_preconditions_hold (const gchar *if_match, const gchar *if_none_match, const
 static void
 put_context_abort (PutContext *ctx)
 {
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     {
-      if (ctx->discard_pending && !ctx->writing)
-        {
-          ctx->discard_pending = FALSE;
-          put_context_cleanup_files (ctx);
-        }
-
+      put_context_discard_if_idle (ctx);
       return;
     }
 
-  ctx->done = TRUE;
+  ctx->phase = PUT_PHASE_DISCARDING;
   g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
 
-  if (ctx->writing)
-    {
-      ctx->discard_pending = TRUE;
-      return;
-    }
-
-  put_context_cleanup_files (ctx);
+  put_context_discard_if_idle (ctx);
 }
 
 static void
@@ -224,7 +246,7 @@ put_write_next (PutContext *ctx)
   gconstpointer data;
   gsize data_length;
 
-  if (ctx->done || ctx->writing)
+  if (put_context_is_decided (ctx) || ctx->writing)
     return;
 
   if (!ctx->chunk)
@@ -294,16 +316,10 @@ put_chunk_written_cb (GObject *source_object,
 
   /* the request was refused: disconnect the chunk handler already, and
    * drain what the client still sends without staging it */
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     {
       put_resume (ctx);
-
-      if (ctx->discard_pending && !ctx->writing)
-        {
-          ctx->discard_pending = FALSE;
-          put_context_cleanup_files (ctx);
-        }
-
+      put_context_discard_if_idle (ctx);
       put_context_unref (ctx);
       return;
     }
@@ -338,7 +354,7 @@ method_put_got_chunk (SoupServerMessage *msg,
   PutContext *ctx = user_data;
   gsize data_length;
 
-  if (ctx->done || ctx->finished)
+  if (put_context_is_decided (ctx) || ctx->finished)
     return;
 
   data_length = g_bytes_get_size (chunk);
@@ -363,7 +379,7 @@ put_finish (PutContext *ctx)
   g_autoptr(GError) error = NULL;
   gint status;
 
-  if (ctx->done || ctx->writing || ctx->chunks->length > 0)
+  if (put_context_is_decided (ctx) || ctx->writing || ctx->chunks->length > 0)
     return;
 
   g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
@@ -388,7 +404,7 @@ put_finish (PutContext *ctx)
       goto end;
     }
 
-  ctx->done = TRUE;
+  ctx->phase = PUT_PHASE_DONE;
   soup_server_message_set_status (ctx->msg, ctx->status, NULL);
 
 end:
@@ -408,7 +424,7 @@ method_put_got_body (SoupServerMessage *msg,
 
   /* the upload was already discarded by a got-chunk handler: keep
    * the error status it set */
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     return;
 
   if (ctx->writing || ctx->chunks->length > 0)
