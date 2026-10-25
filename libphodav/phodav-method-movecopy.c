@@ -37,18 +37,14 @@ path_is_directory (PhodavPath *path, GCancellable *cancellable)
 }
 
 static gint
-delete_destination (PhodavServer *server, PhodavPath *dest,
-                    const gchar *dest_path, GCancellable *cancellable)
+delete_destination (PhodavServer *server, PhodavPath *dest, const gchar *dest_path, GCancellable *cancellable)
 {
   return phodav_path_delete_tree (server, dest, dest_path,
                                   NULL, NULL, cancellable);
 }
 
 static gint
-do_movecopy_file (PhodavRequest *req, PhodavServer *server,
-                  PhodavPath *src, PhodavPath *dest,
-                  const gchar *src_path, const gchar *dest_path,
-                  DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (PhodavRequest *req, PhodavServer *server, PhodavPath *src, PhodavPath *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
@@ -99,7 +95,15 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server,
     }
 
   if (ok)
-    return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+    {
+      /* the source is gone: do not leave its locks behind on a path
+       * which no longer names a resource. An overwritten destination
+       * was already cleaned up by delete_destination(). */
+      if (!copy)
+        phodav_lock_store_remove_locks (server, src_path);
+
+      return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
+    }
 
   if (!overwrite && g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
     return SOUP_STATUS_PRECONDITION_FAILED;
@@ -186,9 +190,9 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       }
   }
 
-  /* the lock check and the resolution of both resources are the
-   * decision point: take the write lock only for them, then let the
-   * long copy or the rename run without holding it. */
+  /* the lock check, the resolution of both resources and the copy or
+   * rename form one critical section: no lock may be taken on a
+   * resource which is about to be removed or replaced. */
   phodav_server_write_lock (server);
 
   status = phodav_check_if (req, &submitted);
@@ -235,12 +239,12 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       goto unlock;
     }
 
-unlock:
-  phodav_server_write_unlock (server);
-
   if (status == SOUP_STATUS_OK && handle && dest_handle)
     status = do_movecopy_file (req, server, handle, dest_handle, path,
                                udest, depth, cancellable, err);
+
+unlock:
+  phodav_server_write_unlock (server);
 
 end:
   if (dest_uri)

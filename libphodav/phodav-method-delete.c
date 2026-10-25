@@ -40,10 +40,9 @@ phodav_method_delete (PhodavRequest *req, GError **err)
       depth != DEPTH_INFINITY)
     return SOUP_STATUS_BAD_REQUEST;
 
-  /* decide under the write lock whether the request may proceed: the
-   * lock check and the resolution of the resource must not race with
-   * a mutation. The recursive deletion itself runs outside the lock,
-   * so it does not stall the other requests. */
+  /* the lock check, the resolution and the recursive deletion form
+   * one critical section: no lock may be taken on a resource which is
+   * about to be removed. */
   phodav_server_write_lock (server);
 
   status = phodav_check_if (req, &submitted);
@@ -59,21 +58,21 @@ phodav_method_delete (PhodavRequest *req, GError **err)
     }
 
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-
-unlock:
-  phodav_server_write_unlock (server);
-
   if (status != SOUP_STATUS_OK || !handle)
-    return status;
+    goto unlock;
 
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 
   status = phodav_path_delete_tree (server, handle, path,
                                     delete_notify, mstatus, cancellable);
-  if (status == SOUP_STATUS_NO_CONTENT)
-    if (g_hash_table_size (mstatus) > 0)
-      status = set_response_multistatus (req, mstatus, NULL);
+
+unlock:
+  phodav_server_write_unlock (server);
+
+  if (status == SOUP_STATUS_NO_CONTENT && mstatus &&
+      g_hash_table_size (mstatus) > 0)
+    status = set_response_multistatus (req, mstatus, NULL);
 
   return status;
 }

@@ -2379,6 +2379,12 @@ test_locked_destination (DavFixture *f, gconstpointer user_data)
       g_assert_false (g_file_test (source, G_FILE_TEST_EXISTS));
       assert_file_contents (moved, "member\n");
     }
+
+    /* the source and its member locks are gone with the moved
+     * collection: the old token no longer unlocks anything */
+    g_assert_cmpuint (dav_status (f, "UNLOCK", "/moving/member.txt", NULL,
+                                  "Lock-Token", member_token, NULL),
+                      ==, SOUP_STATUS_CONFLICT);
   }
 }
 

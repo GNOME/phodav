@@ -29,10 +29,12 @@
  * the body is referenced first, and the response is applied back on
  * the main context when the method returns. The methods share a
  * private, bounded worker pool; a reader-writer lock protects the
- * filesystem decision points, while the long operations (COPY, a
- * recursive DELETE, syncing an upload) run outside it. The streaming
- * responses pull their chunks on demand from a separate pool instead
- * of holding a worker for the whole transfer.
+ * filesystem decision points. COPY, DELETE and MOVE keep the write
+ * lock until the filesystem operation completes, so a lock cannot be
+ * taken on a resource which is about to be removed or replaced. The
+ * upload is synced outside the lock, and streaming responses pull
+ * their chunks on demand from a separate pool instead of holding a
+ * worker for the whole transfer.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
