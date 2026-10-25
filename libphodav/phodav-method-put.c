@@ -154,7 +154,7 @@ put_context_unref (PutContext *ctx)
 }
 
 static PutContext *
-put_context_new (PathHandler *handler,
+put_context_new (PhodavRequest *req,
                  SoupServerMessage *msg,
                  PhodavPath *handle,
                  GFile *temp_file,
@@ -172,7 +172,7 @@ put_context_new (PathHandler *handler,
    * freed before the asynchronous write completes: keep what the
    * callbacks need */
   ctx->cancellable = g_object_ref (cancellable);
-  ctx->max_upload = handler_get_max_upload (handler);
+  ctx->max_upload = phodav_request_get_max_upload (req);
   ctx->handle = phodav_path_ref (handle);
   ctx->temp_file = g_object_ref (temp_file);
   ctx->output = g_object_ref (output);
@@ -637,7 +637,6 @@ static gint
 put_start (PhodavRequest *req, PhodavPath *handle, PutContext **out, GCancellable *cancellable, GError **err)
 {
   GFile *dest_file = phodav_path_get_named_file (handle);
-  PathHandler *handler = phodav_request_get_handler (req);
   SoupServerMessage *msg = phodav_request_get_message (req);
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
@@ -698,7 +697,7 @@ put_start (PhodavRequest *req, PhodavPath *handle, PutContext **out, GCancellabl
     }
 
   status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
-  *out = put_context_new (handler, msg, handle, temp_file, output, status,
+  *out = put_context_new (req, msg, handle, temp_file, output, status,
                           if_match, if_none_match, cancellable);
 
 end:
@@ -736,7 +735,7 @@ put_start_run (gpointer data)
   PhodavServer *server = handler_get_server (handler);
   const gchar *path = phodav_request_get_path (req);
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
-  guint64 max_upload = handler_get_max_upload (handler);
+  guint64 max_upload = phodav_request_get_max_upload (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autolist(LockSubmitted) submitted = NULL;
   g_autoptr(PhodavPath) handle = NULL;

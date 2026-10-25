@@ -11,6 +11,7 @@
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
+#include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
 /**
@@ -51,10 +52,6 @@ typedef enum
 } PhodavServerProps;
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
-
-/* how often to look for expired locks; they are also expired lazily
- * when they are used, this only reclaims the memory */
-#define LOCK_EXPIRY_INTERVAL 1
 
 /* the DAV methods are filesystem-bound: a handful of workers is enough
  * to make progress without letting requests pile up on the process
@@ -214,12 +211,6 @@ handler_get_root_file (PathHandler *handler)
   return handler->file;
 }
 
-guint64
-handler_get_max_upload (PathHandler *handler)
-{
-  return handler->self->max_upload;
-}
-
 static PathHandler *
 path_handler_new (PhodavServer *self, GFile *file)
 {
@@ -278,9 +269,55 @@ phodav_server_init (PhodavServer *self)
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {
-  phodav_lock_store_expire_locks (PHODAV_SERVER (user_data));
+  PhodavServer *self = PHODAV_SERVER (user_data);
 
-  return G_SOURCE_CONTINUE;
+  /* this source is being removed when the callback returns */
+  self->expire_locks_source = NULL;
+  phodav_lock_store_expire_locks (self);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+schedule_lock_expiry_cb (gpointer user_data)
+{
+  PhodavServer *self = user_data;
+  g_autoptr(GSource) source = NULL;
+  gint64 next, now;
+  guint delay;
+
+  if (self->stopped)
+    return G_SOURCE_REMOVE;
+
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+
+  next = phodav_lock_store_next_expiry (self);
+  if (!next)
+    return G_SOURCE_REMOVE;
+
+  now = g_get_monotonic_time () / G_USEC_PER_SEC;
+  delay = next > now ? (guint) MIN ((guint64) (next - now), G_MAXUINT) : 0;
+
+  source = g_timeout_source_new_seconds (delay);
+  g_source_set_callback (source, expire_locks_timeout, self, NULL);
+  g_source_attach (source, self->expire_locks_context);
+  self->expire_locks_source = source;
+
+  return G_SOURCE_REMOVE;
+}
+
+void
+phodav_server_schedule_lock_expiry (PhodavServer *self)
+{
+  if (self->stopped)
+    return;
+
+  /* the source belongs to the server context: reschedule there, from
+   * whichever worker added, refreshed or removed a lock */
+  g_main_context_invoke_full (self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              schedule_lock_expiry_cb,
+                              g_object_ref (self), g_object_unref);
 }
 
 static void
@@ -346,19 +383,6 @@ phodav_server_constructed (GObject *gobject)
                                          TRUE, NULL);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (phodav_server_request_started), self);
-
-  {
-    g_autoptr(GSource) source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
-
-    /* g_timeout_add_seconds() cannot be used here: it would attach
-     * the sweep to the global default context instead of the one
-     * this server runs on */
-    g_source_set_callback (source, expire_locks_timeout, self, NULL);
-    g_source_attach (source, self->expire_locks_context);
-    /* the context owns the source while it is attached and dispose()
-     * detaches it, keep only a borrowed pointer */
-    self->expire_locks_source = source;
-  }
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)

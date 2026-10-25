@@ -73,48 +73,6 @@ struct _DAVLock
   guint64 timeout;
 };
 
-/* the state of a PhodavServer, shared by the server, lock store and
- * request dispatch implementations; private to libphodav */
-struct _PhodavServer
-{
-  GObject parent;
-  SoupServer *server;
-  GCancellable *cancellable;
-  GFile *root_file;
-  gchar *base_path;
-  PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
-  gchar *handler_path;       /* the path the handler is registered at */
-  GHashTable *paths;
-  gboolean readonly;
-  guint64 max_upload;
-  gboolean constructing;
-  gboolean stopped;
-  GMainContext *expire_locks_context;
-  GSource *expire_locks_source;
-
-  /* the private, bounded pools the DAV methods and the response
-   * producers run on; keeping them apart lets a download keep making
-   * progress while the request workers wait for the filesystem lock */
-  GThreadPool *pool;
-  GThreadPool *stream_pool;
-
-  /* protects the lock table during a lookup or update. It never covers
-   * a filesystem operation: the value-returning lock store API only
-   * exposes owned decisions and XML nodes. */
-  GMutex lock_store_mutex;
-  /* serializes the filesystem operations: mutations take it for
-   * writing, while reads may share it */
-  GRWLock fs_lock;
-};
-
-struct _PathHandler
-{
-  PhodavServer *self; /* borrowed, kept alive by the request */
-  GFile *file;
-  gchar *base_path; /* immutable snapshot of the server base path */
-  gint ref_count;
-};
-
 typedef enum
 {
   PHODAV_PATH_EXISTING,
@@ -170,7 +128,6 @@ PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 PathHandler *path_handler_ref (PathHandler *handler);
 void path_handler_unref (PathHandler *handler);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC (PathHandler, path_handler_unref)
-guint64 handler_get_max_upload (PathHandler *handler) G_GNUC_PURE;
 
 /* the SoupServer callbacks, registered and disconnected by the
  * server, implemented by the request dispatch */
@@ -216,7 +173,8 @@ gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
  * The body stays shared with the message, which is safe once it is
  * complete and the message is paused. The response is applied back on
  * the main loop once the method returns. */
-PhodavRequest *phodav_request_new (PathHandler *handler,
+PhodavRequest *phodav_request_new (PhodavServer *self,
+                                   PathHandler *handler,
                                    SoupServerMessage *msg,
                                    const gchar *path);
 PhodavRequest *phodav_request_ref (PhodavRequest *req);
@@ -231,6 +189,7 @@ SoupMessageHeaders *phodav_request_get_request_headers (PhodavRequest *req) G_GN
 SoupMessageBody *phodav_request_get_request_body (PhodavRequest *req) G_GNUC_PURE;
 GUri *phodav_request_get_uri (PhodavRequest *req) G_GNUC_PURE;
 GCancellable *phodav_request_get_cancellable (PhodavRequest *req) G_GNUC_PURE;
+guint64 phodav_request_get_max_upload (PhodavRequest *req) G_GNUC_PURE;
 SoupMessageHeaders *phodav_request_get_response_headers (PhodavRequest *req) G_GNUC_PURE;
 void phodav_request_set_status (PhodavRequest *req, guint status, const gchar *reason);
 guint phodav_request_get_status (PhodavRequest *req) G_GNUC_PURE;

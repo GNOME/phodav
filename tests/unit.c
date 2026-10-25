@@ -11,6 +11,7 @@
 #include "phodav-lock.h"
 #include "phodav-path.h"
 #include "phodav-priv.h"
+#include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
 /* phodav-method-lock.c generates "urn:uuid:<uuid>" tokens and

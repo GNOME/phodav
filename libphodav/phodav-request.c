@@ -8,6 +8,7 @@
 
 #include "phodav-lock.h"
 #include "phodav-priv.h"
+#include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
 typedef struct _DavMethod DavMethod;
@@ -48,16 +49,18 @@ static const DavMethod dav_methods[] = {
   { "UNLOCK", FALSE, phodav_method_unlock, NULL },
 };
 
-/* the per-message cancellation state, owned by the SoupServerMessage */
-typedef struct _RequestCancel
+/* the request lifecycle, kept in one state field: the bits are set
+ * atomically because the worker threads and the main context both
+ * observe them */
+typedef enum
 {
-  GCancellable *cancellable;
-  GCancellable *server_cancellable;
-  gulong server_handler;
-  GWeakRef server;
-  gint server_cancelled;
-  gint finished;
-} RequestCancel;
+  PHODAV_REQUEST_ADMITTED = 1 << 0,
+  PHODAV_REQUEST_RUNNING = 1 << 1,
+  PHODAV_REQUEST_STREAMING = 1 << 2,
+  PHODAV_REQUEST_DONE = 1 << 3,
+  PHODAV_REQUEST_CLIENT_GONE = 1 << 4,
+  PHODAV_REQUEST_SERVER_STOPPING = 1 << 5,
+} PhodavRequestState;
 
 struct _PhodavRequest
 {
@@ -72,8 +75,13 @@ struct _PhodavRequest
   SoupMessageBody *request_body;
   GUri *uri;
   GCancellable *cancellable;
+  GCancellable *server_cancellable;
+  gulong server_handler;
   GMainContext *context;
-  gboolean streamed;
+  gint state;
+
+  gboolean readonly;
+  guint64 max_upload;
 
   SoupMessageHeaders *response_headers;
   GBytes *body;
@@ -83,6 +91,46 @@ struct _PhodavRequest
   gint (*handler_func) (PhodavRequest *req, GError **err);
   GError *error;
 };
+
+typedef enum
+{
+  PHODAV_STREAM_STARTED = 1 << 0,
+  PHODAV_STREAM_ENDED = 1 << 1,
+  PHODAV_STREAM_PULLING = 1 << 2,
+} PhodavStreamState;
+
+typedef enum
+{
+  REQUEST_ADMISSION_IGNORED,
+  REQUEST_ADMISSION_REFUSED,
+  REQUEST_ADMISSION_PENDING,
+  REQUEST_ADMISSION_STREAMED,
+} RequestAdmission;
+
+static void request_server_cancelled (GCancellable *cancellable,
+                                      gpointer user_data);
+static RequestAdmission request_admit (PhodavRequest *req);
+
+static gboolean
+request_state_has (const PhodavRequest *req, PhodavRequestState state)
+{
+  return (g_atomic_int_get (&req->state) & state) != 0;
+}
+
+static void
+request_state_add (PhodavRequest *req, PhodavRequestState state)
+{
+  g_atomic_int_or (&req->state, state);
+}
+
+/* break the message -> request -> message reference cycle once the
+ * request no longer needs to be found from its message */
+static void
+request_detach (PhodavRequest *req)
+{
+  if (g_object_get_data (G_OBJECT (req->msg), "phodav-request") == req)
+    g_object_set_data (G_OBJECT (req->msg), "phodav-request", NULL);
+}
 
 static const DavMethod *
 dav_method_lookup (const gchar *method)
@@ -181,25 +229,9 @@ copy_header (const gchar *name,
   soup_message_headers_append (user_data, name, value);
 }
 
-static RequestCancel *
-request_cancel_get (SoupServerMessage *msg)
-{
-  return g_object_get_data (G_OBJECT (msg), "phodav-request-cancel");
-}
-
-static GCancellable *
-request_cancellable_get (SoupServerMessage *msg)
-{
-  RequestCancel *cancel = request_cancel_get (msg);
-
-  if (cancel)
-    return cancel->cancellable;
-
-  return NULL;
-}
-
 PhodavRequest *
-phodav_request_new (PathHandler *handler,
+phodav_request_new (PhodavServer *self,
+                    PathHandler *handler,
                     SoupServerMessage *msg,
                     const gchar *path)
 {
@@ -207,15 +239,19 @@ phodav_request_new (PathHandler *handler,
   SoupMessageHeaders *request_headers;
   SoupMessageBody *request_body;
   GUri *uri;
-  GCancellable *cancellable;
   g_autoptr(GHashTable) params = NULL;
 
   req->ref_count = 1;
-  req->self = g_object_ref (handler_get_server (handler));
-  req->handler = path_handler_ref (handler);
+  req->self = g_object_ref (self);
+  req->handler = handler ? path_handler_ref (handler) : NULL;
   req->msg = g_object_ref (msg);
   req->method = g_strdup (soup_server_message_get_method (msg));
   req->path = g_strdup (path);
+
+  /* the request keeps the configuration it was admitted with, so a
+   * concurrent property change cannot alter an operation in flight */
+  req->readonly = self->readonly;
+  req->max_upload = self->max_upload;
 
   request_headers = soup_server_message_get_request_headers (msg);
   req->request_headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
@@ -228,9 +264,11 @@ phodav_request_new (PathHandler *handler,
   req->uri = uri ? g_uri_ref (uri) : NULL;
 
   req->context = g_main_context_ref (g_main_context_get_thread_default () ?: g_main_context_default ());
-
-  cancellable = request_cancellable_get (msg);
-  req->cancellable = cancellable ? g_object_ref (cancellable) : g_cancellable_new ();
+  req->cancellable = g_cancellable_new ();
+  req->server_cancellable = g_object_ref (self->cancellable);
+  req->server_handler = g_cancellable_connect (req->server_cancellable,
+                                               G_CALLBACK (request_server_cancelled),
+                                               req, NULL);
 
   req->response_headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_RESPONSE);
   params = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
@@ -259,6 +297,7 @@ phodav_request_ref (PhodavRequest *req)
 static void
 phodav_request_free (PhodavRequest *req)
 {
+  g_signal_handlers_disconnect_by_data (req->msg, req);
   g_clear_object (&req->self);
   g_clear_pointer (&req->handler, path_handler_unref);
   g_clear_object (&req->msg);
@@ -267,6 +306,9 @@ phodav_request_free (PhodavRequest *req)
   g_clear_pointer (&req->request_headers, soup_message_headers_unref);
   g_clear_pointer (&req->request_body, soup_message_body_unref);
   g_clear_pointer (&req->uri, g_uri_unref);
+  if (req->server_handler)
+    g_cancellable_disconnect (req->server_cancellable, req->server_handler);
+  g_clear_object (&req->server_cancellable);
   g_clear_object (&req->cancellable);
   g_clear_pointer (&req->context, g_main_context_unref);
   g_clear_pointer (&req->response_headers, soup_message_headers_unref);
@@ -331,6 +373,12 @@ phodav_request_get_cancellable (PhodavRequest *req)
   return req->cancellable;
 }
 
+guint64
+phodav_request_get_max_upload (PhodavRequest *req)
+{
+  return req->max_upload;
+}
+
 SoupMessageHeaders *
 phodav_request_get_response_headers (PhodavRequest *req)
 {
@@ -387,7 +435,7 @@ request_apply (PhodavRequest *req)
   SoupServerMessage *msg = req->msg;
   SoupMessageHeaders *response_headers;
 
-  if (req->streamed)
+  if (request_state_has (req, PHODAV_REQUEST_STREAMING))
     return;
 
   soup_server_message_set_status (msg, req->status ?: SOUP_STATUS_INTERNAL_SERVER_ERROR,
@@ -419,9 +467,7 @@ struct _PhodavStream
   gulong wrote_id;
   gulong finished_id;
 
-  gboolean started;
-  gboolean ended;
-  gboolean pulling;
+  guint state;
 };
 
 typedef struct _StreamPull
@@ -487,10 +533,10 @@ stream_stop (PhodavStream *stream, gboolean complete, gboolean cut)
 {
   SoupServerMessage *msg = stream->req->msg;
 
-  if (stream->ended)
+  if (stream->state & PHODAV_STREAM_ENDED)
     return;
 
-  stream->ended = TRUE;
+  stream->state |= PHODAV_STREAM_ENDED;
 
   if (stream->wrote_id)
     {
@@ -505,11 +551,13 @@ stream_stop (PhodavStream *stream, gboolean complete, gboolean cut)
 
   if (cut)
     stream_cut_connection (msg);
-  else if (complete && stream->started)
+  else if (complete && (stream->state & PHODAV_STREAM_STARTED))
     {
       soup_message_body_complete (soup_server_message_get_response_body (msg));
       soup_server_message_unpause (msg);
     }
+
+  request_detach (stream->req);
 
   /* the main context reference was the stream's owner */
   stream_unref (stream);
@@ -561,9 +609,9 @@ stream_pull_done (gpointer data)
   PhodavStream *stream = pull->stream;
   gboolean finished;
 
-  stream->pulling = FALSE;
+  stream->state &= ~PHODAV_STREAM_PULLING;
 
-  if (stream->ended)
+  if (stream->state & PHODAV_STREAM_ENDED)
     goto out;
 
   if (pull->error)
@@ -608,7 +656,7 @@ stream_schedule_pull (PhodavStream *stream)
 {
   StreamPull *pull;
 
-  if (stream->ended || stream->pulling)
+  if (stream->state & (PHODAV_STREAM_ENDED | PHODAV_STREAM_PULLING))
     return;
 
   if (g_cancellable_is_cancelled (phodav_request_get_cancellable (stream->req)))
@@ -618,7 +666,7 @@ stream_schedule_pull (PhodavStream *stream)
       return;
     }
 
-  stream->pulling = TRUE;
+  stream->state |= PHODAV_STREAM_PULLING;
   pull = g_new0 (StreamPull, 1);
   pull->stream = stream_ref (stream);
 
@@ -634,7 +682,7 @@ stream_start_cb (gpointer data)
   SoupServerMessage *msg = req->msg;
   SoupMessageHeaders *response_headers;
 
-  if (stream->ended)
+  if (stream->state & PHODAV_STREAM_ENDED)
     return G_SOURCE_REMOVE;
 
   soup_server_message_set_status (msg, stream->status, NULL);
@@ -649,7 +697,7 @@ stream_start_cb (gpointer data)
                                        G_CALLBACK (stream_wrote_chunk), stream);
   stream->finished_id = g_signal_connect (msg, "finished",
                                           G_CALLBACK (stream_finished), stream);
-  stream->started = TRUE;
+  stream->state |= PHODAV_STREAM_STARTED;
 
   stream_schedule_pull (stream);
 
@@ -676,7 +724,7 @@ phodav_request_stream_start (PhodavRequest *req,
 
   /* the response is streamed even before the main context has started
    * it: request_apply() must not replace it with an empty body */
-  req->streamed = TRUE;
+  request_state_add (req, PHODAV_REQUEST_STREAMING);
 
   g_main_context_invoke_full (req->context, G_PRIORITY_DEFAULT,
                               stream_start_cb, stream_ref (stream),
@@ -696,6 +744,19 @@ phodav_stream_abort (PhodavStream *stream)
                               (GDestroyNotify) stream_unref);
 }
 
+static PhodavRequest *
+request_get (SoupServerMessage *msg)
+{
+  return g_object_get_data (G_OBJECT (msg), "phodav-request");
+}
+
+static void
+request_store (SoupServerMessage *msg, PhodavRequest *req)
+{
+  g_object_set_data_full (G_OBJECT (msg), "phodav-request",
+                          req, (GDestroyNotify) phodav_request_unref);
+}
+
 static void
 request_task (gpointer data)
 {
@@ -705,7 +766,8 @@ request_task (gpointer data)
 
   /* the request may have been cancelled while it was queued: do not
    * start a filesystem operation for a client which is already gone */
-  if (g_cancellable_is_cancelled (req->cancellable))
+  if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
+                              PHODAV_REQUEST_SERVER_STOPPING))
     return;
 
   status = req->handler_func (req, &error);
@@ -717,26 +779,22 @@ request_task (gpointer data)
 gboolean
 phodav_request_is_finished (PhodavRequest *req)
 {
-  RequestCancel *cancel = request_cancel_get (req->msg);
-
-  return cancel && g_atomic_int_get (&cancel->finished);
+  return request_state_has (req, PHODAV_REQUEST_CLIENT_GONE);
 }
 
 gboolean
 phodav_request_is_server_cancelled (PhodavRequest *req)
 {
-  RequestCancel *cancel = request_cancel_get (req->msg);
-
-  return cancel && g_atomic_int_get (&cancel->server_cancelled);
+  return request_state_has (req, PHODAV_REQUEST_SERVER_STOPPING);
 }
 
 static void
 request_task_done (gpointer data)
 {
   PhodavRequest *req = data;
-  RequestCancel *cancel = request_cancel_get (req->msg);
-  gboolean finished = cancel && g_atomic_int_get (&cancel->finished);
-  gboolean server_cancelled = cancel && g_atomic_int_get (&cancel->server_cancelled);
+  gboolean finished = request_state_has (req, PHODAV_REQUEST_CLIENT_GONE);
+  gboolean server_cancelled = request_state_has (req, PHODAV_REQUEST_SERVER_STOPPING);
+  gboolean streaming = request_state_has (req, PHODAV_REQUEST_STREAMING);
 
   if (req->error)
     g_debug ("%s %s: %s", req->method, req->path, req->error->message);
@@ -761,96 +819,89 @@ request_task_done (gpointer data)
       request_apply (req);
     }
 
+  /* a streamed response keeps the request reachable from its message
+   * until the stream stops, so that the client-going-away transition
+   * is still observed */
+  if (!streaming)
+    {
+      request_state_add (req, PHODAV_REQUEST_DONE);
+      request_detach (req);
+    }
+
   phodav_request_unref (req);
 }
 
 static void
-request_cancelled (GCancellable *cancellable,
-                   gpointer user_data)
+request_server_cancelled (GCancellable *cancellable,
+                          gpointer user_data)
 {
-  RequestCancel *cancel = user_data;
+  PhodavRequest *req = user_data;
 
-  g_atomic_int_set (&cancel->server_cancelled, TRUE);
-  g_cancellable_cancel (cancel->cancellable);
+  request_state_add (req, PHODAV_REQUEST_SERVER_STOPPING);
+  g_cancellable_cancel (req->cancellable);
 }
 
 static void
-request_cancel_free (gpointer data)
+request_message_finished (SoupServerMessage *msg,
+                          gpointer user_data)
 {
-  RequestCancel *cancel = data;
+  PhodavRequest *req = user_data;
+  g_autoptr(PhodavRequest) hold = phodav_request_ref (req);
 
-  if (cancel->server_handler)
-    g_cancellable_disconnect (cancel->server_cancellable, cancel->server_handler);
-  g_clear_object (&cancel->server_cancellable);
-  g_weak_ref_clear (&cancel->server);
-  g_object_unref (cancel->cancellable);
-  g_free (cancel);
+  request_state_add (req, PHODAV_REQUEST_CLIENT_GONE);
+  g_cancellable_cancel (req->cancellable);
+  request_detach (req);
 }
 
-static void
-message_finished (SoupServerMessage *msg,
-                  gpointer user_data)
+/* the single admission path for the got-headers and handler entry
+ * points. It validates the request before its body is parsed and
+ * starts the streamed methods which have to run from got-headers(). */
+static RequestAdmission
+request_admit (PhodavRequest *req)
 {
-  RequestCancel *cancel = request_cancel_get (msg);
+  const DavMethod *m = dav_method_lookup (req->method);
+  SoupMessageHeaders *request_headers = req->request_headers;
 
-  if (cancel)
+  if (request_state_has (req, PHODAV_REQUEST_ADMITTED))
     {
-      g_atomic_int_set (&cancel->finished, TRUE);
-      g_cancellable_cancel (cancel->cancellable);
+      if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
+                                  PHODAV_REQUEST_SERVER_STOPPING |
+                                  PHODAV_REQUEST_DONE))
+        return REQUEST_ADMISSION_REFUSED;
+
+      return m && m->headers_handler
+               ? REQUEST_ADMISSION_STREAMED
+               : REQUEST_ADMISSION_PENDING;
     }
-}
-
-static void
-got_headers (SoupServerMessage *msg,
-             gpointer user_data)
-{
-  RequestCancel *cancel = user_data;
-  g_autoptr(PhodavServer) self = g_weak_ref_get (&cancel->server);
-  GUri *uri = soup_server_message_get_uri (msg);
-  const gchar *path = g_uri_get_path (uri);
-  const gchar *method = soup_server_message_get_method (msg);
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  const DavMethod *m = dav_method_lookup (method);
-
-  /* the server was stopped and disposed while this request was in
-   * flight: there is nothing left to handle it */
-  if (!self)
-    return;
 
   /* the requests already answered (an authentication challenge, an
    * invalid path...) are not phodav's to handle */
-  if (soup_server_message_get_status (msg) != 0)
-    return;
+  if (soup_server_message_get_status (req->msg) != 0)
+    return REQUEST_ADMISSION_IGNORED;
 
-  /* without a shared root, no handler is registered: the requests
-   * are answered by libsoup, phodav has nothing to do with them */
-  if (!self->root_handler)
-    return;
+  if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
+                              PHODAV_REQUEST_SERVER_STOPPING))
+    return REQUEST_ADMISSION_IGNORED;
 
-  /* only the requests under the base path are phodav's. This is
-   * decided by the configured prefix, not by the routing libsoup
-   * performed: an auth domain makes libsoup return from its headers
-   * processing before the early handlers, so the routing cannot be
-   * observed here. When the SoupServer is shared with other
-   * handlers, the base path must be a prefix no other handler
-   * covers. */
-  if (!path || !handler_path_is_covered (self->root_handler, path))
-    return;
+  /* without a handler the request is not under the share mounted by
+   * this server */
+  if (!req->handler || !req->path ||
+      !handler_path_is_covered (req->handler, req->path))
+    return REQUEST_ADMISSION_IGNORED;
 
-  /* the request admission policy is applied here, before any body is
-   * received: the streamed and non-streamed methods cannot diverge on
-   * the path and read-only guards */
-  if (!request_path_is_valid (msg, path))
+  if (!request_path_is_valid (req->msg, req->path))
     {
-      request_refuse (msg, SOUP_STATUS_BAD_REQUEST);
-      return;
+      request_refuse (req->msg, SOUP_STATUS_BAD_REQUEST);
+      return REQUEST_ADMISSION_REFUSED;
     }
 
-  if (m && self->readonly && m->mutating)
+  if (m && req->readonly && m->mutating)
     {
-      request_refuse (msg, SOUP_STATUS_FORBIDDEN);
-      return;
+      request_refuse (req->msg, SOUP_STATUS_FORBIDDEN);
+      return REQUEST_ADMISSION_REFUSED;
     }
+
+  request_state_add (req, PHODAV_REQUEST_ADMITTED);
 
   /* a method which streams its request body out while it is
    * received (PUT) is started from here, before the body arrives:
@@ -859,14 +910,13 @@ got_headers (SoupServerMessage *msg,
   if (m && m->headers_handler)
     {
       g_autoptr(GError) err = NULL;
-      g_autoptr(PhodavRequest) req = phodav_request_new (self->root_handler, msg, path);
 
       m->headers_handler (req, &err);
 
       if (err)
-        g_debug ("%s %s: %s", method, path, err->message);
+        g_debug ("%s %s: %s", req->method, req->path, err->message);
 
-      return;
+      return REQUEST_ADMISSION_STREAMED;
     }
 
   /* the other methods have their whole request body parsed in
@@ -876,14 +926,63 @@ got_headers (SoupServerMessage *msg,
   if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
     {
       g_debug ("refusing the oversized request body");
-      request_refuse (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
-      return;
+      request_refuse (req->msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE);
+      return REQUEST_ADMISSION_REFUSED;
     }
 
   /* a chunked body has no Content-Length to check in advance: watch
    * it while it is received */
   if (soup_message_headers_get_encoding (request_headers) == SOUP_ENCODING_CHUNKED)
-    g_signal_connect (msg, "got-chunk", G_CALLBACK (got_chunk), self);
+    g_signal_connect (req->msg, "got-chunk", G_CALLBACK (got_chunk), req);
+
+  return REQUEST_ADMISSION_PENDING;
+}
+
+static void
+request_sync_target (PhodavRequest *req)
+{
+  SoupMessageHeaders *headers = soup_server_message_get_request_headers (req->msg);
+  SoupMessageBody *body = soup_server_message_get_request_body (req->msg);
+  GUri *uri = soup_server_message_get_uri (req->msg);
+
+  /* request-started() runs before libsoup has published the method,
+   * URI and headers: snapshot the target again from got-headers() */
+  g_free (req->method);
+  req->method = g_strdup (soup_server_message_get_method (req->msg));
+
+  g_free (req->path);
+  req->path = g_strdup (uri ? g_uri_get_path (uri) : NULL);
+
+  g_clear_pointer (&req->uri, g_uri_unref);
+  req->uri = uri ? g_uri_ref (uri) : NULL;
+
+  g_clear_pointer (&req->request_headers, soup_message_headers_unref);
+  req->request_headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+  soup_message_headers_foreach (headers, copy_header, req->request_headers);
+
+  g_clear_pointer (&req->request_body, soup_message_body_unref);
+  req->request_body = soup_message_body_ref (body);
+
+  /* the GET/HEAD handler evaluates the range itself, on the copied
+   * headers above; remove the header from the real message so that
+   * libsoup does not apply its own range handling on top of the answer */
+  if (g_strcmp0 (req->method, "GET") == 0 ||
+      g_strcmp0 (req->method, "HEAD") == 0)
+    soup_message_headers_remove (headers, "Range");
+
+  if (!req->handler && req->self->root_handler)
+    req->handler = path_handler_ref (req->self->root_handler);
+}
+
+static void
+request_got_headers (SoupServerMessage *msg,
+                     gpointer user_data)
+{
+  PhodavRequest *req = user_data;
+  g_autoptr(PhodavRequest) hold = phodav_request_ref (req);
+
+  request_sync_target (req);
+  request_admit (req);
 }
 
 void
@@ -892,35 +991,51 @@ phodav_server_request_started (SoupServer *server,
                                gpointer user_data)
 {
   PhodavServer *self = user_data;
-  RequestCancel *cancel = g_new0 (RequestCancel, 1);
+  GUri *uri = soup_server_message_get_uri (message);
+  const gchar *path = uri ? g_uri_get_path (uri) : NULL;
+  PhodavRequest *req = phodav_request_new (self, self->root_handler,
+                                           message, path);
 
-  cancel->cancellable = g_cancellable_new ();
-  cancel->server_cancellable = g_object_ref (self->cancellable);
-  cancel->server_handler = g_cancellable_connect (cancel->server_cancellable,
-                                                  G_CALLBACK (request_cancelled),
-                                                  cancel, NULL);
-  g_weak_ref_init (&cancel->server, self);
-  g_object_set_data_full (G_OBJECT (message), "phodav-request-cancel",
-                          cancel, request_cancel_free);
+  request_store (message, req);
 
-  g_signal_connect (message, "finished", G_CALLBACK (message_finished), NULL);
-  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), cancel);
+  g_signal_connect (message, "finished",
+                    G_CALLBACK (request_message_finished), req);
+  g_signal_connect (message, "got-headers",
+                    G_CALLBACK (request_got_headers), req);
 }
 
 void
 phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
 {
-  g_autoptr(GError) err = NULL;
   PathHandler *handler = user_data;
   const gchar *method = soup_server_message_get_method (msg);
   const DavMethod *m = dav_method_lookup (method);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   SoupMessageHeaders *response_headers;
   g_autoptr(GHashTable) params = NULL;
+  PhodavRequest *req;
+  RequestAdmission admission;
 
   g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_server_message_get_http_version (msg),
            soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
+
+  req = request_get (msg);
+  if (!req)
+    {
+      PhodavServer *self = handler_get_server (handler);
+
+      req = phodav_request_new (self, handler, msg, path);
+      request_store (msg, req);
+      g_signal_connect (msg, "finished",
+                        G_CALLBACK (request_message_finished), req);
+      request_sync_target (req);
+    }
+
+  if (!request_state_has (req, PHODAV_REQUEST_ADMITTED))
+    request_sync_target (req);
+
+  admission = request_admit (req);
 
   /* got_headers() may have already rejected the request (oversized
    * body, or a streamed method refused before its upload was
@@ -929,21 +1044,16 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
   if (soup_server_message_get_status (msg) != 0)
     return;
 
-  /* libsoup matches handlers by a plain string prefix, so it can
-   * also route a path which merely starts with the base path here
-   * ("/davos" for "/dav"): it is not part of the share */
-  if (!handler_path_is_covered (handler, path))
+  if (admission == REQUEST_ADMISSION_IGNORED)
     {
+      /* libsoup matches handlers by a plain string prefix, so it can
+       * also route a path which merely starts with the base path here
+       * ("/davos" for "/dav"): it is not part of the share */
       soup_server_message_set_status (msg, SOUP_STATUS_NOT_FOUND, NULL);
       return;
     }
 
-  /* a streamed method was started from got_headers(), before its
-   * request body was received, and is answered from its got-body
-   * callback, once the file it writes is committed: there is no
-   * handler to run for it here, and its answer must not be
-   * overwritten */
-  if (m && m->headers_handler)
+  if (admission != REQUEST_ADMISSION_PENDING)
     return;
 
   if (method == SOUP_METHOD_OPTIONS)
@@ -972,20 +1082,16 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
     }
   else
     {
-      g_autoptr(PhodavRequest) req = phodav_request_new (handler, msg, path);
-
       /* the handlers run on the private worker pool: the response is
        * built on the request and applied back when the worker
        * completes. The server-wide reader-writer lock protects their
        * filesystem decision points. */
       req->handler_func = m->handler;
+      request_state_add (req, PHODAV_REQUEST_RUNNING);
 
       soup_server_message_pause (msg);
 
       phodav_server_dispatch (req->self, request_task, request_task_done,
                               phodav_request_ref (req));
     }
-
-  if (err)
-    g_debug ("%s %s: %s", method, path, err->message);
 }

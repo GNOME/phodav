@@ -9,6 +9,7 @@
 #include "phodav-lock.h"
 #include "phodav-path.h"
 #include "phodav-priv.h"
+#include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
 /* The lock table is keyed on the canonical resource path, so that the
@@ -52,6 +53,45 @@ lock_store_remove_path_if_empty_locked (PhodavServer *self, const gchar *_path)
     g_hash_table_remove (self->paths, path);
 }
 
+static gint64
+lock_store_next_expiry_locked (PhodavServer *self)
+{
+  GHashTableIter iter;
+  Path *path;
+  gint64 next = 0;
+
+  if (g_hash_table_size (self->paths) == 0)
+    return 0;
+
+  g_hash_table_iter_init (&iter, self->paths);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+    {
+      GList *l;
+
+      for (l = path->locks; l; l = l->next)
+        {
+          DAVLock *lock = l->data;
+
+          if (lock->timeout && (!next || lock->timeout < next))
+            next = lock->timeout;
+        }
+    }
+
+  return next;
+}
+
+gint64
+phodav_lock_store_next_expiry (PhodavServer *self)
+{
+  gint64 next;
+
+  g_mutex_lock (&self->lock_store_mutex);
+  next = lock_store_next_expiry_locked (self);
+  g_mutex_unlock (&self->lock_store_mutex);
+
+  return next;
+}
+
 /* free the locks whose timeout has elapsed, and drop the empty paths
  * so the lock table does not grow without bound with the locks taken
  * over the lifetime of the server */
@@ -78,6 +118,8 @@ phodav_lock_store_expire_locks (PhodavServer *self)
 
 out:
   g_mutex_unlock (&self->lock_store_mutex);
+
+  phodav_server_schedule_lock_expiry (self);
 }
 
 /* destroy the locks rooted on a deleted resource and its members, and
@@ -110,6 +152,8 @@ phodav_lock_store_remove_locks (PhodavServer *self, const gchar *_path)
 
 out:
   g_mutex_unlock (&self->lock_store_mutex);
+
+  phodav_server_schedule_lock_expiry (self);
 }
 
 typedef gboolean (*PathCb) (const gchar *key, Path *path, gpointer data);
@@ -395,6 +439,8 @@ phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *
 
 out:
   g_mutex_unlock (&self->lock_store_mutex);
+
+  phodav_server_schedule_lock_expiry (self);
   return status;
 }
 
@@ -421,6 +467,8 @@ phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GList *su
     }
 
   g_mutex_unlock (&self->lock_store_mutex);
+
+  phodav_server_schedule_lock_expiry (self);
   return status;
 }
 
@@ -455,6 +503,7 @@ phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gcha
     }
   g_mutex_unlock (&self->lock_store_mutex);
 
+  phodav_server_schedule_lock_expiry (self);
   return status;
 }
 
