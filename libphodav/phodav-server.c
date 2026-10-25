@@ -26,10 +26,10 @@
  * The DAV methods run on worker threads, outside the main context
  * the #SoupServer is listened from: the request headers are copied and
  * the body is referenced first, and the response is applied back on
- * the main context when the method returns. The methods which may
- * observe or change the lock table are serialized, while GET and HEAD
- * run concurrently. A slow request does not block the main loop; it
- * can still delay the other serialized methods.
+ * the main context when the method returns. The lock store reserves
+ * the affected paths with per-path guards, so operations on disjoint
+ * resources run concurrently and only overlapping mutations wait. A
+ * slow request never blocks the main loop.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
@@ -162,8 +162,9 @@ phodav_server_init (PhodavServer *self)
   self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
-  g_rec_mutex_init (&self->lock_mutex);
-  g_mutex_init (&self->mutation_mutex);
+  g_rec_mutex_init (&self->lock_store_mutex);
+  g_mutex_init (&self->guard_mutex);
+  g_cond_init (&self->guard_cond);
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
@@ -176,16 +177,7 @@ phodav_server_init (PhodavServer *self)
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {
-  PhodavServer *self = PHODAV_SERVER (user_data);
-
-  /* the sweep frees locks, which a request running on a worker thread
-   * may be using: take the same serialization lock as the methods,
-   * without ever blocking the main loop behind a slow request */
-  if (g_mutex_trylock (&self->mutation_mutex))
-    {
-      server_expire_locks (self);
-      g_mutex_unlock (&self->mutation_mutex);
-    }
+  server_expire_locks (PHODAV_SERVER (user_data));
 
   return G_SOURCE_CONTINUE;
 }
@@ -314,14 +306,10 @@ phodav_server_finalize (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  if (self->serialized_pool)
-    {
-      g_thread_pool_free (self->serialized_pool, FALSE, TRUE);
-      self->serialized_pool = NULL;
-    }
-
-  g_rec_mutex_clear (&self->lock_mutex);
-  g_mutex_clear (&self->mutation_mutex);
+  g_list_free_full (self->guards, g_free);
+  g_cond_clear (&self->guard_cond);
+  g_mutex_clear (&self->guard_mutex);
+  g_rec_mutex_clear (&self->lock_store_mutex);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->finalize)

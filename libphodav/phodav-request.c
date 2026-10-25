@@ -77,7 +77,6 @@ struct _PhodavRequest
   guint status;
   gchar *reason;
 
-  gboolean serialize;
   gint (*handler_func) (PhodavRequest *req, GError **err);
   GError *error;
 };
@@ -416,82 +415,12 @@ request_task (GTask *task,
       return;
     }
 
-  if (req->serialize)
-    g_mutex_lock (&req->self->mutation_mutex);
-
   status = req->handler_func (req, &error);
-
-  if (req->serialize)
-    g_mutex_unlock (&req->self->mutation_mutex);
 
   req->status = status;
   req->error = g_steal_pointer (&error);
 
   g_task_return_boolean (task, TRUE);
-}
-
-typedef struct _SerializedRequest
-{
-  GTask *task;
-  GTaskThreadFunc func;
-} SerializedRequest;
-
-static void
-serialized_request_free (gpointer data)
-{
-  SerializedRequest *job = data;
-
-  g_clear_object (&job->task);
-  g_free (job);
-}
-
-static void
-serialized_request_run (gpointer data,
-                        gpointer user_data)
-{
-  SerializedRequest *job = data;
-
-  job->func (job->task, NULL, g_task_get_task_data (job->task),
-             g_task_get_cancellable (job->task));
-  serialized_request_free (job);
-}
-
-static GThreadPool *
-serialized_pool_get (PhodavServer *self)
-{
-  g_autoptr(GError) error = NULL;
-
-  if (self->serialized_pool)
-    return self->serialized_pool;
-
-  self->serialized_pool = g_thread_pool_new_full (serialized_request_run,
-                                                  NULL,
-                                                  serialized_request_free,
-                                                  1, TRUE, &error);
-  if (!self->serialized_pool)
-    g_warning ("Cannot create the serialized request pool: %s", error->message);
-
-  return self->serialized_pool;
-}
-
-void
-phodav_request_run_serialized (PhodavRequest *req, GTask *task, GTaskThreadFunc func)
-{
-  GThreadPool *pool = serialized_pool_get (req->self);
-  SerializedRequest *job = g_new0 (SerializedRequest, 1);
-  g_autoptr(GError) error = NULL;
-
-  job->task = g_object_ref (task);
-  job->func = func;
-  if (pool && g_thread_pool_push (pool, job, &error))
-    return;
-
-  if (error)
-    g_warning ("Cannot queue the serialized request: %s", error->message);
-  /* the pool is the normal path; the shared pool keeps the request
-   * working if it could not be created or queued */
-  serialized_request_free (job);
-  g_task_run_in_thread (task, func);
 }
 
 gboolean
@@ -759,14 +688,9 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
 
       /* the handlers run outside the main loop: the response is
        * built on the request and applied back when the worker
-       * completes. The mutating methods are serialized, so that the
-       * lock checks and the filesystem changes stay atomic. */
+       * completes. The lock store guards the operations which need it,
+       * per path, instead of serializing every request. */
       req->handler_func = m->handler;
-      /* every method but the read-only file transfers can observe the
-       * lock table (PROPFIND lockdiscovery included): serialize them
-       * so that a lock pointer stays valid for the whole request */
-      req->serialize = g_strcmp0 (method, "GET") != 0 &&
-                       g_strcmp0 (method, "HEAD") != 0;
 
       soup_server_message_pause (msg);
 
@@ -777,10 +701,7 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
                          phodav_request_ref (req));
       g_task_set_task_data (task, req, NULL);
 
-      if (req->serialize)
-        phodav_request_run_serialized (req, task, request_task);
-      else
-        g_task_run_in_thread (task, request_task);
+      g_task_run_in_thread (task, request_task);
 
       g_object_unref (task);
     }

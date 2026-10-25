@@ -198,6 +198,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
+  PhodavLockGuard *guard = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
 
   /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
@@ -265,10 +266,19 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   if (status != SOUP_STATUS_OK)
     goto end;
 
+  {
+    GList *paths = NULL;
+
+    paths = g_list_prepend (paths, (gpointer) path);
+    paths = g_list_prepend (paths, (gpointer) udest);
+    guard = phodav_lock_store_guard_acquire (server, paths);
+    g_list_free (paths);
+  }
+
   /* moving a collection removes its members with it: the tokens of
    * the locks held on them must be submitted too. A COPY leaves the
    * source untouched, its locks do not apply. */
-  if (!copy && server_tree_has_other_locks (server, path, submitted))
+  if (!copy && phodav_lock_store_tree_has_other_locks (server, path, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
@@ -277,8 +287,8 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   /* overwriting a collection removes its members: their lock tokens
    * must be submitted too, not only the ones of the destination and
    * its ancestors */
-  if (server_path_has_other_locks (server, udest, submitted) ||
-      server_tree_has_other_locks (server, udest, submitted))
+  if (phodav_lock_store_path_has_other_locks (server, udest, submitted) ||
+      phodav_lock_store_tree_has_other_locks (server, udest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
@@ -298,6 +308,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
                              cancellable, err);
 
 end:
+  phodav_lock_store_guard_release (guard);
   if (dest_uri)
     g_uri_unref (dest_uri);
   g_clear_object (&file);

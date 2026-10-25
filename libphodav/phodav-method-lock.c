@@ -13,48 +13,6 @@
 #include "phodav-utils.h"
 
 static gboolean
-check_lock (const gchar *key, Path *path, gpointer data)
-{
-  DAVLock *lock = data;
-  DAVLock *other = NULL;
-  GList *l;
-
-  path_expire_locks (path);
-
-  for (l = path->locks; l; l = l->next)
-    {
-      other = l->data;
-      if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
-        return FALSE;
-    }
-
-  if (other && lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
-    return FALSE;
-
-  return TRUE;
-}
-
-static gboolean
-try_add_lock (PhodavServer *server, const gchar *path, DAVLock *lock)
-{
-  Path *p;
-
-  if (!server_foreach_parent_path (server, path, check_lock, lock))
-    return FALSE;
-
-  /* RFC 4918 section 7.4: a depth-infinity lock on a collection must
-   * fail when a member is locked in a conflicting manner */
-  if (lock->depth == DEPTH_INFINITY &&
-      server_tree_has_lock_conflict (server, path, lock))
-    return FALSE;
-
-  p = server_get_path (server, path);
-  path_add_lock (p, lock);
-
-  return TRUE;
-}
-
-static gboolean
 lock_resource_exists (PathHandler *handler, const gchar *path, GCancellable *cancellable)
 {
   g_autoptr(GFile) file = handler_get_file_for_path (handler, path);
@@ -146,7 +104,6 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
-  Path *lpath = NULL;
   xmlChar *mem = NULL;
   gint size = 0;
   g_auto(DavDoc) doc = {
@@ -161,8 +118,9 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   g_autofree gchar *ltoken = NULL;
   g_autofree gchar *uuid = NULL;
   g_autofree gchar *token = NULL;
+  g_autofree gchar *refreshed = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  DAVLock *lock = NULL;
+  PhodavLockGuard *guard = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean exists;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
@@ -185,26 +143,21 @@ phodav_method_lock (PhodavRequest *req, GError **err)
       if (status != SOUP_STATUS_OK)
         goto end;
 
+      GList *paths = g_list_prepend (NULL, (gpointer) path);
+      PhodavServer *server = handler_get_server (handler);
+
+      guard = phodav_lock_store_guard_acquire (server, paths);
+      g_list_free (paths);
+
       /* the lock to refresh is the one covering the path among the
        * tokens submitted with the If header */
-      for (GList *l = submitted; l != NULL; l = l->next)
-        {
-          LockSubmitted *sub = l->data;
+      status = phodav_lock_store_refresh_lock (server, path, submitted,
+                                               timeout, &refreshed);
+      if (status != SOUP_STATUS_OK)
+        goto end;
 
-          lock = server_path_lookup_lock (handler_get_server (handler), path, sub->token);
-          if (lock)
-            break;
-        }
-
-      if (!lock)
-        {
-          status = SOUP_STATUS_BAD_REQUEST;
-          goto end;
-        }
-
-      g_debug ("refresh token %s", lock->token);
-      dav_lock_refresh_timeout (lock, timeout);
-      status = SOUP_STATUS_OK;
+      token = g_steal_pointer (&refreshed);
+      g_debug ("refresh token %s", token);
       goto body;
     }
 
@@ -253,36 +206,35 @@ phodav_method_lock (PhodavRequest *req, GError **err)
    * needs an empty resource */
   exists = lock_resource_exists (handler, path, cancellable);
 
-  lpath = server_get_path (handler_get_server (handler), path);
   {
-    g_autoptr(DAVLock) new_lock = dav_lock_new (lpath, token, scope, type, depth, owner, timeout);
+    PhodavServer *server = handler_get_server (handler);
+    GList *paths = g_list_prepend (NULL, (gpointer) path);
 
-    if (!try_add_lock (handler_get_server (handler), path, new_lock))
+    guard = phodav_lock_store_guard_acquire (server, paths);
+    g_list_free (paths);
+
+    status = phodav_lock_store_add_lock (server, path, token, scope, type,
+                                         depth, owner, timeout);
+    if (status != SOUP_STATUS_OK)
       {
         g_debug ("lock failed");
-        status = SOUP_STATUS_LOCKED;
-        server_remove_path_if_empty (handler_get_server (handler), path);
         goto end;
       }
 
-    /* owned by the path now */
-    lock = g_steal_pointer (&new_lock);
+    if (!exists)
+      {
+        status = lock_create_resource (handler, path, cancellable, err);
+        if (status != SOUP_STATUS_CREATED && status != SOUP_STATUS_OK)
+          {
+            /* the empty resource could not be created: do not leave the
+             * lock behind, a second LOCK would be refused with 423 */
+            phodav_lock_store_remove_lock (server, path, token);
+            goto end;
+          }
+      }
+    else
+      status = SOUP_STATUS_OK;
   }
-
-  if (!exists)
-    {
-      status = lock_create_resource (handler, path, cancellable, err);
-      if (status != SOUP_STATUS_CREATED && status != SOUP_STATUS_OK)
-        {
-          /* the empty resource could not be created: do not leave the
-           * lock behind, a second LOCK would be refused with 423 */
-          g_clear_pointer (&lock, dav_lock_free);
-          server_remove_path_if_empty (handler_get_server (handler), path);
-          goto end;
-        }
-    }
-  else
-    status = SOUP_STATUS_OK;
 
   /* the lock is committed: advertise its token */
   ltoken = g_strdup_printf ("<%s>", token);
@@ -294,12 +246,19 @@ body:
   xmlSetNs (root, ns);
 
   node = xmlNewChild (root, ns, BAD_CAST "lockdiscovery", NULL);
-  xmlAddChild (node, dav_lock_get_activelock_node (lock, ns));
+  {
+    xmlNodePtr active = phodav_lock_store_lock_node (handler_get_server (handler),
+                                                     path, token, ns);
+
+    if (active)
+      xmlAddChild (node, active);
+  }
 
   xml_node_to_string (root, &mem, &size);
   phodav_request_set_response (req, "application/xml",
                                SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
+  phodav_lock_store_guard_release (guard);
   return status;
 }

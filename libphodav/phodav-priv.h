@@ -28,6 +28,7 @@ typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
 typedef struct _PhodavRequest PhodavRequest;
+typedef struct _PhodavLockGuard PhodavLockGuard;
 
 typedef enum _DAVLockScopeType
 {
@@ -90,20 +91,17 @@ struct _PhodavServer
   GSource *expire_locks_source;
 
   /* protects the lock table during a lookup or update; recursive
-   * because the lock helpers call each other. It does not keep the
-   * borrowed Path * and DAVLock * pointers alive after a helper returns:
-   * callers which retain one hold mutation_mutex for the whole
-   * request, and the expiry sweep takes mutation_mutex before it
-   * frees anything */
-  GRecMutex lock_mutex;
-  /* serializes the requests which can observe or change the lock
-   * table (and the expiry sweep), so that the borrowed locks stay
-   * valid, and keeps their filesystem changes atomic now that they
-   * run outside the main loop */
-  GMutex mutation_mutex;
-  /* the single-thread pool which runs the serialized methods, so that
-   * waiting requests do not occupy the shared GTask pool */
-  GThreadPool *serialized_pool;
+   * because the lock helpers call each other. It never covers a
+   * filesystem operation: the value-returning lock store API only
+   * exposes owned decisions and XML nodes. */
+  GRecMutex lock_store_mutex;
+  /* per-path operation reservations. They replace the former global
+   * mutation mutex: disjoint resources can be modified concurrently,
+   * while overlapping operations wait here instead of holding a
+   * process-wide lock. */
+  GMutex guard_mutex;
+  GCond guard_cond;
+  GList *guards;
 };
 
 struct _PathHandler
@@ -204,9 +202,24 @@ void phodav_request_set_response (PhodavRequest *req,
                                   const gchar *body,
                                   gsize len);
 void phodav_request_set_body_bytes (PhodavRequest *req, GBytes *bytes);
-void phodav_request_run_serialized (PhodavRequest *req, GTask *task, GTaskThreadFunc func);
 gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
 gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
+
+/* the value-returning lock service */
+PhodavLockGuard *phodav_lock_store_guard_acquire (PhodavServer *self, GList *paths);
+void phodav_lock_store_guard_release (PhodavLockGuard *guard);
+gboolean phodav_lock_store_has_token (PhodavServer *self, const gchar *path, const gchar *token);
+gboolean phodav_lock_store_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);
+gboolean phodav_lock_store_tree_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);
+gint phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *token,
+                                 DAVLockScopeType scope, DAVLockType type, DepthType depth,
+                                 const xmlNodePtr owner, guint timeout);
+gint phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GList *submitted,
+                                     guint timeout, gchar **refreshed_token);
+xmlNodePtr phodav_lock_store_lock_node (PhodavServer *self, const gchar *path,
+                                        const gchar *token, xmlNsPtr ns);
+gint phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gchar *token);
+void phodav_lock_store_lockdiscovery (PhodavServer *self, const gchar *path, xmlNodePtr node);
 
 gint phodav_method_get (PhodavRequest *req, GError **err);
 gint phodav_method_propfind (PhodavRequest *req, GError **err);

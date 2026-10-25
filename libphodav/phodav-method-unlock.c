@@ -27,9 +27,11 @@ gint
 phodav_method_unlock (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
+  PhodavServer *server = handler_get_server (handler);
   const gchar *path = phodav_request_get_path (req);
-  DAVLock *lock;
   gint status = SOUP_STATUS_BAD_REQUEST;
+  GList *paths;
+  PhodavLockGuard *guard;
 
   gchar *token = remove_brackets (
     soup_message_headers_get_one (phodav_request_get_request_headers (req), "Lock-Token"));
@@ -37,15 +39,12 @@ phodav_method_unlock (PhodavRequest *req, GError **err)
   if (!token)
     goto end;
 
-  lock = server_path_get_lock (handler_get_server (handler), path, token);
-  if (!lock)
-    {
-      status = SOUP_STATUS_CONFLICT;
-      goto end;
-    }
+  paths = g_list_prepend (NULL, (gpointer) path);
+  guard = phodav_lock_store_guard_acquire (server, paths);
+  g_list_free (paths);
 
-  dav_lock_free (lock);
-  status = SOUP_STATUS_NO_CONTENT;
+  status = phodav_lock_store_remove_lock (server, path, token);
+  phodav_lock_store_guard_release (guard);
 
 end:
   g_free (token);

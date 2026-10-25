@@ -40,6 +40,7 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
+  PhodavLockGuard *guard = NULL;
   SoupMessageBody *request_body = phodav_request_get_request_body (req);
 
   if (request_body && request_body->length)
@@ -52,10 +53,25 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
   if (status != SOUP_STATUS_OK)
     goto end;
 
+  {
+    GList *paths = g_list_prepend (NULL, (gpointer) path);
+
+    guard = phodav_lock_store_guard_acquire (handler_get_server (handler), paths);
+    g_list_free (paths);
+  }
+
+  if (phodav_lock_store_path_has_other_locks (handler_get_server (handler),
+                                              path, submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
+
   file = handler_get_file_for_path (handler, path);
   status = do_mkcol_file (file, cancellable, err);
 
 end:
+  phodav_lock_store_guard_release (guard);
   g_clear_object (&file);
   return status;
 }

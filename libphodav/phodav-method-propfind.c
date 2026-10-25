@@ -126,35 +126,15 @@ end:
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 
-static gboolean
-lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
-{
-  xmlNodePtr node = data;
-  GList *l;
-
-  g_return_val_if_fail (key, FALSE);
-  g_return_val_if_fail (path, FALSE);
-
-  path_expire_locks (path);
-
-  for (l = path->locks; l != NULL; l = l->next)
-    xmlAddChild (node, dav_lock_get_activelock_node (l->data, NULL));
-
-  return TRUE;
-}
-
 static ResponseProp *
 prop_lockdiscovery (const PropFindContext *ctx, xmlNsPtr ns)
 {
   PhodavServer *server = handler_get_server (ctx->handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "lockdiscovery");
 
-  if (ctx->pf->type == PROPFIND_PROPNAME)
-    goto end;
+  if (ctx->pf->type != PROPFIND_PROPNAME)
+    phodav_lock_store_lockdiscovery (server, ctx->path, node);
 
-  server_foreach_parent_path (server, ctx->path, lockdiscovery_cb, node);
-
-end:
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 

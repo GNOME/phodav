@@ -30,22 +30,28 @@ typedef struct _PutContext
   gint ref_count;
   SoupServerMessage *msg;
   GCancellable *cancellable;
+  PhodavServer *server;
+  gchar *path;
+  GList *submitted; /* the lock tokens accepted at the start */
   guint64 max_upload;
   GFile *file;      /* the destination of the upload */
   GFile *temp_file; /* the staged upload, renamed over the destination on success */
   GFileOutputStream *output;
   gchar *if_match; /* the conditional headers, rechecked before the rename */
   gchar *if_none_match;
-  GQueue *chunks;     /* the received chunks waiting for their turn on disk */
-  GBytes *chunk;      /* the chunk being written */
-  guint64 written;    /* bytes streamed to the file so far */
-  gint status;        /* the success status, answered once the file is committed */
-  gboolean closed;    /* the output stream was closed */
-  PutPhase phase;     /* the upload outcome, see above */
-  gboolean writing;   /* an asynchronous write is in flight */
-  gboolean body_done; /* the whole request body was received */
-  gboolean paused;    /* the message I/O is paused while a write is in flight */
-  gboolean finished;  /* the message is done, it must not be touched anymore */
+  GQueue *chunks;      /* the received chunks waiting for their turn on disk */
+  GBytes *chunk;       /* the chunk being written */
+  guint64 written;     /* bytes streamed to the file so far */
+  gint status;         /* the success status, answered once the file is committed */
+  gboolean closed;     /* the output stream was closed */
+  PutPhase phase;      /* the upload outcome, see above */
+  gboolean writing;    /* an asynchronous write is in flight */
+  gboolean body_done;  /* the whole request body was received */
+  gboolean paused;     /* the message I/O is paused while a write is in flight */
+  gboolean finished;   /* the message is done, it must not be touched anymore */
+  gboolean committing; /* the commit is running on a worker thread */
+  gint commit_status;
+  GError *commit_error;
 } PutContext;
 
 static void put_write_next (PutContext *ctx);
@@ -123,6 +129,9 @@ put_context_free (PutContext *ctx)
 
   g_clear_object (&ctx->msg);
   g_clear_object (&ctx->cancellable);
+  g_clear_object (&ctx->server);
+  g_free (ctx->path);
+  g_list_free_full (ctx->submitted, (GDestroyNotify) lock_submitted_free);
   g_clear_object (&ctx->file);
   g_clear_object (&ctx->output);
   g_clear_pointer (&ctx->chunk, g_bytes_unref);
@@ -133,6 +142,7 @@ put_context_free (PutContext *ctx)
     }
   g_free (ctx->if_match);
   g_free (ctx->if_none_match);
+  g_clear_error (&ctx->commit_error);
   g_free (ctx);
 }
 
@@ -219,8 +229,10 @@ method_put_finished (SoupServerMessage *msg,
 
   /* the body was never fully received (the client hung up, or the
    * connection was interrupted): discard the partial file, rather
-   * than committing it by finalizing the stream */
-  put_context_abort (ctx);
+   * than committing it by finalizing the stream. A commit already
+   * running on a worker decides the outcome in put_commit_done(). */
+  if (!ctx->committing)
+    put_context_abort (ctx);
 
   put_context_unref (ctx);
 }
@@ -338,7 +350,6 @@ put_chunk_written_cb (GObject *source_object,
   if (ctx->body_done)
     {
       put_finish (ctx);
-      put_resume (ctx);
       put_context_unref (ctx);
       return;
     }
@@ -368,48 +379,111 @@ method_put_got_chunk (SoupServerMessage *msg,
     put_write_next (ctx);
 }
 
+static void
+put_commit_task (GTask *task,
+                 gpointer source_object,
+                 gpointer task_data,
+                 GCancellable *cancellable)
+{
+  PutContext *ctx = task_data;
+  g_autoptr(GError) error = NULL;
+  GList *paths = g_list_prepend (NULL, ctx->path);
+  PhodavLockGuard *guard = phodav_lock_store_guard_acquire (ctx->server, paths);
+  gint status;
+
+  g_list_free (paths);
+
+  if (g_cancellable_is_cancelled (ctx->cancellable))
+    status = 0;
+  else if (phodav_lock_store_path_has_other_locks (ctx->server, ctx->path,
+                                                   ctx->submitted))
+    status = SOUP_STATUS_LOCKED;
+  else if (!put_context_close (ctx, ctx->cancellable, &error))
+    status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  else
+    status = put_commit (ctx, ctx->cancellable, &error);
+
+  phodav_lock_store_guard_release (guard);
+
+  ctx->commit_status = status;
+  ctx->commit_error = g_steal_pointer (&error);
+  g_task_return_boolean (task, TRUE);
+}
+
+static void
+put_commit_done (GObject *source_object,
+                 GAsyncResult *res,
+                 gpointer user_data)
+{
+  PutContext *ctx = user_data;
+  gint status = ctx->commit_status;
+
+  g_task_propagate_boolean (G_TASK (res), NULL);
+
+  if (ctx->commit_error)
+    g_debug ("PUT: failed to commit the uploaded file: %s",
+             ctx->commit_error->message);
+
+  if (ctx->finished)
+    {
+      /* the client is gone: commit or discard, but do not touch its
+       * message anymore */
+      if (status == SOUP_STATUS_OK)
+        ctx->phase = PUT_PHASE_DONE;
+      else
+        put_context_abort (ctx);
+    }
+  else
+    {
+      if (status == SOUP_STATUS_OK)
+        {
+          ctx->phase = PUT_PHASE_DONE;
+          soup_server_message_set_status (ctx->msg, ctx->status, NULL);
+        }
+      else
+        {
+          if (g_cancellable_is_cancelled (ctx->cancellable))
+            status = SOUP_STATUS_SERVICE_UNAVAILABLE;
+          else if (status == 0)
+            status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+          put_context_abort (ctx);
+          soup_server_message_set_status (ctx->msg, status, NULL);
+        }
+
+      soup_server_message_unpause (ctx->msg);
+      g_debug ("  -> %d %s\n", soup_server_message_get_status (ctx->msg),
+               soup_server_message_get_reason_phrase (ctx->msg));
+    }
+
+  put_context_unref (ctx);
+}
+
 /* the whole body has been received and written to the staged file:
- * close it, rename it over the destination, and answer the success
- * status. This happens before the response is written, so that a
- * client which sees a success knows its upload is durable; a failure
- * to commit the file is answered with the matching error status, and
- * the staged file is discarded. */
+ * close it, revalidate the locks and rename it over the destination on
+ * a worker thread. The response is not written until the commit is
+ * settled, so a client which sees a success knows its upload is
+ * durable. */
 static void
 put_finish (PutContext *ctx)
 {
-  g_autoptr(GError) error = NULL;
-  gint status;
+  GTask *task;
 
-  if (put_context_is_decided (ctx) || ctx->writing || ctx->chunks->length > 0)
+  if (put_context_is_decided (ctx) || ctx->writing || ctx->chunks->length > 0 ||
+      ctx->committing)
     return;
 
+  ctx->committing = TRUE;
   g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
 
-  if (!put_context_close (ctx, ctx->cancellable, &error))
-    {
-      g_debug ("PUT: failed to close the staged file: %s", error->message);
+  /* hold the response until the commit worker has decided the outcome */
+  soup_server_message_pause (ctx->msg);
 
-      put_context_abort (ctx);
-      soup_server_message_set_status (ctx->msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      goto end;
-    }
-
-  status = put_commit (ctx, ctx->cancellable, &error);
-  if (status != SOUP_STATUS_OK)
-    {
-      g_debug ("PUT: failed to commit the uploaded file: %s",
-               error ? error->message : "precondition failed");
-
-      put_context_abort (ctx);
-      soup_server_message_set_status (ctx->msg, status, NULL);
-      goto end;
-    }
-
-  ctx->phase = PUT_PHASE_DONE;
-  soup_server_message_set_status (ctx->msg, ctx->status, NULL);
-
-end:
-  g_debug ("  -> %d %s\n", soup_server_message_get_status (ctx->msg), soup_server_message_get_reason_phrase (ctx->msg));
+  task = g_task_new (NULL, ctx->cancellable, put_commit_done,
+                     put_context_ref (ctx));
+  g_task_set_task_data (task, ctx, NULL);
+  g_task_run_in_thread (task, put_commit_task);
+  g_object_unref (task);
 }
 
 static void
@@ -432,7 +506,6 @@ method_put_got_body (SoupServerMessage *msg,
     return;
 
   put_finish (ctx);
-  put_resume (ctx);
 }
 
 /* close the staged file, once */
@@ -628,9 +701,9 @@ end:
   return status;
 }
 
-/* the lock check and the staged file creation run on the serialized
- * pool, so that no LOCK/UNLOCK/MOVE can slip between them and PUT does
- * not block the main loop while another serialized method runs */
+/* the lock check and the staged file creation run on a worker under a
+ * path guard, so that no LOCK/UNLOCK/MOVE can slip between them and
+ * PUT does not block the main loop */
 typedef struct _PutStart
 {
   PhodavRequest *req;
@@ -665,8 +738,10 @@ put_start_task (GTask *task,
   g_autolist(LockSubmitted) submitted = NULL;
   g_autoptr(GFile) file = NULL;
   g_autoptr(GError) error = NULL;
+  GList *paths = g_list_prepend (NULL, (gpointer) path);
+  PhodavLockGuard *guard = phodav_lock_store_guard_acquire (server, paths);
 
-  g_mutex_lock (&server->mutation_mutex);
+  g_list_free (paths);
 
   if (g_cancellable_is_cancelled (cancellable))
     goto out;
@@ -689,9 +764,15 @@ put_start_task (GTask *task,
   start->status = put_start (req, file, &start->ctx, cancellable, &error);
   if (!start->ctx)
     start->error = g_steal_pointer (&error);
+  else
+    {
+      start->ctx->server = g_object_ref (server);
+      start->ctx->path = g_strdup (path);
+      start->ctx->submitted = g_steal_pointer (&submitted);
+    }
 
 out:
-  g_mutex_unlock (&server->mutation_mutex);
+  phodav_lock_store_guard_release (guard);
   g_task_return_boolean (task, TRUE);
 }
 
@@ -771,7 +852,7 @@ phodav_method_put (PhodavRequest *req, GError **err)
 
   /* the request body is streamed to the file, or drained without
    * being accumulated when the request is refused below and the
-   * client is still sending it. Pause until the serialized start has
+   * client is still sending it. Pause until the guarded start has
    * run, so no body chunk is missed before the handlers are connected */
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
   soup_server_message_pause (msg);
@@ -782,6 +863,6 @@ phodav_method_put (PhodavRequest *req, GError **err)
   task = g_task_new (NULL, phodav_request_get_cancellable (req),
                      put_start_done, start);
   g_task_set_task_data (task, start, NULL);
-  phodav_request_run_serialized (req, task, put_start_task);
+  g_task_run_in_thread (task, put_start_task);
   g_object_unref (task);
 }

@@ -122,7 +122,7 @@ check_token (PathHandler *handler, const gchar *path, const gchar *token)
   if (g_strcmp0 (token, "DAV:no-lock") == 0)
     return FALSE;
 
-  return !!server_path_get_lock (server, path, token);
+  return phodav_lock_store_has_token (server, path, token);
 }
 
 static gboolean
@@ -363,7 +363,7 @@ phodav_check_if (PhodavRequest *req, GList **locks)
 
   /* COPY does not modify the source, its locks do not apply */
   if (g_strcmp0 (phodav_request_get_method (req), "COPY") != 0 &&
-      server_path_has_other_locks (server, path, *locks))
+      phodav_lock_store_path_has_other_locks (server, path, *locks))
     return SOUP_STATUS_LOCKED;
 
   return SOUP_STATUS_OK;

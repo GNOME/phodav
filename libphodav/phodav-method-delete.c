@@ -81,6 +81,7 @@ phodav_method_delete (PhodavRequest *req, GError **err)
   g_autoptr(GHashTable) mstatus = NULL;
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
+  PhodavLockGuard *guard = NULL;
   DepthType depth;
 
   /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
@@ -96,9 +97,17 @@ phodav_method_delete (PhodavRequest *req, GError **err)
   if (status != SOUP_STATUS_OK)
     goto end;
 
+  {
+    GList *paths = g_list_prepend (NULL, (gpointer) path);
+
+    guard = phodav_lock_store_guard_acquire (handler_get_server (handler), paths);
+    g_list_free (paths);
+  }
+
   /* deleting a collection also deletes its members: the tokens of
    * the locks held on them must be submitted too */
-  if (server_tree_has_other_locks (handler_get_server (handler), path, submitted))
+  if (phodav_lock_store_tree_has_other_locks (handler_get_server (handler),
+                                              path, submitted))
     {
       status = SOUP_STATUS_LOCKED;
       goto end;
@@ -114,6 +123,7 @@ phodav_method_delete (PhodavRequest *req, GError **err)
       status = set_response_multistatus (req, mstatus);
 
 end:
+  phodav_lock_store_guard_release (guard);
   g_clear_object (&file);
 
   return status;
