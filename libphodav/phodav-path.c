@@ -91,7 +91,7 @@ path_expire_locks (Path *path)
 PhodavPath *
 phodav_path_ref (PhodavPath *path)
 {
-  g_atomic_int_inc (&path->ref_count);
+  path->ref_count++;
 
   return path;
 }
@@ -99,7 +99,7 @@ phodav_path_ref (PhodavPath *path)
 void
 phodav_path_unref (PhodavPath *path)
 {
-  if (!path || !g_atomic_int_dec_and_test (&path->ref_count))
+  if (!path || --path->ref_count > 0)
     return;
 
   g_clear_object (&path->file);
@@ -252,9 +252,9 @@ phodav_status_from_error (const GError *error)
 
 typedef struct _DeleteTree
 {
-  PhodavServer *server;
   PhodavPathDeleteNotify notify;
   gpointer data;
+  GPtrArray *removed;
   GCancellable *cancellable;
 } DeleteTree;
 
@@ -353,17 +353,20 @@ delete_tree (DeleteTree *ctx, PhodavPath *path, const gchar *rel_path)
     }
 
   path_invalidate (path);
-  phodav_lock_store_remove_locks (ctx->server, rel_path);
+  if (ctx->removed)
+    g_ptr_array_add (ctx->removed, g_strdup (rel_path));
   return status;
 }
 
 gint
-phodav_path_delete_tree (PhodavServer *server, PhodavPath *path, const gchar *rel_path, PhodavPathDeleteNotify notify, gpointer data, GCancellable *cancellable)
+phodav_path_delete_tree (PhodavPath *path, const gchar *rel_path,
+                         PhodavPathDeleteNotify notify, gpointer data,
+                         GPtrArray *removed, GCancellable *cancellable)
 {
   DeleteTree ctx = {
-    .server = server,
     .notify = notify,
     .data = data,
+    .removed = removed,
     .cancellable = cancellable,
   };
 
@@ -537,8 +540,8 @@ phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error)
 gboolean
 phodav_path_rename_files (GFile *from, GFile *to, GCancellable *cancellable, GError **error)
 {
-  /* sync the staged file before taking the filesystem write lock, see
-   * phodav_path_sync() */
+  /* the staged file was already synced by phodav_path_sync(), see the
+   * PUT commit job */
   return g_file_move (from, to, G_FILE_COPY_OVERWRITE,
                       cancellable, NULL, NULL, error);
 }

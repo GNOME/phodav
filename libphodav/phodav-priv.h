@@ -98,8 +98,7 @@ const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
 int phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);
 gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
-/* rename a staged GFile without syncing: callers sync it first, outside
- * the filesystem write lock */
+/* rename a staged GFile without syncing: callers sync it first */
 gboolean phodav_path_rename_files (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
 
 /* the descriptor-based operations layer: every lookup below is done
@@ -115,9 +114,11 @@ gboolean phodav_path_copy (PhodavPath *from, PhodavPath *to, GFileCopyFlags flag
 gboolean phodav_path_rename (PhodavPath *from, PhodavPath *to, GCancellable *cancellable, GError **error);
 gboolean phodav_path_move (PhodavPath *from, PhodavPath *to, GFileCopyFlags flags, GCancellable *cancellable, GError **error);
 /* remove @path and its members; @notify receives the relative path and
- * status of every entry which could not be removed */
+ * status of every entry which could not be removed, and @removed
+ * collects the paths which were removed, so the caller can update the
+ * lock store on the main context after the job returns */
 typedef void (*PhodavPathDeleteNotify) (const gchar *path, gint status, gpointer data);
-gint phodav_path_delete_tree (PhodavServer *server, PhodavPath *path, const gchar *rel_path, PhodavPathDeleteNotify notify, gpointer data, GCancellable *cancellable);
+gint phodav_path_delete_tree (PhodavPath *path, const gchar *rel_path, PhodavPathDeleteNotify notify, gpointer data, GPtrArray *removed, GCancellable *cancellable);
 
 /* the share-relative path of @path, borrowed; NULL when @path is not
  * part of the share mounted at the base path */
@@ -144,10 +145,11 @@ void phodav_server_callback (SoupServer *server,
                              GHashTable *query,
                              gpointer user_data);
 
-/* the private worker pools: the request dispatch and the PUT commit
- * use the request pool, the streaming producers have their own so that
- * they are not queued behind requests waiting for the filesystem lock.
- * @done runs on the server context and owns @data */
+/* one-shot jobs: @run executes on the namespace worker and must only
+ * perform the blocking filesystem work; @done executes on the main
+ * context and owns @data. The namespace worker is single-threaded, so
+ * the job results are observed in the same order as the decisions
+ * which queued them. */
 typedef void (*PhodavTaskFunc) (gpointer data);
 void phodav_server_dispatch (PhodavServer *self,
                              PhodavTaskFunc run,
@@ -158,12 +160,13 @@ void phodav_server_dispatch_stream (PhodavServer *self,
                                     PhodavTaskFunc done,
                                     gpointer data);
 
-/* the single filesystem lock: mutations take it for writing, readers
- * share it */
-void phodav_server_read_lock (PhodavServer *self);
-void phodav_server_read_unlock (PhodavServer *self);
-void phodav_server_write_lock (PhodavServer *self);
-void phodav_server_write_unlock (PhodavServer *self);
+/* the serialised namespace: @func runs on the main context as soon as
+ * no other request owns it, and owns @data until it releases it */
+typedef void (*PhodavNamespaceFunc) (gpointer data);
+void phodav_server_namespace_acquire (PhodavServer *self,
+                                      PhodavNamespaceFunc func,
+                                      gpointer data);
+void phodav_server_namespace_release (PhodavServer *self);
 
 void phodav_lock_store_expire_locks (PhodavServer *self);
 void phodav_lock_store_remove_locks (PhodavServer *self,
@@ -173,10 +176,10 @@ gint phodav_check_if (PhodavRequest *req, GList **locks);
 gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
 
 /* per-request state: the request headers are copied and the request
- * body is referenced before the method runs outside the main loop.
- * The body stays shared with the message, which is safe once it is
- * complete and the message is paused. The response is applied back on
- * the main loop once the method returns. */
+ * body is referenced before the method runs. The body stays shared
+ * with the message, which is safe while the message is paused. The
+ * response is applied once the method, or its one-shot job, has
+ * settled. */
 PhodavRequest *phodav_request_new (PhodavServer *self,
                                    PathHandler *handler,
                                    SoupServerMessage *msg,
@@ -205,6 +208,9 @@ void phodav_request_set_response (PhodavRequest *req,
 void phodav_request_set_body_bytes (PhodavRequest *req, GBytes *bytes);
 gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
 gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
+/* answer the request once its asynchronous work has settled; a zero
+ * @status means the method already published a streamed response */
+void phodav_request_complete (PhodavRequest *req, gint status, GError *error);
 
 /* incremental response bodies: the main context pulls one chunk at a
  * time from @pull, which runs on the stream pool. Returning NULL

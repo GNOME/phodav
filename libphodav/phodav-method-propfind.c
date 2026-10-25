@@ -741,12 +741,35 @@ end:
   return pf;
 }
 
-gint
-phodav_method_propfind (PhodavRequest *req, GError **err)
+typedef struct _PropFindJob
 {
+  PhodavRequest *req;
+  PathHandler *handler;
+  GCancellable *cancellable;
+  gint status;
+  GHashTable *mstatus;
+  xmlNsPtr ns;
+} PropFindJob;
+
+static void
+propfind_job_free (PropFindJob *job)
+{
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_clear_object (&job->cancellable);
+  g_clear_pointer (&job->mstatus, g_hash_table_unref);
+  if (job->ns)
+    xmlFreeNs (job->ns);
+  g_free (job);
+}
+
+static void
+propfind_run (gpointer data)
+{
+  PropFindJob *job = data;
+  PhodavRequest *req = job->req;
   g_autoptr(PropFind) pf = NULL;
   DepthType depth;
-  g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
   g_auto(DavDoc) doc = {
     0,
   };
@@ -794,28 +817,74 @@ phodav_method_propfind (PhodavRequest *req, GError **err)
     }
 
   ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
-  mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
-                                   (GDestroyNotify) response_free);
+  job->mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                                        (GDestroyNotify) response_free);
   /* parse_propfind() only returns a PropFind with one of the three
    * request types: only the depth decides how it is answered, and the
    * depth-infinity request was refused above */
-  phodav_server_read_lock (handler_get_server (phodav_request_get_handler (req)));
-
   if (depth == DEPTH_ZERO)
-    status = propfind_query_zero (req, pf, mstatus, ns);
+    status = propfind_query_zero (req, pf, job->mstatus, ns);
   else
-    status = propfind_query_one (req, pf, mstatus, ns);
+    status = propfind_query_one (req, pf, job->mstatus, ns);
 
-  phodav_server_read_unlock (handler_get_server (phodav_request_get_handler (req)));
-
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  status = set_response_multistatus (req, mstatus, ns);
-  ns = NULL;
+  if (status == SOUP_STATUS_OK)
+    {
+      job->ns = ns;
+      ns = NULL;
+    }
 
 end:
   if (ns)
     xmlFreeNs (ns);
-  return status;
+  job->status = status;
+}
+
+static void
+propfind_done (gpointer data)
+{
+  PropFindJob *job = data;
+  PhodavServer *server = handler_get_server (job->handler);
+  gint status = job->status;
+
+  if (status == SOUP_STATUS_OK)
+    status = set_response_multistatus (job->req, job->mstatus,
+                                       g_steal_pointer (&job->ns));
+
+  phodav_server_namespace_release (server);
+  phodav_request_complete (job->req, status, NULL);
+  propfind_job_free (job);
+}
+
+static void
+propfind_start (gpointer data)
+{
+  PropFindJob *job = data;
+  PhodavServer *server = handler_get_server (job->handler);
+
+  if (phodav_request_is_finished (job->req))
+    {
+      phodav_server_namespace_release (server);
+      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+      propfind_job_free (job);
+      return;
+    }
+
+  phodav_server_dispatch (server, propfind_run, propfind_done, job);
+}
+
+gint
+phodav_method_propfind (PhodavRequest *req, GError **err)
+{
+  PropFindJob *job = g_new0 (PropFindJob, 1);
+
+  (void) err;
+
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+
+  phodav_server_namespace_acquire (handler_get_server (job->handler),
+                                   propfind_start, job);
+
+  return 0;
 }

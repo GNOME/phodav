@@ -62,7 +62,7 @@ phodav_backend_new (GFile *root)
 PhodavBackend *
 phodav_backend_ref (PhodavBackend *backend)
 {
-  g_atomic_int_inc (&backend->ref_count);
+  backend->ref_count++;
 
   return backend;
 }
@@ -70,7 +70,7 @@ phodav_backend_ref (PhodavBackend *backend)
 void
 phodav_backend_unref (PhodavBackend *backend)
 {
-  if (!backend || !g_atomic_int_dec_and_test (&backend->ref_count))
+  if (!backend || --backend->ref_count > 0)
     return;
 
   if (backend->klass->destroy)

@@ -24,17 +24,15 @@
  *
  * PhodavServer implements a simple WebDAV server.
  *
- * The DAV methods run on worker threads, outside the main context
- * the #SoupServer is listened from: the request headers are copied and
- * the body is referenced first, and the response is applied back on
- * the main context when the method returns. The methods share a
- * private, bounded worker pool; a reader-writer lock protects the
- * filesystem decision points. COPY, DELETE and MOVE keep the write
- * lock until the filesystem operation completes, so a lock cannot be
- * taken on a resource which is about to be removed or replaced. The
- * upload is synced outside the lock, and streaming responses pull
- * their chunks on demand from a separate pool instead of holding a
- * worker for the whole transfer.
+ * The DAV methods are driven from the main context of the #SoupServer.
+ * The namespace is serialised there: one request at a time validates
+ * its path, evaluates its locks and commits its result. Only the
+ * blocking filesystem work is handed to a one-shot job on a private
+ * worker, and the job completion is delivered back to the main
+ * context. A reader-writer lock is therefore unnecessary, and so are
+ * the atomics which guarded the shared request state. Streaming
+ * responses pull their chunks on demand from a separate worker, so a
+ * transfer does not hold the namespace worker for its whole duration.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
@@ -55,12 +53,10 @@ typedef enum
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
 
-/* the DAV methods are filesystem-bound: a handful of workers is enough
- * to make progress without letting requests pile up on the process
- * wide pool shared with the embedding application. The stream pulls
- * get their own pool of that size, so a download does not wait for
- * request workers blocked on the filesystem lock. */
-#define PHODAV_WORKER_THREADS MAX (2, MIN (g_get_num_processors (), 8))
+/* the namespace is serialised: one filesystem job at a time is enough.
+ * Stream pulls get a small pool of their own, so a slow download does
+ * not prevent the next request from making progress. */
+#define PHODAV_STREAM_THREADS MAX (2, MIN (g_get_num_processors (), 8))
 
 static gboolean expire_locks_timeout (gpointer user_data);
 
@@ -130,7 +126,7 @@ phodav_server_dispatch (PhodavServer *self,
                         PhodavTaskFunc done,
                         gpointer data)
 {
-  phodav_server_dispatch_to (self, self->pool, run, done, data);
+  phodav_server_dispatch_to (self, self->namespace_pool, run, done, data);
 }
 
 void
@@ -142,28 +138,54 @@ phodav_server_dispatch_stream (PhodavServer *self,
   phodav_server_dispatch_to (self, self->stream_pool, run, done, data);
 }
 
-void
-phodav_server_read_lock (PhodavServer *self)
+typedef struct _NamespaceWaiter
 {
-  g_rw_lock_reader_lock (&self->fs_lock);
+  PhodavNamespaceFunc func;
+  gpointer data;
+} NamespaceWaiter;
+
+/* the namespace belongs to the main context. A request takes it before
+ * it looks at the filesystem and releases it once its decision has
+ * been committed, so no lock is needed around the lock store or a
+ * rename/unlink sequence. */
+void
+phodav_server_namespace_acquire (PhodavServer *self,
+                                 PhodavNamespaceFunc func,
+                                 gpointer data)
+{
+  NamespaceWaiter *waiter;
+
+  if (!self->namespace_busy && self->namespace_waiters->length == 0)
+    {
+      self->namespace_busy = TRUE;
+      func (data);
+      return;
+    }
+
+  waiter = g_new0 (NamespaceWaiter, 1);
+  waiter->func = func;
+  waiter->data = data;
+  g_queue_push_tail (self->namespace_waiters, waiter);
 }
 
 void
-phodav_server_read_unlock (PhodavServer *self)
+phodav_server_namespace_release (PhodavServer *self)
 {
-  g_rw_lock_reader_unlock (&self->fs_lock);
-}
+  NamespaceWaiter *waiter;
 
-void
-phodav_server_write_lock (PhodavServer *self)
-{
-  g_rw_lock_writer_lock (&self->fs_lock);
-}
+  g_return_if_fail (self->namespace_busy);
 
-void
-phodav_server_write_unlock (PhodavServer *self)
-{
-  g_rw_lock_writer_unlock (&self->fs_lock);
+  waiter = g_queue_pop_head (self->namespace_waiters);
+  if (!waiter)
+    {
+      self->namespace_busy = FALSE;
+      return;
+    }
+
+  /* keep the namespace held across the hand-over, so a caller which
+   * acquires recursively cannot jump the queue */
+  waiter->func (waiter->data);
+  g_free (waiter);
 }
 
 PhodavServer *
@@ -238,7 +260,7 @@ path_handler_new (PhodavServer *self, GFile *file)
 PathHandler *
 path_handler_ref (PathHandler *h)
 {
-  g_atomic_int_inc (&h->ref_count);
+  h->ref_count++;
 
   return h;
 }
@@ -246,7 +268,7 @@ path_handler_ref (PathHandler *h)
 void
 path_handler_unref (PathHandler *h)
 {
-  if (!g_atomic_int_dec_and_test (&h->ref_count))
+  if (--h->ref_count > 0)
     return;
 
   g_object_unref (h->file);
@@ -258,7 +280,7 @@ path_handler_unref (PathHandler *h)
 static void
 phodav_server_init (PhodavServer *self)
 {
-  /* the DAV methods build and parse XML on worker threads */
+  /* the DAV methods build and parse XML on the main context */
   xmlInitParser ();
 
   self->constructing = TRUE;
@@ -266,7 +288,7 @@ phodav_server_init (PhodavServer *self)
 
   self->cancellable = g_cancellable_new ();
   g_mutex_init (&self->lock_store_mutex);
-  g_rw_lock_init (&self->fs_lock);
+  self->namespace_waiters = g_queue_new ();
 
   self->paths = phodav_lock_store_paths_new ();
 
@@ -321,8 +343,8 @@ phodav_server_schedule_lock_expiry (PhodavServer *self)
   if (self->stopped)
     return;
 
-  /* the source belongs to the server context: reschedule there, from
-   * whichever worker added, refreshed or removed a lock */
+  /* the source belongs to the server context: reschedule there when a
+   * lock was added, refreshed or removed */
   g_main_context_invoke_full (self->expire_locks_context,
                               G_PRIORITY_DEFAULT,
                               schedule_lock_expiry_cb,
@@ -384,11 +406,10 @@ phodav_server_constructed (GObject *gobject)
    * have happened already, registering again only replaces them */
   update_root_handler (self);
 
-  self->pool = g_thread_pool_new (phodav_job_run, NULL,
-                                  PHODAV_WORKER_THREADS,
-                                  TRUE, NULL);
+  self->namespace_pool = g_thread_pool_new (phodav_job_run, NULL,
+                                            1, TRUE, NULL);
   self->stream_pool = g_thread_pool_new (phodav_job_run, NULL,
-                                         PHODAV_WORKER_THREADS,
+                                         PHODAV_STREAM_THREADS,
                                          TRUE, NULL);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (phodav_server_request_started), self);
@@ -422,19 +443,10 @@ server_stop (PhodavServer *self)
 
   g_clear_pointer (&self->expire_locks_source, g_source_destroy);
 
-  /* let the tasks already queued run: they observe the cancellation
-   * and release their references; dropping them here would leak their
-   * data */
-  if (self->pool)
-    {
-      g_thread_pool_free (self->pool, FALSE, FALSE);
-      self->pool = NULL;
-    }
-  if (self->stream_pool)
-    {
-      g_thread_pool_free (self->stream_pool, FALSE, FALSE);
-      self->stream_pool = NULL;
-    }
+  /* the pools stay alive: the requests already admitted still need
+   * their one-shot jobs and stream pulls to complete, and they keep
+   * the server alive until they do. dispose() releases the pools once
+   * no request references the server anymore. */
 }
 
 static void
@@ -443,6 +455,19 @@ phodav_server_dispose (GObject *gobject)
   PhodavServer *self = PHODAV_SERVER (gobject);
 
   server_stop (self);
+
+  /* no request holds the server anymore, so no namespace or stream
+   * job can still reference the pools */
+  if (self->namespace_pool)
+    {
+      g_thread_pool_free (self->namespace_pool, FALSE, FALSE);
+      self->namespace_pool = NULL;
+    }
+  if (self->stream_pool)
+    {
+      g_thread_pool_free (self->stream_pool, FALSE, FALSE);
+      self->stream_pool = NULL;
+    }
   g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
 
   /* SoupServer could live longer than PhodavServer,
@@ -457,6 +482,10 @@ phodav_server_dispose (GObject *gobject)
    * locks, which hold references on them */
   g_clear_pointer (&self->paths, phodav_lock_store_paths_free);
 
+  /* the namespace waiters own requests, which hold a server reference:
+   * they must all have run before dispose can get here */
+  g_clear_pointer (&self->namespace_waiters, g_queue_free);
+
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->dispose)
     G_OBJECT_CLASS (phodav_server_parent_class)->dispose (gobject);
@@ -467,7 +496,6 @@ phodav_server_finalize (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  g_rw_lock_clear (&self->fs_lock);
   g_mutex_clear (&self->lock_store_mutex);
 
   /* Chain up to the parent class */

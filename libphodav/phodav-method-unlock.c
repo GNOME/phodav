@@ -9,6 +9,24 @@
 #include "phodav-lock.h"
 #include "phodav-priv.h"
 
+typedef struct _Unlock
+{
+  PhodavRequest *req;
+  PhodavServer *server;
+  gchar *path;
+  gchar *token;
+} Unlock;
+
+static void
+unlock_free (Unlock *unlock)
+{
+  g_clear_pointer (&unlock->req, phodav_request_unref);
+  g_clear_object (&unlock->server);
+  g_free (unlock->path);
+  g_free (unlock->token);
+  g_free (unlock);
+}
+
 static gchar *
 remove_brackets (const gchar *str)
 {
@@ -23,25 +41,48 @@ remove_brackets (const gchar *str)
   return g_strndup (str + 1, len - 2);
 }
 
+static void
+unlock_start (gpointer data)
+{
+  Unlock *unlock = data;
+  gint status;
+
+  if (phodav_request_is_finished (unlock->req))
+    {
+      phodav_server_namespace_release (unlock->server);
+      phodav_request_complete (unlock->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+      unlock_free (unlock);
+      return;
+    }
+
+  status = phodav_lock_store_remove_lock (unlock->server, unlock->path,
+                                          unlock->token);
+
+  phodav_server_namespace_release (unlock->server);
+  phodav_request_complete (unlock->req, status, NULL);
+  unlock_free (unlock);
+}
+
 gint
 phodav_method_unlock (PhodavRequest *req, GError **err)
 {
-  PathHandler *handler = phodav_request_get_handler (req);
-  PhodavServer *server = handler_get_server (handler);
-  const gchar *path = phodav_request_get_path (req);
-  gint status = SOUP_STATUS_BAD_REQUEST;
+  Unlock *unlock = g_new0 (Unlock, 1);
 
-  gchar *token = remove_brackets (
+  (void) err;
+
+  unlock->token = remove_brackets (
     soup_message_headers_get_one (phodav_request_get_request_headers (req), "Lock-Token"));
+  if (!unlock->token)
+    {
+      g_free (unlock);
+      return SOUP_STATUS_BAD_REQUEST;
+    }
 
-  if (!token)
-    goto end;
+  unlock->req = phodav_request_ref (req);
+  unlock->server = g_object_ref (handler_get_server (phodav_request_get_handler (req)));
+  unlock->path = g_strdup (phodav_request_get_path (req));
 
-  phodav_server_write_lock (server);
-  status = phodav_lock_store_remove_lock (server, path, token);
-  phodav_server_write_unlock (server);
+  phodav_server_namespace_acquire (unlock->server, unlock_start, unlock);
 
-end:
-  g_free (token);
-  return status;
+  return 0;
 }

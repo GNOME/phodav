@@ -11,6 +11,21 @@
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
 
+typedef struct _MoveCopyJob
+{
+  PhodavRequest *req;
+  PathHandler *handler;
+  gchar *path;
+  gchar *dest;
+  DepthType depth;
+  gboolean copy;
+  GCancellable *cancellable;
+  GList *submitted;
+  GPtrArray *removed;
+  gint status;
+  GError *error;
+} MoveCopyJob;
+
 static gboolean
 dest_exists (PhodavPath *dest, GCancellable *cancellable)
 {
@@ -37,28 +52,51 @@ path_is_directory (PhodavPath *path, GCancellable *cancellable)
 }
 
 static gint
-delete_destination (PhodavServer *server, PhodavPath *dest, const gchar *dest_path, GCancellable *cancellable)
+delete_destination (PhodavPath *dest, const gchar *dest_path,
+                    GPtrArray *removed, GCancellable *cancellable)
 {
-  return phodav_path_delete_tree (server, dest, dest_path,
-                                  NULL, NULL, cancellable);
+  return phodav_path_delete_tree (dest, dest_path, NULL, NULL,
+                                  removed, cancellable);
 }
 
 static gint
-do_movecopy_file (PhodavRequest *req, PhodavServer *server, PhodavPath *src, PhodavPath *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (MoveCopyJob *job)
 {
+  g_autoptr(PhodavPath) src = NULL;
+  g_autoptr(PhodavPath) dest = NULL;
   g_autoptr(GError) error = NULL;
-  gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
-  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  SoupMessageHeaders *request_headers =
+    phodav_request_get_request_headers (job->req);
   GFileCopyFlags flags = G_FILE_COPY_ALL_METADATA;
   gboolean overwrite;
   gboolean exists;
   gboolean ok;
 
+  src = phodav_path_resolve (job->handler, job->path,
+                             PHODAV_PATH_EXISTING, &job->status);
+  if (!src)
+    {
+      /* a missing MOVE/COPY source is reported as a conflict */
+      if (job->status == SOUP_STATUS_NOT_FOUND)
+        job->status = SOUP_STATUS_CONFLICT;
+      return job->status;
+    }
+
+  dest = phodav_path_resolve (job->handler, job->dest,
+                              PHODAV_PATH_CREATE, &job->status);
+  if (!dest)
+    return job->status;
+
+  /* take the short path as g_file_copy seems to be rather complicated */
+  if (PHODAV_IS_VIRTUAL_DIR (phodav_path_get_file (src)) ||
+      PHODAV_IS_VIRTUAL_DIR (phodav_path_get_named_file (dest)))
+    return SOUP_STATUS_FORBIDDEN;
+
   overwrite = g_strcmp0 (
                 soup_message_headers_get_one (request_headers, "Overwrite"), "F") != 0;
   if (overwrite)
     flags |= G_FILE_COPY_OVERWRITE;
-  exists = dest_exists (dest, cancellable);
+  exists = dest_exists (dest, job->cancellable);
 
   /* replacing a collection removes it together with its members: delete
    * it first (RFC 4918 section 9.6.1). This also avoids relying on the
@@ -66,17 +104,17 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, PhodavPath *src, Pho
    * reports G_IO_ERROR_PERMISSION_DENIED where the POSIX one reports
    * G_IO_ERROR_IS_DIRECTORY or G_IO_ERROR_WOULD_MERGE. */
   if (overwrite && exists &&
-      (path_is_directory (src, cancellable) ||
-       path_is_directory (dest, cancellable)))
-    delete_destination (server, dest, dest_path, cancellable);
+      (path_is_directory (src, job->cancellable) ||
+       path_is_directory (dest, job->cancellable)))
+    delete_destination (dest, job->dest, job->removed, job->cancellable);
 
   /* a COPY is recursive when its depth is infinity; a MOVE commits
    * with a rename, which the path layer protects. */
-  if (copy)
-    ok = phodav_path_copy (src, dest, flags, depth == DEPTH_INFINITY,
-                           cancellable, &error);
+  if (job->copy)
+    ok = phodav_path_copy (src, dest, flags, job->depth == DEPTH_INFINITY,
+                           job->cancellable, &error);
   else
-    ok = phodav_path_move (src, dest, flags, cancellable, &error);
+    ok = phodav_path_move (src, dest, flags, job->cancellable, &error);
 
   /* an existing destination of another kind cannot be replaced in
    * place: remove it, then try again with the destination gone */
@@ -84,26 +122,20 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, PhodavPath *src, Pho
       (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_EMPTY)) &&
-      delete_destination (server, dest, dest_path, cancellable) == SOUP_STATUS_NO_CONTENT)
+      delete_destination (dest, job->dest, job->removed,
+                          job->cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
-      if (copy)
-        ok = phodav_path_copy (src, dest, flags, depth == DEPTH_INFINITY,
-                               cancellable, &error);
+      if (job->copy)
+        ok = phodav_path_copy (src, dest, flags,
+                               job->depth == DEPTH_INFINITY,
+                               job->cancellable, &error);
       else
-        ok = phodav_path_move (src, dest, flags, cancellable, &error);
+        ok = phodav_path_move (src, dest, flags, job->cancellable, &error);
     }
 
   if (ok)
-    {
-      /* the source is gone: do not leave its locks behind on a path
-       * which no longer names a resource. An overwritten destination
-       * was already cleaned up by delete_destination(). */
-      if (!copy)
-        phodav_lock_store_remove_locks (server, src_path);
-
-      return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
-    }
+    return exists ? SOUP_STATUS_NO_CONTENT : SOUP_STATUS_CREATED;
 
   if (!overwrite && g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
     return SOUP_STATUS_PRECONDITION_FAILED;
@@ -116,8 +148,109 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, PhodavPath *src, Pho
     }
 
   g_debug ("MOVE/COPY failed: %s", error->message);
-  g_propagate_error (err, g_steal_pointer (&error));
+  job->error = g_steal_pointer (&error);
   return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+}
+
+static void
+movecopy_job_free (MoveCopyJob *job)
+{
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_free (job->path);
+  g_free (job->dest);
+  g_clear_object (&job->cancellable);
+  g_list_free_full (job->submitted, (GDestroyNotify) lock_submitted_free);
+  g_clear_pointer (&job->removed, g_ptr_array_unref);
+  g_clear_error (&job->error);
+  g_free (job);
+}
+
+static void
+movecopy_run (gpointer data)
+{
+  MoveCopyJob *job = data;
+
+  job->status = do_movecopy_file (job);
+}
+
+static void
+movecopy_done (gpointer data)
+{
+  MoveCopyJob *job = data;
+  PhodavServer *server = handler_get_server (job->handler);
+
+  if (job->removed)
+    {
+      guint i;
+
+      for (i = 0; i < job->removed->len; i++)
+        phodav_lock_store_remove_locks (server,
+                                        g_ptr_array_index (job->removed, i));
+    }
+
+  /* the source is gone: do not leave its locks behind on a path which
+   * no longer names a resource */
+  if (!job->copy && job->status == SOUP_STATUS_CREATED)
+    phodav_lock_store_remove_locks (server, job->path);
+  else if (!job->copy && job->status == SOUP_STATUS_NO_CONTENT)
+    phodav_lock_store_remove_locks (server, job->path);
+
+  phodav_server_namespace_release (server);
+  phodav_request_complete (job->req, job->status,
+                           g_steal_pointer (&job->error));
+  movecopy_job_free (job);
+}
+
+static void
+movecopy_start (gpointer data)
+{
+  MoveCopyJob *job = data;
+  PhodavServer *server = handler_get_server (job->handler);
+
+  if (phodav_request_is_finished (job->req))
+    {
+      phodav_server_namespace_release (server);
+      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+      movecopy_job_free (job);
+      return;
+    }
+
+  job->status = phodav_check_if (job->req, &job->submitted);
+  if (job->status != SOUP_STATUS_OK)
+    goto done;
+
+  /* moving a collection removes its members with it: the tokens of
+   * the locks held on them must be submitted too. A COPY leaves the
+   * source untouched, its locks do not apply. */
+  if (!job->copy &&
+      phodav_lock_store_tree_has_other_locks (server, job->path,
+                                              job->submitted))
+    {
+      job->status = SOUP_STATUS_LOCKED;
+      goto done;
+    }
+
+  /* overwriting a collection removes its members: their lock tokens
+   * must be submitted too, not only the ones of the destination and
+   * its ancestors */
+  if (phodav_lock_store_path_has_other_locks (server, job->dest,
+                                              job->submitted) ||
+      phodav_lock_store_tree_has_other_locks (server, job->dest,
+                                              job->submitted))
+    {
+      job->status = SOUP_STATUS_LOCKED;
+      goto done;
+    }
+
+  job->removed = g_ptr_array_new_with_free_func (g_free);
+  phodav_server_dispatch (server, movecopy_run, movecopy_done, job);
+  return;
+
+done:
+  phodav_server_namespace_release (server);
+  phodav_request_complete (job->req, job->status, NULL);
+  movecopy_job_free (job);
 }
 
 gint
@@ -125,18 +258,16 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
-  g_autoptr(PhodavPath) handle = NULL;
-  g_autoptr(PhodavPath) dest_handle = NULL;
-  GCancellable *cancellable = phodav_request_get_cancellable (req);
-  PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
   gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
-  g_autolist(LockSubmitted) submitted = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  MoveCopyJob *job;
+
+  (void) err;
 
   /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
    * are valid for COPY and MOVE, an invalid depth must be rejected
@@ -190,61 +321,23 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       }
   }
 
-  /* the lock check, the resolution of both resources and the copy or
-   * rename form one critical section: no lock may be taken on a
-   * resource which is about to be removed or replaced. */
-  phodav_server_write_lock (server);
+  job = g_new0 (MoveCopyJob, 1);
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (handler);
+  job->path = g_strdup (path);
+  job->dest = g_strdup (udest);
+  job->depth = depth;
+  job->copy = copy;
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  job->status = SOUP_STATUS_OK;
 
-  status = phodav_check_if (req, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto unlock;
+  if (dest_uri)
+    g_uri_unref (dest_uri);
 
-  /* moving a collection removes its members with it: the tokens of
-   * the locks held on them must be submitted too. A COPY leaves the
-   * source untouched, its locks do not apply. */
-  if (!copy && phodav_lock_store_tree_has_other_locks (server, path, submitted))
-    {
-      status = SOUP_STATUS_LOCKED;
-      goto unlock;
-    }
+  phodav_server_namespace_acquire (handler_get_server (handler),
+                                   movecopy_start, job);
 
-  /* overwriting a collection removes its members: their lock tokens
-   * must be submitted too, not only the ones of the destination and
-   * its ancestors */
-  if (phodav_lock_store_path_has_other_locks (server, udest, submitted) ||
-      phodav_lock_store_tree_has_other_locks (server, udest, submitted))
-    {
-      status = SOUP_STATUS_LOCKED;
-      goto unlock;
-    }
-
-  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!handle)
-    {
-      /* a missing MOVE/COPY source is reported as a conflict */
-      if (status == SOUP_STATUS_NOT_FOUND)
-        status = SOUP_STATUS_CONFLICT;
-      goto unlock;
-    }
-
-  dest_handle = phodav_path_resolve (handler, udest, PHODAV_PATH_CREATE, &status);
-  if (!dest_handle)
-    goto unlock;
-
-  /* take the short path as g_file_copy seems to be rather complicated */
-  if (PHODAV_IS_VIRTUAL_DIR (phodav_path_get_file (handle)) ||
-      PHODAV_IS_VIRTUAL_DIR (phodav_path_get_named_file (dest_handle)))
-    {
-      status = SOUP_STATUS_FORBIDDEN;
-      goto unlock;
-    }
-
-  if (status == SOUP_STATUS_OK && handle && dest_handle)
-    status = do_movecopy_file (req, server, handle, dest_handle, path,
-                               udest, depth, cancellable, err);
-
-unlock:
-  phodav_server_write_unlock (server);
+  return 0;
 
 end:
   if (dest_uri)

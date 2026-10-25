@@ -31,19 +31,19 @@ struct _PhodavServer
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 
-  /* the private, bounded pools the DAV methods and the response
-   * producers run on; keeping them apart lets a download keep making
-   * progress while the request workers wait for the filesystem lock */
-  GThreadPool *pool;
+  /* The namespace is serialised on the main context: one request at a
+   * time may inspect or change it. Blocking filesystem work runs in a
+   * one-shot job on @namespace_pool, while every decision and commit
+   * stays here. The completion of a job is delivered on the main
+   * context, which then releases the namespace to the next waiter. */
+  GThreadPool *namespace_pool;
   GThreadPool *stream_pool;
+  GQueue *namespace_waiters;
+  gboolean namespace_busy;
 
-  /* protects the path trie during a lookup or update. It never covers
-   * a filesystem operation: the value-returning lock store API only
-   * exposes owned decisions and XML nodes. */
+  /* protects the path trie from the read-only PROPFIND job, which
+   * still walks it to report the locks of the listed resources */
   GMutex lock_store_mutex;
-  /* serializes the filesystem operations: mutations take it for
-   * writing, while reads may share it */
-  GRWLock fs_lock;
 };
 
 struct _PathHandler

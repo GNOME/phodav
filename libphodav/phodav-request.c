@@ -49,9 +49,9 @@ static const DavMethod dav_methods[] = {
   { "UNLOCK", FALSE, phodav_method_unlock, NULL },
 };
 
-/* the request lifecycle, kept in one state field: the bits are set
- * atomically because the worker threads and the main context both
- * observe them */
+/* the request lifecycle, kept in one state field. All the transitions
+ * happen on the main context; the filesystem job only sees the
+ * immutable request target and its cancellable. */
 typedef enum
 {
   PHODAV_REQUEST_ADMITTED = 1 << 0,
@@ -114,13 +114,13 @@ static RequestAdmission request_admit (PhodavRequest *req);
 static gboolean
 request_state_has (const PhodavRequest *req, PhodavRequestState state)
 {
-  return (g_atomic_int_get (&req->state) & state) != 0;
+  return (req->state & state) != 0;
 }
 
 static void
 request_state_add (PhodavRequest *req, PhodavRequestState state)
 {
-  g_atomic_int_or (&req->state, state);
+  req->state |= state;
 }
 
 /* break the message -> request -> message reference cycle once the
@@ -249,7 +249,7 @@ phodav_request_new (PhodavServer *self,
   req->path = g_strdup (path);
 
   /* the request keeps the configuration it was admitted with, so a
-   * concurrent property change cannot alter an operation in flight */
+   * property change cannot alter an operation in flight */
   req->readonly = self->readonly;
   req->max_upload = self->max_upload;
 
@@ -289,7 +289,7 @@ phodav_request_new (PhodavServer *self,
 PhodavRequest *
 phodav_request_ref (PhodavRequest *req)
 {
-  g_atomic_int_inc (&req->ref_count);
+  req->ref_count++;
 
   return req;
 }
@@ -321,7 +321,7 @@ phodav_request_free (PhodavRequest *req)
 void
 phodav_request_unref (PhodavRequest *req)
 {
-  if (g_atomic_int_dec_and_test (&req->ref_count))
+  if (--req->ref_count == 0)
     phodav_request_free (req);
 }
 
@@ -427,8 +427,8 @@ phodav_request_set_response (PhodavRequest *req,
     req->body = g_bytes_new (body, len);
 }
 
-/* apply the response computed by a worker thread back to the message,
- * on the main context which owns it */
+/* apply the response computed by a method back to the message, on the
+ * main context which owns it */
 static void
 request_apply (PhodavRequest *req)
 {
@@ -485,7 +485,7 @@ static void stream_stop (PhodavStream *stream, gboolean complete, gboolean cut);
 static PhodavStream *
 stream_ref (PhodavStream *stream)
 {
-  g_atomic_int_inc (&stream->ref_count);
+  stream->ref_count++;
 
   return stream;
 }
@@ -493,7 +493,7 @@ stream_ref (PhodavStream *stream)
 static void
 stream_unref (PhodavStream *stream)
 {
-  if (!g_atomic_int_dec_and_test (&stream->ref_count))
+  if (--stream->ref_count > 0)
     return;
 
   g_clear_pointer (&stream->content_type, g_free);
@@ -757,25 +757,6 @@ request_store (SoupServerMessage *msg, PhodavRequest *req)
                           req, (GDestroyNotify) phodav_request_unref);
 }
 
-static void
-request_task (gpointer data)
-{
-  PhodavRequest *req = data;
-  g_autoptr(GError) error = NULL;
-  gint status;
-
-  /* the request may have been cancelled while it was queued: do not
-   * start a filesystem operation for a client which is already gone */
-  if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
-                              PHODAV_REQUEST_SERVER_STOPPING))
-    return;
-
-  status = req->handler_func (req, &error);
-
-  req->status = status;
-  req->error = g_steal_pointer (&error);
-}
-
 gboolean
 phodav_request_is_finished (PhodavRequest *req)
 {
@@ -788,13 +769,21 @@ phodav_request_is_server_cancelled (PhodavRequest *req)
   return request_state_has (req, PHODAV_REQUEST_SERVER_STOPPING);
 }
 
-static void
-request_task_done (gpointer data)
+/* apply the outcome of a method on the main context. The method calls
+ * this once, either directly when it has nothing to wait for, or from
+ * the completion of its one-shot filesystem job. */
+void
+phodav_request_complete (PhodavRequest *req,
+                         gint status,
+                         GError *error)
 {
-  PhodavRequest *req = data;
   gboolean finished = request_state_has (req, PHODAV_REQUEST_CLIENT_GONE);
   gboolean server_cancelled = request_state_has (req, PHODAV_REQUEST_SERVER_STOPPING);
   gboolean streaming = request_state_has (req, PHODAV_REQUEST_STREAMING);
+
+  g_clear_error (&req->error);
+  req->error = error;
+  req->status = status;
 
   if (req->error)
     g_debug ("%s %s: %s", req->method, req->path, req->error->message);
@@ -827,8 +816,6 @@ request_task_done (gpointer data)
       request_state_add (req, PHODAV_REQUEST_DONE);
       request_detach (req);
     }
-
-  phodav_request_unref (req);
 }
 
 static void
@@ -1082,16 +1069,21 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
     }
   else
     {
-      /* the handlers run on the private worker pool: the response is
-       * built on the request and applied back when the worker
-       * completes. The server-wide reader-writer lock protects their
-       * filesystem decision points. */
+      g_autoptr(GError) error = NULL;
+      gint status;
+
+      /* the method starts on the main context: it validates the
+       * request and takes the namespace before handing only the
+       * blocking filesystem calls to a one-shot job. A zero return
+       * means the method will call phodav_request_complete() once its
+       * job has settled. */
       req->handler_func = m->handler;
       request_state_add (req, PHODAV_REQUEST_RUNNING);
 
       soup_server_message_pause (msg);
 
-      phodav_server_dispatch (req->self, request_task, request_task_done,
-                              phodav_request_ref (req));
+      status = m->handler (req, &error);
+      if (status != 0)
+        phodav_request_complete (req, status, g_steal_pointer (&error));
     }
 }
