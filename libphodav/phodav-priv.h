@@ -29,6 +29,7 @@ typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
 typedef struct _PhodavRequest PhodavRequest;
 typedef struct _PhodavLockGuard PhodavLockGuard;
+typedef struct _PhodavStream PhodavStream;
 
 typedef enum _DAVLockScopeType
 {
@@ -205,19 +206,20 @@ void phodav_request_set_body_bytes (PhodavRequest *req, GBytes *bytes);
 gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
 gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
 
+/* incremental response bodies */
+PhodavStream *phodav_request_stream_start (PhodavRequest *req, guint status, const gchar *content_type);
+gboolean phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len);
+void phodav_stream_end (PhodavStream *stream);
+void phodav_stream_abort (PhodavStream *stream);
 /* the value-returning lock service */
 PhodavLockGuard *phodav_lock_store_guard_acquire (PhodavServer *self, GList *paths);
 void phodav_lock_store_guard_release (PhodavLockGuard *guard);
 gboolean phodav_lock_store_has_token (PhodavServer *self, const gchar *path, const gchar *token);
 gboolean phodav_lock_store_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);
 gboolean phodav_lock_store_tree_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);
-gint phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *token,
-                                 DAVLockScopeType scope, DAVLockType type, DepthType depth,
-                                 const xmlNodePtr owner, guint timeout);
-gint phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GList *submitted,
-                                     guint timeout, gchar **refreshed_token);
-xmlNodePtr phodav_lock_store_lock_node (PhodavServer *self, const gchar *path,
-                                        const gchar *token, xmlNsPtr ns);
+gint phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *token, DAVLockScopeType scope, DAVLockType type, DepthType depth, const xmlNodePtr owner, guint timeout);
+gint phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GList *submitted, guint timeout, gchar **refreshed_token);
+xmlNodePtr phodav_lock_store_lock_node (PhodavServer *self, const gchar *path, const gchar *token, xmlNsPtr ns);
 gint phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gchar *token);
 void phodav_lock_store_lockdiscovery (PhodavServer *self, const gchar *path, xmlNodePtr node);
 

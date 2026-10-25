@@ -71,6 +71,8 @@ struct _PhodavRequest
   SoupMessageBody *request_body;
   GUri *uri;
   GCancellable *cancellable;
+  GMainContext *context;
+  gboolean streamed;
 
   SoupMessageHeaders *response_headers;
   GBytes *body;
@@ -224,6 +226,8 @@ phodav_request_new (PathHandler *handler,
   uri = soup_server_message_get_uri (msg);
   req->uri = uri ? g_uri_ref (uri) : NULL;
 
+  req->context = g_main_context_ref (g_main_context_get_thread_default () ?: g_main_context_default ());
+
   cancellable = request_cancellable_get (msg);
   req->cancellable = cancellable ? g_object_ref (cancellable) : g_cancellable_new ();
 
@@ -263,6 +267,7 @@ phodav_request_free (PhodavRequest *req)
   g_clear_pointer (&req->request_body, soup_message_body_unref);
   g_clear_pointer (&req->uri, g_uri_unref);
   g_clear_object (&req->cancellable);
+  g_clear_pointer (&req->context, g_main_context_unref);
   g_clear_pointer (&req->response_headers, soup_message_headers_unref);
   g_clear_pointer (&req->body, g_bytes_unref);
   g_free (req->reason);
@@ -381,6 +386,9 @@ request_apply (PhodavRequest *req)
   SoupServerMessage *msg = req->msg;
   SoupMessageHeaders *response_headers;
 
+  if (req->streamed)
+    return;
+
   soup_server_message_set_status (msg, req->status ?: SOUP_STATUS_INTERNAL_SERVER_ERROR,
                                   req->reason);
 
@@ -395,6 +403,235 @@ request_apply (PhodavRequest *req)
                                     req->body);
 
   soup_server_message_unpause (msg);
+}
+
+struct _PhodavStream
+{
+  PhodavRequest *req;
+  GMutex mutex;
+  GCond cond;
+  gboolean op_done;
+  gboolean chunk_written;
+  gboolean failed;
+  gboolean started;
+  gboolean ended;
+  guint status;
+  gchar *content_type;
+  gulong wrote_id;
+  gulong finished_id;
+};
+
+typedef struct _StreamWrite
+{
+  PhodavStream *stream;
+  GBytes *bytes;
+} StreamWrite;
+
+static void stream_wrote_chunk (SoupServerMessage *msg, gpointer user_data);
+static void stream_finished (SoupServerMessage *msg, gpointer user_data);
+
+static gboolean
+stream_start_cb (gpointer data)
+{
+  PhodavStream *stream = data;
+  PhodavRequest *req = stream->req;
+  SoupServerMessage *msg = req->msg;
+  SoupMessageHeaders *response_headers;
+
+  soup_server_message_set_status (msg, stream->status, NULL);
+  response_headers = soup_server_message_get_response_headers (msg);
+  soup_message_headers_foreach (req->response_headers, copy_header, response_headers);
+
+  if (stream->content_type)
+    soup_message_headers_set_content_type (response_headers, stream->content_type, NULL);
+  soup_message_headers_set_encoding (response_headers, SOUP_ENCODING_CHUNKED);
+
+  stream->wrote_id = g_signal_connect (msg, "wrote-chunk",
+                                       G_CALLBACK (stream_wrote_chunk), stream);
+  stream->finished_id = g_signal_connect (msg, "finished",
+                                          G_CALLBACK (stream_finished), stream);
+  req->streamed = TRUE;
+
+  g_mutex_lock (&stream->mutex);
+  stream->op_done = TRUE;
+  g_cond_broadcast (&stream->cond);
+  g_mutex_unlock (&stream->mutex);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+stream_write_cb (gpointer data)
+{
+  StreamWrite *write = data;
+  PhodavStream *stream = write->stream;
+  SoupServerMessage *msg = stream->req->msg;
+
+  soup_message_body_append_bytes (soup_server_message_get_response_body (msg),
+                                  write->bytes);
+  soup_server_message_unpause (msg);
+
+  g_bytes_unref (write->bytes);
+  g_free (write);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+stream_end_cb (gpointer data)
+{
+  PhodavStream *stream = data;
+  SoupServerMessage *msg = stream->req->msg;
+
+  if (!stream->failed)
+    {
+      soup_message_body_complete (soup_server_message_get_response_body (msg));
+      soup_server_message_unpause (msg);
+    }
+
+  if (stream->wrote_id)
+    {
+      g_signal_handler_disconnect (msg, stream->wrote_id);
+      stream->wrote_id = 0;
+    }
+  if (stream->finished_id)
+    {
+      g_signal_handler_disconnect (msg, stream->finished_id);
+      stream->finished_id = 0;
+    }
+
+  stream->ended = TRUE;
+  g_mutex_lock (&stream->mutex);
+  stream->op_done = TRUE;
+  g_cond_broadcast (&stream->cond);
+  g_mutex_unlock (&stream->mutex);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+stream_wrote_chunk (SoupServerMessage *msg,
+                    gpointer user_data)
+{
+  PhodavStream *stream = user_data;
+
+  g_mutex_lock (&stream->mutex);
+  stream->chunk_written = TRUE;
+  g_cond_broadcast (&stream->cond);
+  g_mutex_unlock (&stream->mutex);
+}
+
+static void
+stream_finished (SoupServerMessage *msg,
+                 gpointer user_data)
+{
+  PhodavStream *stream = user_data;
+
+  g_mutex_lock (&stream->mutex);
+  stream->failed = TRUE;
+  stream->op_done = TRUE;
+  g_cond_broadcast (&stream->cond);
+  g_mutex_unlock (&stream->mutex);
+}
+
+static void
+stream_wait (PhodavStream *stream)
+{
+  g_mutex_lock (&stream->mutex);
+  while (!stream->op_done)
+    g_cond_wait (&stream->cond, &stream->mutex);
+  g_mutex_unlock (&stream->mutex);
+}
+
+PhodavStream *
+phodav_request_stream_start (PhodavRequest *req, guint status, const gchar *content_type)
+{
+  PhodavStream *stream = g_new0 (PhodavStream, 1);
+
+  stream->req = phodav_request_ref (req);
+  stream->status = status;
+  stream->content_type = g_strdup (content_type);
+  g_mutex_init (&stream->mutex);
+  g_cond_init (&stream->cond);
+
+  g_main_context_invoke_full (req->context, G_PRIORITY_DEFAULT,
+                              stream_start_cb, stream, NULL);
+  stream_wait (stream);
+
+  g_mutex_lock (&stream->mutex);
+  stream->op_done = FALSE;
+  g_mutex_unlock (&stream->mutex);
+
+  stream->started = TRUE;
+  return stream;
+}
+
+gboolean
+phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len)
+{
+  StreamWrite *write;
+  gboolean ok;
+
+  if (!stream || len == 0)
+    return TRUE;
+
+  g_mutex_lock (&stream->mutex);
+  if (stream->failed || g_cancellable_is_cancelled (stream->req->cancellable))
+    {
+      g_mutex_unlock (&stream->mutex);
+      return FALSE;
+    }
+  stream->chunk_written = FALSE;
+  g_mutex_unlock (&stream->mutex);
+
+  write = g_new0 (StreamWrite, 1);
+  write->stream = stream;
+  write->bytes = g_bytes_new (data, len);
+  g_main_context_invoke_full (stream->req->context, G_PRIORITY_DEFAULT,
+                              stream_write_cb, write, NULL);
+
+  g_mutex_lock (&stream->mutex);
+  while (!stream->chunk_written && !stream->failed &&
+         !g_cancellable_is_cancelled (stream->req->cancellable))
+    g_cond_wait (&stream->cond, &stream->mutex);
+  ok = stream->chunk_written && !stream->failed &&
+       !g_cancellable_is_cancelled (stream->req->cancellable);
+  g_mutex_unlock (&stream->mutex);
+
+  return ok;
+}
+
+static void
+stream_finish (PhodavStream *stream)
+{
+  PhodavStream *ref = stream;
+
+  g_mutex_lock (&ref->mutex);
+  ref->op_done = FALSE;
+  g_mutex_unlock (&ref->mutex);
+  g_main_context_invoke_full (ref->req->context, G_PRIORITY_DEFAULT,
+                              stream_end_cb, ref, NULL);
+  stream_wait (ref);
+
+  g_clear_pointer (&ref->content_type, g_free);
+  g_clear_pointer (&ref->req, phodav_request_unref);
+  g_cond_clear (&ref->cond);
+  g_mutex_clear (&ref->mutex);
+  g_free (ref);
+}
+
+void
+phodav_stream_end (PhodavStream *stream)
+{
+  if (stream)
+    stream_finish (stream);
+}
+
+void
+phodav_stream_abort (PhodavStream *stream)
+{
+  if (stream)
+    stream_finish (stream);
 }
 
 static void

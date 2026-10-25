@@ -8,6 +8,8 @@
 
 #include "phodav-multistatus.h"
 
+#include <libxml/xmlwriter.h>
+
 #include "phodav-utils.h"
 
 ResponseProp *
@@ -74,101 +76,128 @@ status_to_string (gint status)
                           status, soup_status_get_phrase (status));
 }
 
-static xmlNodePtr
-status_node_new (xmlNsPtr ns, gint status)
+static int
+multistatus_write (void *context, const char *buffer, int len)
 {
-  xmlNodePtr node;
-  g_autofree gchar *text = NULL;
+  PhodavStream *stream = context;
 
-  text = status_to_string (status);
-  node = xmlNewNode (ns, BAD_CAST "status");
-  xmlAddChild (node, xmlNewText (BAD_CAST text));
-
-  return node;
+  return phodav_stream_write (stream, (const guint8 *) buffer, len) ? len : -1;
 }
 
 static void
-add_propstat (xmlNodePtr parent, xmlNsPtr ns, GList *props)
+writer_start (xmlTextWriterPtr writer, const gchar *name)
 {
-  xmlNodePtr node, propstat, prop = NULL, stnode = NULL;
-  GList *s;
-  gint status = -1;
+  xmlTextWriterStartElementNS (writer, BAD_CAST "D", BAD_CAST name, NULL);
+}
 
-  /* the response_new() list is sorted by status */
-  for (s = props; s != NULL; s = s->next)
+static void
+writer_text (xmlTextWriterPtr writer, const gchar *name, const gchar *text)
+{
+  writer_start (writer, name);
+  xmlTextWriterWriteString (writer, BAD_CAST text);
+  xmlTextWriterEndElement (writer);
+}
+
+static void
+writer_status (xmlTextWriterPtr writer, gint status)
+{
+  g_autofree gchar *text = status_to_string (status);
+
+  writer_text (writer, "status", text);
+}
+
+static void
+writer_prop_node (xmlTextWriterPtr writer, xmlNodePtr node)
+{
+  xmlBufferPtr buffer = xmlBufferCreate ();
+
+  xmlNodeDump (buffer, NULL, node, 0, 0);
+  xmlTextWriterWriteRaw (writer, xmlBufferContent (buffer));
+  xmlBufferFree (buffer);
+}
+
+static void
+writer_propstat (xmlTextWriterPtr writer, GList *props)
+{
+  GList *l = props;
+
+  while (l)
     {
-      ResponseProp *response_prop = s->data;
+      gint status = ((ResponseProp *) l->data)->status;
 
-      node = response_prop->node;
-      if (response_prop->status != status)
+      writer_start (writer, "propstat");
+      writer_start (writer, "prop");
+
+      while (l && ((ResponseProp *) l->data)->status == status)
         {
-          status = response_prop->status;
-          if (stnode)
-            xmlAddChild (propstat, stnode);
-
-          stnode = status_node_new (ns, status);
-          propstat = xmlNewChild (parent, ns, BAD_CAST "propstat", NULL);
-          prop = xmlNewChild (propstat, ns, BAD_CAST "prop", NULL);
+          writer_prop_node (writer, ((ResponseProp *) l->data)->node);
+          l = l->next;
         }
-      g_return_if_fail (prop != NULL);
-      xmlAddChild (prop, node);
-      /* the response propstat owns the node now */
-      response_prop->node = NULL;
-    }
 
-  if (stnode)
-    xmlAddChild (propstat, stnode);
+      xmlTextWriterEndElement (writer); /* prop */
+      writer_status (writer, status);
+      xmlTextWriterEndElement (writer); /* propstat */
+    }
 }
 
 gint
 set_response_multistatus (PhodavRequest *req,
                           GHashTable *mstatus)
 {
-  xmlChar *mem = NULL;
-  gint size;
-  xmlNodePtr root;
   GHashTableIter iter;
   Response *resp;
   gchar *path;
-  xmlNsPtr ns;
+  PhodavStream *stream;
+  xmlOutputBufferPtr output;
+  xmlTextWriterPtr writer;
 
-  root = xmlNewNode (NULL, BAD_CAST "multistatus");
-  ns = xmlNewNs (root, BAD_CAST "DAV:", BAD_CAST "D");
-  xmlSetNs (root, ns);
+  stream = phodav_request_stream_start (req, SOUP_STATUS_MULTI_STATUS,
+                                        "application/xml");
+  if (!stream)
+    return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+  output = xmlOutputBufferCreateIO (multistatus_write, NULL, stream, NULL);
+  if (!output)
+    {
+      phodav_stream_end (stream);
+      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+    }
+
+  writer = xmlNewTextWriter (output);
+  if (!writer)
+    {
+      xmlOutputBufferClose (output);
+      phodav_stream_end (stream);
+      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+    }
+
+  xmlTextWriterStartDocument (writer, NULL, "UTF-8", NULL);
+  xmlTextWriterStartElementNS (writer, BAD_CAST "D",
+                               BAD_CAST "multistatus", BAD_CAST "DAV:");
 
   g_hash_table_iter_init (&iter, mstatus);
   while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
     {
-      xmlNodePtr response;
-
-      response = xmlNewChild (root, ns, BAD_CAST "response", NULL);
-
-      /* the key is the decoded resource path: escape it byte-wise
-       * for the href, where a client would otherwise parse the
-       * characters of the names as URI delimiters ("?" starts a
-       * query, "#" a fragment...). libxml2 escapes the XML special
-       * characters of the text on its own, when the document is
-       * serialized. */
       g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
                                                       G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
       g_autoptr(GUri) new_uri = g_uri_parse_relative (phodav_request_get_uri (req), escaped,
                                                       SOUP_HTTP_URI_FLAGS, NULL);
       g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
-      xmlNodePtr href = xmlNewChild (response, ns, BAD_CAST "href", NULL);
 
-      /* xmlNewText() takes the raw name: the XML special characters
-       * are escaped when the document is serialized */
-      xmlAddChild (href, xmlNewText (BAD_CAST text));
+      writer_start (writer, "response");
+      writer_text (writer, "href", text);
 
       if (resp->props)
-        add_propstat (response, ns, resp->props);
+        writer_propstat (writer, resp->props);
       else if (resp->status)
-        xmlAddChild (response, status_node_new (ns, resp->status));
+        writer_status (writer, resp->status);
+
+      xmlTextWriterEndElement (writer); /* response */
     }
 
-  xml_node_to_string (root, &mem, &size);
-  phodav_request_set_response (req, "application/xml",
-                               SOUP_MEMORY_TAKE, (gchar *) mem, size);
+  xmlTextWriterEndDocument (writer);
+  xmlFreeTextWriter (writer);
+  phodav_stream_end (stream);
 
   return SOUP_STATUS_MULTI_STATUS;
 }

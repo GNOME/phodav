@@ -2464,10 +2464,9 @@ test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
   g_assert_nonnull (strstr (text, ">tag&lt;le&gt;.txt</a>"));
 }
 
-/* a directory with more entries than the server is willing to list
- * is refused rather than built in memory */
+/* a large directory is streamed, with no entry or size cap */
 static void
-test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
+test_get_listing_large (DavFixture *f, gconstpointer user_data)
 {
   g_autoptr(GBytes) body = NULL;
   g_autoptr(SoupMessage) msg = NULL;
@@ -2475,7 +2474,6 @@ test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
 
   make_directory (f->dir, "large");
 
-  /* one entry more than the cap of phodav-method-get.c */
   for (i = 0; i <= 4096; i++)
     {
       g_autofree gchar *name = g_strdup_printf ("file-%04u", i);
@@ -2485,7 +2483,8 @@ test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
     }
 
   msg = dav_request (f, SOUP_METHOD_GET, "/large", NULL, &body, NULL);
-  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_nonnull (strstr (g_bytes_get_data (body, NULL), "file-4096"));
 
   /* the directory itself is still there, and so is a file in it */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/large", NULL, NULL), ==, SOUP_STATUS_OK);
@@ -3375,7 +3374,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/get-conditional", DavFixture, NULL, dav_fixture_setup, test_get_conditional, dav_fixture_teardown);
   g_test_add ("/dav/get-range", DavFixture, NULL, dav_fixture_setup, test_get_range, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
-  g_test_add ("/dav/get-listing-too-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_too_large, dav_fixture_teardown);
+  g_test_add ("/dav/get-listing-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_large, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-large-chunked", DavFixture, NULL, dav_fixture_setup, test_put_large_chunked, dav_fixture_teardown);
