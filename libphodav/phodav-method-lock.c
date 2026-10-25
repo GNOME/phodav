@@ -111,12 +111,13 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   g_autofree gchar *token = NULL;
   g_autofree gchar *refreshed = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  PhodavLockGuard *guard = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean exists;
   g_autoptr(GFile) file = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body;
+
+  phodav_server_write_lock (handler_get_server (handler));
 
   /* RFC 4918 section 10.2: only the depths 0 and infinity are valid
    * for a LOCK, and an invalid depth must be rejected */
@@ -135,11 +136,7 @@ phodav_method_lock (PhodavRequest *req, GError **err)
       if (status != SOUP_STATUS_OK)
         goto end;
 
-      GList *paths = g_list_prepend (NULL, (gpointer) path);
       PhodavServer *server = handler_get_server (handler);
-
-      guard = phodav_lock_store_guard_acquire (server, paths);
-      g_list_free (paths);
 
       /* the lock to refresh is the one covering the path among the
        * tokens submitted with the If header */
@@ -204,10 +201,6 @@ phodav_method_lock (PhodavRequest *req, GError **err)
 
   {
     PhodavServer *server = handler_get_server (handler);
-    GList *paths = g_list_prepend (NULL, (gpointer) path);
-
-    guard = phodav_lock_store_guard_acquire (server, paths);
-    g_list_free (paths);
 
     status = phodav_lock_store_add_lock (server, path, token, scope, type,
                                          depth, owner, timeout);
@@ -255,6 +248,6 @@ body:
                                SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
-  phodav_lock_store_guard_release (guard);
+  phodav_server_write_unlock (handler_get_server (handler));
   return status;
 }

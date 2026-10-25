@@ -37,40 +37,99 @@ method_get_directory_set_headers (PhodavRequest *req)
   soup_message_headers_append (response_headers, "Content-Security-Policy", "default-src 'none'");
 }
 
-static gboolean
-stream_write_string (PhodavStream *stream, const gchar *str)
+typedef struct _GetDirectoryPull
 {
-  return phodav_stream_write (stream, (const guint8 *) str, strlen (str));
+  GFileEnumerator *e;
+  GString *buffer;
+  gboolean header_done;
+  gboolean eof;
+} GetDirectoryPull;
+
+static void
+get_directory_pull_free (gpointer data)
+{
+  GetDirectoryPull *pull = data;
+
+  if (pull->e)
+    g_file_enumerator_close (pull->e, NULL, NULL);
+  g_clear_object (&pull->e);
+  if (pull->buffer)
+    {
+      g_string_free (pull->buffer, TRUE);
+      pull->buffer = NULL;
+    }
+  g_free (pull);
 }
 
-/* A failure which follows the client going away needs no answer: the
- * message is already finished, and cutting the connection would only
- * risk discarding a connection the client may still reuse. Every other
- * failure (a read error, a short read, a server-side cancellation) must
- * abort the response, so that a truncated body is not mistaken for the
- * complete representation. */
-static void
-stream_finish (PhodavRequest *req, PhodavStream *stream, gboolean ok)
+static GBytes *
+get_directory_pull (gpointer data, GCancellable *cancellable, GError **error)
 {
-  GCancellable *cancellable = phodav_request_get_cancellable (req);
+  GetDirectoryPull *pull = data;
 
-  if (ok || (g_cancellable_is_cancelled (cancellable) &&
-             phodav_request_is_finished (req)))
-    phodav_stream_end (stream);
-  else
-    phodav_stream_abort (stream);
+  if (pull->eof)
+    return NULL;
+
+  while (!pull->eof && pull->buffer->len < STREAM_CHUNK_SIZE)
+    {
+      GFileInfo *info;
+      gboolean dir;
+      g_autofree gchar *base = NULL;
+      g_autofree gchar *href = NULL;
+      g_autofree gchar *line = NULL;
+
+      if (!g_file_enumerator_iterate (pull->e, &info, NULL, cancellable, error))
+        return NULL;
+
+      if (info == NULL)
+        {
+          g_string_append (pull->buffer, "</p></body>\r\n</html>\r\n");
+          pull->eof = TRUE;
+          break;
+        }
+
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
+        continue;
+
+      dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
+      base = g_strdup (g_file_info_get_name (info));
+      href = g_uri_escape_string (base, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
+      line = g_markup_printf_escaped ("<a href=\"%s%s\">%s</a><br/>\r\n",
+                                      href, dir ? "/" : "", base);
+      g_string_append (pull->buffer, line);
+    }
+
+  if (pull->buffer->len == 0)
+    return NULL;
+
+  {
+    gsize len = pull->buffer->len;
+    gchar *data = g_string_free (g_steal_pointer (&pull->buffer), FALSE);
+
+    pull->buffer = g_string_sized_new (STREAM_CHUNK_SIZE);
+    return g_bytes_new_take (data, len);
+  }
+}
+
+static GString *
+get_directory_header (GFile *file)
+{
+  g_autofree gchar *name = g_file_get_basename (file);
+  g_autofree gchar *escaped = g_markup_escape_text (name, -1);
+  GString *header = g_string_new ("<html>\r\n");
+
+  g_string_append_printf (header, "<head><title>Index of %s</title></head>\r\n",
+                          escaped);
+  g_string_append_printf (header, "<body><h1>Index of %s</h1>\r\n<p>\r\n",
+                          escaped);
+
+  return header;
 }
 
 static gint
 method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **error)
 {
   g_autoptr(GFileEnumerator) e = NULL;
-  g_autoptr(GString) header = NULL;
-  PhodavStream *stream;
-  g_autofree gchar *name = NULL;
-  g_autofree gchar *escaped = NULL;
-  gboolean ok = TRUE;
-  gint status = SOUP_STATUS_OK;
+  GetDirectoryPull *pull;
 
   method_get_directory_set_headers (req);
 
@@ -88,65 +147,16 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
              ? SOUP_STATUS_NOT_FOUND
              : SOUP_STATUS_FORBIDDEN;
 
-  stream = phodav_request_stream_start (req, SOUP_STATUS_OK,
-                                        "text/html; charset=utf-8");
-  if (!stream)
-    return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  pull = g_new0 (GetDirectoryPull, 1);
+  pull->e = g_steal_pointer (&e);
+  pull->buffer = get_directory_header (file);
 
-  name = g_file_get_basename (file);
-  escaped = g_markup_escape_text (name, -1);
-  header = g_string_new ("<html>\r\n");
-  g_string_append_printf (header, "<head><title>Index of %s</title></head>\r\n",
-                          escaped);
-  g_string_append_printf (header, "<body><h1>Index of %s</h1>\r\n<p>\r\n",
-                          escaped);
-  if (!stream_write_string (stream, header->str))
-    {
-      ok = FALSE;
-      goto out;
-    }
+  phodav_request_stream_start (req, SOUP_STATUS_OK,
+                               "text/html; charset=utf-8",
+                               get_directory_pull, pull,
+                               get_directory_pull_free);
 
-  while (TRUE)
-    {
-      GFileInfo *info;
-      gboolean dir;
-      g_autofree gchar *base = NULL;
-      g_autofree gchar *href = NULL;
-      g_autofree gchar *line = NULL;
-
-      if (!g_file_enumerator_iterate (e, &info, NULL, cancellable, error))
-        {
-          ok = FALSE;
-          break;
-        }
-
-      if (info == NULL)
-        break;
-
-      if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
-        continue;
-
-      dir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
-      base = g_strdup (g_file_info_get_name (info));
-      href = g_uri_escape_string (base, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
-      line = g_markup_printf_escaped ("<a href=\"%s%s\">%s</a><br/>\r\n",
-                                      href, dir ? "/" : "", base);
-
-      if (!stream_write_string (stream, line))
-        {
-          ok = FALSE;
-          break;
-        }
-    }
-
-  if (ok && !stream_write_string (stream, "</p></body>\r\n</html>\r\n"))
-    ok = FALSE;
-
-out:
-  g_file_enumerator_close (e, cancellable, NULL);
-  stream_finish (req, stream, ok);
-
-  return status;
+  return SOUP_STATUS_OK;
 }
 
 static void
@@ -173,135 +183,78 @@ method_get_add_validators (SoupMessageHeaders *response_headers, const gchar *et
   soup_message_headers_append (response_headers, "Cache-Control", "no-cache");
 }
 
-static gboolean
-stream_file_range_gio (GFile *file, guint64 first, guint64 count,
-                       PhodavStream *stream, GCancellable *cancellable)
+typedef struct _GetFilePull
 {
-  g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
-  g_autoptr(GFileInputStream) in = NULL;
-  guint64 remaining = count;
-  gboolean ok = TRUE;
+  GFileInputStream *stream;
+  gchar *path;
+  int fd;
+  guint64 offset;
+  guint64 remaining;
+} GetFilePull;
 
-  in = g_file_read (file, cancellable, NULL);
-  if (!in)
-    return FALSE;
+static void
+get_file_pull_free (gpointer data)
+{
+  GetFilePull *pull = data;
 
-  if (first > 0)
-    {
-      if (G_IS_SEEKABLE (in))
-        {
-          if (!g_seekable_seek (G_SEEKABLE (in), first, G_SEEK_SET,
-                                cancellable, NULL))
-            return FALSE;
-        }
-      else
-        {
-          /* a non-seekable backend cannot jump to the start of the
-           * range: consume the bytes before it */
-          guint64 skip = first;
-
-          while (skip > 0)
-            {
-              gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, skip);
-              gssize n = g_input_stream_read (G_INPUT_STREAM (in), buffer, want,
-                                              cancellable, NULL);
-
-              if (n <= 0)
-                return FALSE;
-
-              skip -= n;
-            }
-        }
-    }
-
-  while (remaining > 0 && !g_cancellable_is_cancelled (cancellable))
-    {
-      gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, remaining);
-      gssize n = g_input_stream_read (G_INPUT_STREAM (in), buffer, want,
-                                      cancellable, NULL);
-
-      if (n <= 0)
-        {
-          /* an early EOF or a read error leaves the promised range
-           * incomplete */
-          ok = FALSE;
-          break;
-        }
-
-      if (!phodav_stream_write (stream, buffer, n))
-        {
-          ok = FALSE;
-          break;
-        }
-
-      remaining -= n;
-    }
-
-  return ok && remaining == 0;
+  if (pull->stream)
+    g_input_stream_close (G_INPUT_STREAM (pull->stream), NULL, NULL);
+  g_clear_object (&pull->stream);
+#ifdef G_OS_UNIX
+  if (pull->fd >= 0)
+    close (pull->fd);
+#endif
+  g_free (pull->path);
+  g_free (pull);
 }
 
-#ifdef G_OS_UNIX
-static gboolean
-stream_file_range_native (const gchar *path, guint64 first, guint64 count,
-                          PhodavStream *stream, GCancellable *cancellable)
+static GBytes *
+get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
 {
+  GetFilePull *pull = data;
   g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
-  guint64 offset = first;
-  guint64 remaining = count;
-  gboolean ok = TRUE;
-  int fd;
+  gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, pull->remaining);
+  gssize n;
 
-  fd = g_open (path, O_RDONLY, 0);
-  if (fd < 0)
-    return FALSE;
+  if (pull->remaining == 0)
+    return NULL;
 
-  while (remaining > 0 && !g_cancellable_is_cancelled (cancellable))
+#ifdef G_OS_UNIX
+  if (pull->fd >= 0)
     {
-      gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, remaining);
-      ssize_t n = pread (fd, buffer, want, offset);
+      do
+        n = pread (pull->fd, buffer, want, pull->offset);
+      while (n < 0 && errno == EINTR && !g_cancellable_is_cancelled (cancellable));
 
       if (n < 0)
         {
-          if (errno == EINTR)
-            continue;
-          ok = FALSE;
-          break;
+          g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
+                       "Cannot read %s: %s", pull->path, g_strerror (errno));
+          return NULL;
         }
-      if (n == 0)
-        {
-          /* the file shrank while it was being sent: fewer bytes than
-           * the announced representation must not look complete */
-          ok = FALSE;
-          break;
-        }
-
-      if (!phodav_stream_write (stream, buffer, n))
-        {
-          ok = FALSE;
-          break;
-        }
-
-      offset += n;
-      remaining -= n;
+    }
+  else
+#endif
+    {
+      n = g_input_stream_read (G_INPUT_STREAM (pull->stream), buffer, want,
+                               cancellable, error);
+      if (n < 0)
+        return NULL;
     }
 
-  close (fd);
+  if (n == 0)
+    {
+      /* the file shrank while it was being sent: fewer bytes than the
+       * announced representation must not look complete */
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                   "Unexpected end of %s", pull->path ?: "file");
+      return NULL;
+    }
 
-  return ok && remaining == 0;
-}
-#endif
+  pull->offset += n;
+  pull->remaining -= n;
 
-static gboolean
-stream_file_range (GFile *file, const gchar *path, guint64 first, guint64 count,
-                   PhodavStream *stream, GCancellable *cancellable)
-{
-#ifdef G_OS_UNIX
-  /* the native path avoids going through GIO for the common case */
-  if (path && g_file_is_native (file))
-    return stream_file_range_native (path, first, count, stream, cancellable);
-#endif
-
-  return stream_file_range_gio (file, first, count, stream, cancellable);
+  return g_bytes_new_take (g_steal_pointer (&buffer), n);
 }
 
 static gint
@@ -315,8 +268,7 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   guint64 count;
   gint status;
   HttpRangeType range;
-  PhodavStream *stream;
-  gboolean ok;
+  GetFilePull *pull;
 
   range = http_request_range (request_headers, etag, mtime, size, &first, &last);
 
@@ -351,16 +303,67 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   if (count == 0)
     return status;
 
-  stream = phodav_request_stream_start (req, status, NULL);
-  if (!stream)
-    return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  pull = g_new0 (GetFilePull, 1);
+  pull->path = g_strdup (path);
+  pull->offset = first;
+  pull->remaining = count;
+  pull->fd = -1;
 
-  ok = stream_file_range (file, path, first, count, stream,
-                          phodav_request_get_cancellable (req));
-  if (!ok)
-    g_debug ("GET: stopped streaming %s", path ?: "(non-native file)");
+#ifdef G_OS_UNIX
+  /* the native path avoids going through GIO for the common case */
+  if (path && g_file_is_native (file))
+    pull->fd = g_open (path, O_RDONLY, 0);
+#endif
 
-  stream_finish (req, stream, ok);
+  if (pull->fd < 0)
+    {
+      pull->stream = g_file_read (file, phodav_request_get_cancellable (req), NULL);
+      if (!pull->stream)
+        {
+          get_file_pull_free (pull);
+          return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+        }
+
+      if (first > 0)
+        {
+          if (G_IS_SEEKABLE (pull->stream))
+            {
+              if (!g_seekable_seek (G_SEEKABLE (pull->stream), first, G_SEEK_SET,
+                                    phodav_request_get_cancellable (req), NULL))
+                {
+                  get_file_pull_free (pull);
+                  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+                }
+            }
+          else
+            {
+              /* a non-seekable backend cannot jump to the start of the
+               * range: consume the bytes before it */
+              g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
+              guint64 skip = first;
+
+              while (skip > 0)
+                {
+                  gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, skip);
+                  gssize n = g_input_stream_read (G_INPUT_STREAM (pull->stream),
+                                                  buffer, want,
+                                                  phodav_request_get_cancellable (req),
+                                                  NULL);
+
+                  if (n <= 0)
+                    {
+                      get_file_pull_free (pull);
+                      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+                    }
+
+                  skip -= n;
+                }
+            }
+        }
+    }
+
+  phodav_request_stream_start (req, status, NULL,
+                               get_file_pull, pull, get_file_pull_free);
 
   return status;
 }
@@ -451,16 +454,25 @@ gint
 phodav_method_get (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
+  PhodavServer *server = handler_get_server (handler);
   GFile *file;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
+  /* the metadata and the file handle are taken under the read lock;
+   * the stream keeps reading from the opened handle afterwards */
+  phodav_server_read_lock (server);
+
   file = phodav_path_resolve (handler, phodav_request_get_path (req),
                               PHODAV_PATH_EXISTING, &status);
   if (!file)
-    return status;
+    {
+      phodav_server_read_unlock (server);
+      return status;
+    }
 
   status = method_get (req, file, cancellable, err);
+  phodav_server_read_unlock (server);
   g_object_unref (file);
 
   return status;

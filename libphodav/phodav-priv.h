@@ -28,7 +28,6 @@ typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
 typedef struct _PhodavRequest PhodavRequest;
-typedef struct _PhodavLockGuard PhodavLockGuard;
 typedef struct _PhodavStream PhodavStream;
 
 typedef enum _DAVLockScopeType
@@ -92,18 +91,16 @@ struct _PhodavServer
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 
-  /* protects the lock table during a lookup or update; recursive
-   * because the lock helpers call each other. It never covers a
-   * filesystem operation: the value-returning lock store API only
+  /* the private, bounded pool the DAV methods run on */
+  GThreadPool *pool;
+
+  /* protects the lock table during a lookup or update. It never covers
+   * a filesystem operation: the value-returning lock store API only
    * exposes owned decisions and XML nodes. */
-  GRecMutex lock_store_mutex;
-  /* per-path operation reservations. They replace the former global
-   * mutation mutex: disjoint resources can be modified concurrently,
-   * while overlapping operations wait here instead of holding a
-   * process-wide lock. */
-  GMutex guard_mutex;
-  GCond guard_cond;
-  GList *guards;
+  GMutex lock_store_mutex;
+  /* serializes the filesystem operations: mutations take it for
+   * writing, while reads may share it */
+  GRWLock fs_lock;
 };
 
 struct _PathHandler
@@ -113,10 +110,6 @@ struct _PathHandler
   gchar *base_path; /* immutable snapshot of the server base path */
   gint ref_count;
 };
-
-typedef gboolean (*PathCb) (const gchar *key,
-                            Path *path,
-                            gpointer data);
 
 typedef enum
 {
@@ -156,32 +149,25 @@ void phodav_server_callback (SoupServer *server,
                              GHashTable *query,
                              gpointer user_data);
 
-gboolean server_foreach_parent_path (PhodavServer *server,
-                                     const gchar *path,
-                                     PathCb cb,
-                                     gpointer data);
-DAVLock *server_path_get_lock (PhodavServer *server,
-                               const gchar *path,
-                               const gchar *token);
-DAVLock *server_path_lookup_lock (PhodavServer *server,
-                                  const gchar *path,
-                                  const gchar *token);
-gboolean server_path_has_other_locks (PhodavServer *self,
-                                      const gchar *path,
-                                      GList *locks);
-gboolean server_tree_has_other_locks (PhodavServer *self,
-                                      const gchar *path,
-                                      GList *locks);
-gboolean server_tree_has_lock_conflict (PhodavServer *self,
-                                        const gchar *path,
-                                        DAVLock *lock);
-void server_expire_locks (PhodavServer *self);
-void server_remove_locks (PhodavServer *self,
-                          const gchar *_path);
-Path *server_get_path (PhodavServer *self,
-                       const gchar *_path);
-void server_remove_path_if_empty (PhodavServer *self,
-                                  const gchar *_path);
+/* the private worker pool shared by the request dispatch, the PUT
+ * commit and the streaming producers; @done runs on the server context
+ * and owns @data */
+typedef void (*PhodavTaskFunc) (gpointer data);
+void phodav_server_dispatch (PhodavServer *self,
+                             PhodavTaskFunc run,
+                             PhodavTaskFunc done,
+                             gpointer data);
+
+/* the single filesystem lock: mutations take it for writing, readers
+ * share it */
+void phodav_server_read_lock (PhodavServer *self);
+void phodav_server_read_unlock (PhodavServer *self);
+void phodav_server_write_lock (PhodavServer *self);
+void phodav_server_write_unlock (PhodavServer *self);
+
+void phodav_lock_store_expire_locks (PhodavServer *self);
+void phodav_lock_store_remove_locks (PhodavServer *self,
+                                     const gchar *path);
 
 gint phodav_check_if (PhodavRequest *req, GList **locks);
 gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
@@ -220,16 +206,22 @@ void phodav_request_set_body_bytes (PhodavRequest *req, GBytes *bytes);
 gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
 gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
 
-/* incremental response bodies */
-PhodavStream *phodav_request_stream_start (PhodavRequest *req, guint status, const gchar *content_type);
-gboolean phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len);
-/* end terminates the body cleanly, abort cuts the connection so that
- * a truncated body cannot be mistaken for the complete representation */
-void phodav_stream_end (PhodavStream *stream);
+/* incremental response bodies: the main context pulls one chunk at a
+ * time from @pull, which runs on the private pool. Returning NULL
+ * without an error ends the body; an error aborts it. */
+typedef GBytes *(*PhodavStreamPull) (gpointer data,
+                                     GCancellable *cancellable,
+                                     GError **error);
+PhodavStream *phodav_request_stream_start (PhodavRequest *req,
+                                           guint status,
+                                           const gchar *content_type,
+                                           PhodavStreamPull pull,
+                                           gpointer pull_data,
+                                           GDestroyNotify pull_data_free);
+/* cut the connection so that a truncated body cannot be mistaken for
+ * the complete representation */
 void phodav_stream_abort (PhodavStream *stream);
 /* the value-returning lock service */
-PhodavLockGuard *phodav_lock_store_guard_acquire (PhodavServer *self, GList *paths);
-void phodav_lock_store_guard_release (PhodavLockGuard *guard);
 gboolean phodav_lock_store_has_token (PhodavServer *self, const gchar *path, const gchar *token);
 gboolean phodav_lock_store_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);
 gboolean phodav_lock_store_tree_has_other_locks (PhodavServer *self, const gchar *path, GList *locks);

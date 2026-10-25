@@ -790,15 +790,20 @@ phodav_method_propfind (PhodavRequest *req, GError **err)
   /* parse_propfind() only returns a PropFind with one of the three
    * request types: only the depth decides how it is answered, and the
    * depth-infinity request was refused above */
+  phodav_server_read_lock (handler_get_server (phodav_request_get_handler (req)));
+
   if (depth == DEPTH_ZERO)
     status = propfind_query_zero (req, pf, mstatus, ns);
   else
     status = propfind_query_one (req, pf, mstatus, ns);
 
+  phodav_server_read_unlock (handler_get_server (phodav_request_get_handler (req)));
+
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  status = set_response_multistatus (req, mstatus);
+  status = set_response_multistatus (req, mstatus, ns);
+  ns = NULL;
 
 end:
   if (ns)

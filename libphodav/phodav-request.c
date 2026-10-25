@@ -408,29 +408,223 @@ request_apply (PhodavRequest *req)
 
 struct _PhodavStream
 {
+  gint ref_count;
   PhodavRequest *req;
-  GMutex mutex;
-  GCond cond;
-  gboolean op_done;
-  gboolean chunk_written;
-  gboolean failed;
-  gboolean aborted;
-  gboolean started;
-  gboolean ended;
   guint status;
   gchar *content_type;
+  PhodavStreamPull pull;
+  gpointer pull_data;
+  GDestroyNotify pull_data_free;
+
   gulong wrote_id;
   gulong finished_id;
+
+  gboolean started;
+  gboolean ended;
+  gboolean pulling;
 };
 
-typedef struct _StreamWrite
+typedef struct _StreamPull
 {
   PhodavStream *stream;
   GBytes *bytes;
-} StreamWrite;
+  GError *error;
+} StreamPull;
 
-static void stream_wrote_chunk (SoupServerMessage *msg, gpointer user_data);
-static void stream_finished (SoupServerMessage *msg, gpointer user_data);
+static PhodavStream *stream_ref (PhodavStream *stream);
+static void stream_unref (PhodavStream *stream);
+static void stream_schedule_pull (PhodavStream *stream);
+static void stream_stop (PhodavStream *stream, gboolean complete, gboolean cut);
+
+static PhodavStream *
+stream_ref (PhodavStream *stream)
+{
+  g_atomic_int_inc (&stream->ref_count);
+
+  return stream;
+}
+
+static void
+stream_unref (PhodavStream *stream)
+{
+  if (!g_atomic_int_dec_and_test (&stream->ref_count))
+    return;
+
+  g_clear_pointer (&stream->content_type, g_free);
+  if (stream->pull_data_free)
+    stream->pull_data_free (stream->pull_data);
+  g_clear_pointer (&stream->req, phodav_request_unref);
+  g_free (stream);
+}
+
+static void
+stream_cut_connection (SoupServerMessage *msg)
+{
+  GIOStream *connection;
+  GSocket *socket;
+
+  /* The headers of a chunked response are already on the wire: the
+   * only way to signal that the body is not the complete
+   * representation is to cut the connection, rather than to send
+   * the terminating zero-length chunk. Stealing the connection
+   * makes libsoup flush and terminate the body being written, so
+   * shut the socket down first to make that flush fail. */
+  socket = soup_server_message_get_socket (msg);
+  if (socket)
+    g_socket_shutdown (socket, TRUE, TRUE, NULL);
+
+  connection = soup_server_message_steal_connection (msg);
+
+  if (connection)
+    {
+      g_io_stream_close (connection, NULL, NULL);
+      g_object_unref (connection);
+    }
+}
+
+static void
+stream_stop (PhodavStream *stream, gboolean complete, gboolean cut)
+{
+  SoupServerMessage *msg = stream->req->msg;
+
+  if (stream->ended)
+    return;
+
+  stream->ended = TRUE;
+
+  if (stream->wrote_id)
+    {
+      g_signal_handler_disconnect (msg, stream->wrote_id);
+      stream->wrote_id = 0;
+    }
+  if (stream->finished_id)
+    {
+      g_signal_handler_disconnect (msg, stream->finished_id);
+      stream->finished_id = 0;
+    }
+
+  if (cut)
+    stream_cut_connection (msg);
+  else if (complete && stream->started)
+    {
+      soup_message_body_complete (soup_server_message_get_response_body (msg));
+      soup_server_message_unpause (msg);
+    }
+
+  /* the main context reference was the stream's owner */
+  stream_unref (stream);
+}
+
+static gboolean
+stream_abort_cb (gpointer data)
+{
+  stream_stop (data, FALSE, TRUE);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+stream_wrote_chunk (SoupServerMessage *msg,
+                    gpointer user_data)
+{
+  PhodavStream *stream = user_data;
+
+  stream_schedule_pull (stream);
+}
+
+static void
+stream_finished (SoupServerMessage *msg,
+                 gpointer user_data)
+{
+  PhodavStream *stream = user_data;
+
+  /* the client went away: release the stream without trying to
+   * complete or cut the connection it already dropped */
+  stream_stop (stream, FALSE, FALSE);
+}
+
+static void
+stream_pull_run (gpointer data)
+{
+  StreamPull *pull = data;
+  PhodavStream *stream = pull->stream;
+
+  pull->bytes = stream->pull (stream->pull_data,
+                              phodav_request_get_cancellable (stream->req),
+                              &pull->error);
+}
+
+static void
+stream_pull_done (gpointer data)
+{
+  StreamPull *pull = data;
+  PhodavStream *stream = pull->stream;
+  gboolean finished;
+
+  stream->pulling = FALSE;
+
+  if (stream->ended)
+    goto out;
+
+  if (pull->error)
+    {
+      gboolean cancelled = g_cancellable_is_cancelled (phodav_request_get_cancellable (stream->req));
+
+      finished = phodav_request_is_finished (stream->req);
+      if (!cancelled || !finished)
+        g_debug ("streaming failed: %s", pull->error->message);
+
+      stream_stop (stream, FALSE, !(cancelled && finished));
+      goto out;
+    }
+
+  if (!pull->bytes)
+    {
+      stream_stop (stream, TRUE, FALSE);
+      goto out;
+    }
+
+  if (g_bytes_get_size (pull->bytes) > 0)
+    {
+      soup_message_body_append_bytes (soup_server_message_get_response_body (stream->req->msg),
+                                      pull->bytes);
+      soup_server_message_unpause (stream->req->msg);
+    }
+  else
+    {
+      /* an empty chunk is not an end of body: ask for the next one */
+      stream_schedule_pull (stream);
+    }
+
+out:
+  g_clear_pointer (&pull->bytes, g_bytes_unref);
+  g_clear_error (&pull->error);
+  stream_unref (stream);
+  g_free (pull);
+}
+
+static void
+stream_schedule_pull (PhodavStream *stream)
+{
+  StreamPull *pull;
+
+  if (stream->ended || stream->pulling)
+    return;
+
+  if (g_cancellable_is_cancelled (phodav_request_get_cancellable (stream->req)))
+    {
+      stream_stop (stream, FALSE,
+                   !phodav_request_is_finished (stream->req));
+      return;
+    }
+
+  stream->pulling = TRUE;
+  pull = g_new0 (StreamPull, 1);
+  pull->stream = stream_ref (stream);
+
+  phodav_server_dispatch (stream->req->self, stream_pull_run,
+                          stream_pull_done, pull);
+}
 
 static gboolean
 stream_start_cb (gpointer data)
@@ -439,6 +633,9 @@ stream_start_cb (gpointer data)
   PhodavRequest *req = stream->req;
   SoupServerMessage *msg = req->msg;
   SoupMessageHeaders *response_headers;
+
+  if (stream->ended)
+    return G_SOURCE_REMOVE;
 
   soup_server_message_set_status (msg, stream->status, NULL);
   response_headers = soup_server_message_get_response_headers (msg);
@@ -452,244 +649,69 @@ stream_start_cb (gpointer data)
                                        G_CALLBACK (stream_wrote_chunk), stream);
   stream->finished_id = g_signal_connect (msg, "finished",
                                           G_CALLBACK (stream_finished), stream);
-  req->streamed = TRUE;
+  stream->started = TRUE;
 
-  g_mutex_lock (&stream->mutex);
-  stream->op_done = TRUE;
-  g_cond_broadcast (&stream->cond);
-  g_mutex_unlock (&stream->mutex);
+  stream_schedule_pull (stream);
 
   return G_SOURCE_REMOVE;
-}
-
-static gboolean
-stream_write_cb (gpointer data)
-{
-  StreamWrite *write = data;
-  PhodavStream *stream = write->stream;
-  SoupServerMessage *msg = stream->req->msg;
-
-  soup_message_body_append_bytes (soup_server_message_get_response_body (msg),
-                                  write->bytes);
-  soup_server_message_unpause (msg);
-
-  g_bytes_unref (write->bytes);
-  g_free (write);
-
-  return G_SOURCE_REMOVE;
-}
-
-static gboolean
-stream_end_cb (gpointer data)
-{
-  PhodavStream *stream = data;
-  SoupServerMessage *msg = stream->req->msg;
-  gboolean aborted;
-
-  g_mutex_lock (&stream->mutex);
-  aborted = stream->aborted;
-  g_mutex_unlock (&stream->mutex);
-
-  if (aborted)
-    {
-      GIOStream *connection;
-      GSocket *socket;
-
-      /* The headers of a chunked response are already on the wire: the
-       * only way to signal that the body is not the complete
-       * representation is to cut the connection, rather than to send
-       * the terminating zero-length chunk. Stealing the connection
-       * makes libsoup flush and terminate the body being written, so
-       * shut the socket down first to make that flush fail. */
-      socket = soup_server_message_get_socket (msg);
-      if (socket)
-        g_socket_shutdown (socket, TRUE, TRUE, NULL);
-
-      connection = soup_server_message_steal_connection (msg);
-
-      if (connection)
-        {
-          g_io_stream_close (connection, NULL, NULL);
-          g_object_unref (connection);
-        }
-    }
-  else if (!stream->failed)
-    {
-      soup_message_body_complete (soup_server_message_get_response_body (msg));
-      soup_server_message_unpause (msg);
-    }
-
-  if (stream->wrote_id)
-    {
-      g_signal_handler_disconnect (msg, stream->wrote_id);
-      stream->wrote_id = 0;
-    }
-  if (stream->finished_id)
-    {
-      g_signal_handler_disconnect (msg, stream->finished_id);
-      stream->finished_id = 0;
-    }
-
-  stream->ended = TRUE;
-  g_mutex_lock (&stream->mutex);
-  stream->op_done = TRUE;
-  g_cond_broadcast (&stream->cond);
-  g_mutex_unlock (&stream->mutex);
-
-  return G_SOURCE_REMOVE;
-}
-
-static void
-stream_wrote_chunk (SoupServerMessage *msg,
-                    gpointer user_data)
-{
-  PhodavStream *stream = user_data;
-
-  g_mutex_lock (&stream->mutex);
-  stream->chunk_written = TRUE;
-  g_cond_broadcast (&stream->cond);
-  g_mutex_unlock (&stream->mutex);
-}
-
-static void
-stream_finished (SoupServerMessage *msg,
-                 gpointer user_data)
-{
-  PhodavStream *stream = user_data;
-
-  g_mutex_lock (&stream->mutex);
-  stream->failed = TRUE;
-  stream->op_done = TRUE;
-  g_cond_broadcast (&stream->cond);
-  g_mutex_unlock (&stream->mutex);
-}
-
-static void
-stream_wait (PhodavStream *stream)
-{
-  g_mutex_lock (&stream->mutex);
-  while (!stream->op_done)
-    g_cond_wait (&stream->cond, &stream->mutex);
-  g_mutex_unlock (&stream->mutex);
 }
 
 PhodavStream *
-phodav_request_stream_start (PhodavRequest *req, guint status, const gchar *content_type)
+phodav_request_stream_start (PhodavRequest *req,
+                             guint status,
+                             const gchar *content_type,
+                             PhodavStreamPull pull,
+                             gpointer pull_data,
+                             GDestroyNotify pull_data_free)
 {
   PhodavStream *stream = g_new0 (PhodavStream, 1);
 
+  stream->ref_count = 1;
   stream->req = phodav_request_ref (req);
   stream->status = status;
   stream->content_type = g_strdup (content_type);
-  g_mutex_init (&stream->mutex);
-  g_cond_init (&stream->cond);
+  stream->pull = pull;
+  stream->pull_data = pull_data;
+  stream->pull_data_free = pull_data_free;
+
+  /* the response is streamed even before the main context has started
+   * it: request_apply() must not replace it with an empty body */
+  req->streamed = TRUE;
 
   g_main_context_invoke_full (req->context, G_PRIORITY_DEFAULT,
-                              stream_start_cb, stream, NULL);
-  stream_wait (stream);
+                              stream_start_cb, stream_ref (stream),
+                              (GDestroyNotify) stream_unref);
 
-  g_mutex_lock (&stream->mutex);
-  stream->op_done = FALSE;
-  g_mutex_unlock (&stream->mutex);
-
-  stream->started = TRUE;
   return stream;
-}
-
-gboolean
-phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len)
-{
-  StreamWrite *write;
-  gboolean ok;
-
-  if (!stream || len == 0)
-    return TRUE;
-
-  g_mutex_lock (&stream->mutex);
-  if (stream->failed || g_cancellable_is_cancelled (stream->req->cancellable))
-    {
-      g_mutex_unlock (&stream->mutex);
-      return FALSE;
-    }
-  stream->chunk_written = FALSE;
-  g_mutex_unlock (&stream->mutex);
-
-  write = g_new0 (StreamWrite, 1);
-  write->stream = stream;
-  write->bytes = g_bytes_new (data, len);
-  g_main_context_invoke_full (stream->req->context, G_PRIORITY_DEFAULT,
-                              stream_write_cb, write, NULL);
-
-  g_mutex_lock (&stream->mutex);
-  while (!stream->chunk_written && !stream->failed &&
-         !g_cancellable_is_cancelled (stream->req->cancellable))
-    g_cond_wait (&stream->cond, &stream->mutex);
-  ok = stream->chunk_written && !stream->failed &&
-       !g_cancellable_is_cancelled (stream->req->cancellable);
-  g_mutex_unlock (&stream->mutex);
-
-  return ok;
-}
-
-static void
-stream_finish (PhodavStream *stream,
-               gboolean aborted)
-{
-  PhodavStream *ref = stream;
-
-  g_mutex_lock (&ref->mutex);
-  ref->op_done = FALSE;
-  ref->aborted = aborted;
-  g_mutex_unlock (&ref->mutex);
-  g_main_context_invoke_full (ref->req->context, G_PRIORITY_DEFAULT,
-                              stream_end_cb, ref, NULL);
-  stream_wait (ref);
-
-  g_clear_pointer (&ref->content_type, g_free);
-  g_clear_pointer (&ref->req, phodav_request_unref);
-  g_cond_clear (&ref->cond);
-  g_mutex_clear (&ref->mutex);
-  g_free (ref);
-}
-
-void
-phodav_stream_end (PhodavStream *stream)
-{
-  if (stream)
-    stream_finish (stream, FALSE);
 }
 
 void
 phodav_stream_abort (PhodavStream *stream)
 {
-  if (stream)
-    stream_finish (stream, TRUE);
+  if (!stream)
+    return;
+
+  g_main_context_invoke_full (stream->req->context, G_PRIORITY_DEFAULT,
+                              stream_abort_cb, stream_ref (stream),
+                              (GDestroyNotify) stream_unref);
 }
 
 static void
-request_task (GTask *task,
-              gpointer source_object,
-              gpointer task_data,
-              GCancellable *cancellable)
+request_task (gpointer data)
 {
-  PhodavRequest *req = task_data;
+  PhodavRequest *req = data;
   g_autoptr(GError) error = NULL;
   gint status;
 
   /* the request may have been cancelled while it was queued: do not
    * start a filesystem operation for a client which is already gone */
   if (g_cancellable_is_cancelled (req->cancellable))
-    {
-      g_task_return_boolean (task, TRUE);
-      return;
-    }
+    return;
 
   status = req->handler_func (req, &error);
 
   req->status = status;
   req->error = g_steal_pointer (&error);
-
-  g_task_return_boolean (task, TRUE);
 }
 
 gboolean
@@ -709,21 +731,13 @@ phodav_request_is_server_cancelled (PhodavRequest *req)
 }
 
 static void
-request_task_done (GObject *source_object,
-                   GAsyncResult *res,
-                   gpointer user_data)
+request_task_done (gpointer data)
 {
-  GTask *task = G_TASK (res);
-  PhodavRequest *req = user_data;
+  PhodavRequest *req = data;
   RequestCancel *cancel = request_cancel_get (req->msg);
   gboolean finished = cancel && g_atomic_int_get (&cancel->finished);
   gboolean server_cancelled = cancel && g_atomic_int_get (&cancel->server_cancelled);
-  g_autoptr(GError) error = NULL;
 
-  g_task_propagate_boolean (task, &error);
-
-  if (error)
-    g_debug ("request failed: %s", error->message);
   if (req->error)
     g_debug ("%s %s: %s", req->method, req->path, req->error->message);
 
@@ -741,14 +755,12 @@ request_task_done (GObject *source_object,
                                        : SOUP_STATUS_INTERNAL_SERVER_ERROR,
                                      NULL);
         }
-      else if (error && req->status == 0)
+      else if (req->status == 0)
         phodav_request_set_status (req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 
       request_apply (req);
     }
 
-  /* the task data is borrowed: this reference is the only one which
-   * outlives the dispatch, and it is released here on the main context */
   phodav_request_unref (req);
 }
 
@@ -961,26 +973,17 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
   else
     {
       g_autoptr(PhodavRequest) req = phodav_request_new (handler, msg, path);
-      GTask *task;
 
-      /* the handlers run outside the main loop: the response is
+      /* the handlers run on the private worker pool: the response is
        * built on the request and applied back when the worker
-       * completes. The lock store guards the operations which need it,
-       * per path, instead of serializing every request. */
+       * completes. The filesystem operations are serialized by the
+       * server-wide reader-writer lock. */
       req->handler_func = m->handler;
 
       soup_server_message_pause (msg);
 
-      /* the request is kept alive by the completion callback, which
-       * runs on the main context: the task data is only borrowed, so
-       * the task teardown on the worker thread never frees it */
-      task = g_task_new (NULL, req->cancellable, request_task_done,
-                         phodav_request_ref (req));
-      g_task_set_task_data (task, req, NULL);
-
-      g_task_run_in_thread (task, request_task);
-
-      g_object_unref (task);
+      phodav_server_dispatch (req->self, request_task, request_task_done,
+                              phodav_request_ref (req));
     }
 
   if (err)

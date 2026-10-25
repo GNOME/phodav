@@ -188,8 +188,9 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  PhodavLockGuard *guard = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+
+  phodav_server_write_lock (server);
 
   /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
    * are valid for COPY and MOVE, an invalid depth must be rejected
@@ -247,15 +248,6 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   if (status != SOUP_STATUS_OK)
     goto end;
 
-  {
-    GList *paths = NULL;
-
-    paths = g_list_prepend (paths, (gpointer) path);
-    paths = g_list_prepend (paths, (gpointer) udest);
-    guard = phodav_lock_store_guard_acquire (server, paths);
-    g_list_free (paths);
-  }
-
   /* moving a collection removes its members with it: the tokens of
    * the locks held on them must be submitted too. A COPY leaves the
    * source untouched, its locks do not apply. */
@@ -299,7 +291,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
                              cancellable, err);
 
 end:
-  phodav_lock_store_guard_release (guard);
+  phodav_server_write_unlock (server);
   if (dest_uri)
     g_uri_unref (dest_uri);
   g_clear_object (&file);

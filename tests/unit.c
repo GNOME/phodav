@@ -602,71 +602,29 @@ test_lock_submitted (void)
   check_locks_submitted (lock, "/other", token, FALSE);
 }
 
-static gboolean
-collect_path (const gchar *key, Path *path, gpointer data)
-{
-  GList **collected = data;
-
-  *collected = g_list_append (*collected, g_strdup (key));
-
-  return TRUE;
-}
-
-static gboolean
-stop_at_first (const gchar *key, Path *path, gpointer data)
-{
-  GList **collected = data;
-
-  *collected = g_list_append (*collected, g_strdup (key));
-
-  return FALSE;
-}
-
 static void
 test_server_paths (void)
 {
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
-  Path *a, *a_again;
+  g_autofree gchar *token = new_token ();
 
-  a = server_get_path (server, "/a");
-  g_assert_cmpstr (a->path, ==, "/a");
-  g_assert_cmpuint (a->refs, ==, 1);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/a", token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
 
-  /* trailing slashes are ignored, the same path is returned */
-  a_again = server_get_path (server, "/a/");
-  g_assert_true (a_again == a);
-  g_assert_cmpuint (a->refs, ==, 1);
+  /* trailing slashes are ignored, and locks on parent paths apply to
+   * their children */
+  g_assert_true (phodav_lock_store_has_token (server, "/a", token));
+  g_assert_true (phodav_lock_store_has_token (server, "/a/", token));
+  g_assert_true (phodav_lock_store_has_token (server, "/a/b/c", token));
+  g_assert_false (phodav_lock_store_has_token (server, "/ab", token));
+  g_assert_false (phodav_lock_store_has_token (server, "/b", token));
 
-  server_get_path (server, "/a/b");
-
-  {
-    GList *collected = NULL;
-    GList *l;
-
-    /* only the known parent paths are visited, in hierarchical order */
-    g_assert_true (server_foreach_parent_path (server, "/a/b/c", collect_path, &collected));
-    g_assert_cmpuint (g_list_length (collected), ==, 2);
-    l = collected;
-    g_assert_cmpstr (l->data, ==, "/a");
-    g_assert_cmpstr (l->next->data, ==, "/a/b");
-
-    /* unknown paths are simply not visited */
-    g_assert_true (server_foreach_parent_path (server, "/x/y", collect_path, &collected));
-    g_assert_cmpuint (g_list_length (collected), ==, 2);
-
-    g_list_free_full (collected, g_free);
-  }
-
-  {
-    GList *collected = NULL;
-
-    /* a callback returning FALSE stops the iteration */
-    g_assert_false (server_foreach_parent_path (server, "/a/b", stop_at_first, &collected));
-    g_assert_cmpuint (g_list_length (collected), ==, 1);
-    g_assert_cmpstr (collected->data, ==, "/a");
-
-    g_list_free_full (collected, g_free);
-  }
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/a", token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_false (phodav_lock_store_has_token (server, "/a/b/c", token));
 }
 
 static void
@@ -675,38 +633,33 @@ test_server_lock_manager (void)
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
   g_autofree gchar *token = new_token ();
   g_autofree gchar *other = new_token ();
-  g_autoptr(DAVLock) lock = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  Path *p;
 
-  p = server_get_path (server, "/a");
-  lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                       DEPTH_ZERO, NULL, 60);
-  path_add_lock (p, lock);
-
-  /* locks on parent paths apply to their children */
-  g_assert_true (server_path_get_lock (server, "/a", token) == lock);
-  g_assert_true (server_path_get_lock (server, "/a/b/c", token) == lock);
-  g_assert_null (server_path_get_lock (server, "/b", token));
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/a", token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
 
   /* a resource is locked when a lock is not submitted */
-  g_assert_true (server_path_has_other_locks (server, "/a/b", NULL));
-  g_assert_true (server_path_has_other_locks (server, "/a/b/c", NULL));
-  g_assert_false (server_path_has_other_locks (server, "/x/y", NULL));
+  g_assert_true (phodav_lock_store_path_has_other_locks (server, "/a/b", NULL));
+  g_assert_true (phodav_lock_store_path_has_other_locks (server, "/a/b/c", NULL));
+  g_assert_false (phodav_lock_store_path_has_other_locks (server, "/x/y", NULL));
 
   /* submitting the lock makes the resource accessible */
   submitted = g_list_append (NULL, lock_submitted_new ("/a", token));
-  g_assert_false (server_path_has_other_locks (server, "/a/b", submitted));
-  g_assert_false (server_path_has_other_locks (server, "/a/b/c", submitted));
+  g_assert_false (phodav_lock_store_path_has_other_locks (server, "/a/b", submitted));
+  g_assert_false (phodav_lock_store_path_has_other_locks (server, "/a/b/c", submitted));
 
   /* submitting another token does not help */
   lock_submitted_free (submitted->data);
   submitted->data = lock_submitted_new ("/a", other);
-  g_assert_true (server_path_has_other_locks (server, "/a/b", submitted));
+  g_assert_true (phodav_lock_store_path_has_other_locks (server, "/a/b", submitted));
 
-  /* the lock is released with the path */
-  path_remove_lock (p, lock);
-  g_assert_null (server_path_get_lock (server, "/a/b/c", token));
+  /* the lock is released with its token */
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/a", token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_false (phodav_lock_store_has_token (server, "/a/b/c", token));
 }
 
 static void
@@ -715,39 +668,42 @@ test_server_tree_other_locks (void)
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
   g_autofree gchar *token = new_token ();
   g_autofree gchar *other = new_token ();
-  g_autoptr(DAVLock) member_lock = NULL;
-  g_autoptr(DAVLock) outside_lock = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  Path *p;
 
-  p = server_get_path (server, "/coll/member");
-  member_lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                              DEPTH_ZERO, NULL, 60);
-  path_add_lock (p, member_lock);
-
-  p = server_get_path (server, "/other");
-  outside_lock = dav_lock_new (p, other, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                               DEPTH_ZERO, NULL, 60);
-  path_add_lock (p, outside_lock);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll/member", token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/other", other,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
 
   /* locks on the collection and on its members are in the tree */
-  g_assert_true (server_tree_has_other_locks (server, "/coll", NULL));
-  g_assert_true (server_tree_has_other_locks (server, "/coll/member", NULL));
+  g_assert_true (phodav_lock_store_tree_has_other_locks (server, "/coll", NULL));
+  g_assert_true (phodav_lock_store_tree_has_other_locks (server, "/coll/member", NULL));
 
   /* a lock outside the tree, or on a resource with a similar name,
    * does not count */
-  g_assert_false (server_tree_has_other_locks (server, "/elsewhere", NULL));
-  g_assert_false (server_tree_has_other_locks (server, "/col", NULL));
+  g_assert_false (phodav_lock_store_tree_has_other_locks (server, "/elsewhere", NULL));
+  g_assert_false (phodav_lock_store_tree_has_other_locks (server, "/col", NULL));
 
   /* an untagged submission on the collection does not submit the token
    * of a locked member */
   submitted = g_list_append (NULL, lock_submitted_new ("/coll", token));
-  g_assert_true (server_tree_has_other_locks (server, "/coll", submitted));
+  g_assert_true (phodav_lock_store_tree_has_other_locks (server, "/coll", submitted));
 
   /* the submission for the locked member itself does */
   lock_submitted_free (submitted->data);
   submitted->data = lock_submitted_new ("/coll/member", token);
-  g_assert_false (server_tree_has_other_locks (server, "/coll", submitted));
+  g_assert_false (phodav_lock_store_tree_has_other_locks (server, "/coll", submitted));
+
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/coll/member", token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/other", other),
+                   ==, SOUP_STATUS_NO_CONTENT);
 }
 
 static void
@@ -790,32 +746,21 @@ test_server_lock_expiry (void)
 {
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
   g_autofree gchar *token = new_token ();
-  DAVLock *lock;
-  Path *p;
 
-  p = server_get_path (server, "/a");
-  lock = dav_lock_new (p, token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                       DEPTH_ZERO, NULL, 60);
-  path_add_lock (p, lock);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/a", token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 1),
+                   ==, SOUP_STATUS_OK);
 
   /* the lock is found while it has not expired */
-  g_assert_true (server_path_lookup_lock (server, "/a/b", token) == lock);
+  g_assert_true (phodav_lock_store_has_token (server, "/a/b", token));
 
-  /* expire it behind the server's back */
-  lock->timeout = g_get_monotonic_time () / G_USEC_PER_SEC - 1;
-
-  /* the expired lock is not honored anymore */
-  g_assert_null (server_path_lookup_lock (server, "/a/b", token));
-
-  /* and the sweep reclaims the empty paths from the table */
-  server_expire_locks (server);
-  {
-    GList *collected = NULL;
-
-    g_assert_true (server_foreach_parent_path (server, "/a/b", collect_path, &collected));
-    g_assert_cmpuint (g_list_length (collected), ==, 0);
-    g_list_free_full (collected, g_free);
-  }
+  /* the expired lock is not honored anymore, and the sweep reclaims
+   * the empty paths from the table */
+  g_usleep (G_USEC_PER_SEC + 100000);
+  g_assert_false (phodav_lock_store_has_token (server, "/a/b", token));
+  phodav_lock_store_expire_locks (server);
 }
 
 static void
@@ -824,37 +769,50 @@ test_server_lock_conflict (void)
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
   g_autofree gchar *member_token = new_token ();
   g_autofree gchar *tree_token = new_token ();
-  g_autoptr(DAVLock) member_lock = NULL;
-  g_autoptr(DAVLock) tree_lock = NULL;
-  Path *p;
 
   /* a lock on a member of the collection */
-  p = server_get_path (server, "/coll/member");
-  member_lock = dav_lock_new (p, member_token, DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                              DEPTH_ZERO, NULL, 60);
-  path_add_lock (p, member_lock);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll/member", member_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
 
   /* an exclusive depth-infinity lock on the collection conflicts with
    * it (RFC 4918 section 7.4)... */
-  tree_lock = dav_lock_new (server_get_path (server, "/coll"), tree_token,
-                            DAV_LOCK_SCOPE_EXCLUSIVE, DAV_LOCK_WRITE,
-                            DEPTH_INFINITY, NULL, 60);
-  g_assert_true (server_tree_has_lock_conflict (server, "/coll", tree_lock));
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll", tree_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_INFINITY,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_LOCKED);
+
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/coll/member", member_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
 
   /* ...but a shared tree lock does not conflict with a shared member lock */
-  g_clear_pointer (&member_lock, dav_lock_free);
-  g_clear_pointer (&tree_lock, dav_lock_free);
-  member_lock = dav_lock_new (server_get_path (server, "/coll/member"), member_token,
-                              DAV_LOCK_SCOPE_SHARED, DAV_LOCK_WRITE,
-                              DEPTH_ZERO, NULL, 60);
-  path_add_lock (server_get_path (server, "/coll/member"), member_lock);
-  tree_lock = dav_lock_new (server_get_path (server, "/coll"), tree_token,
-                            DAV_LOCK_SCOPE_SHARED, DAV_LOCK_WRITE,
-                            DEPTH_INFINITY, NULL, 60);
-  g_assert_false (server_tree_has_lock_conflict (server, "/coll", tree_lock));
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll/member", member_token,
+                                               DAV_LOCK_SCOPE_SHARED,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll", tree_token,
+                                               DAV_LOCK_SCOPE_SHARED,
+                                               DAV_LOCK_WRITE, DEPTH_INFINITY,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
 
   /* a depth-infinity lock elsewhere does not conflict either */
-  g_assert_false (server_tree_has_lock_conflict (server, "/other", tree_lock));
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/other", tree_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_INFINITY,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/coll/member", member_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/coll", tree_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/other", tree_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
 }
 
 static void

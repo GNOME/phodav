@@ -390,8 +390,9 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
   GList *props = NULL;
   g_autolist(PropChange) changes = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  PhodavLockGuard *guard = NULL;
   gint status;
+
+  phodav_server_write_lock (handler_get_server (handler));
 
   if (!davdoc_parse (&doc, phodav_request_get_request_body (req), "propertyupdate"))
     {
@@ -402,13 +403,6 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
   status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
-
-  {
-    GList *paths = g_list_prepend (NULL, (gpointer) path);
-
-    guard = phodav_lock_store_guard_acquire (handler_get_server (handler), paths);
-    g_list_free (paths);
-  }
 
   if (phodav_lock_store_path_has_other_locks (handler_get_server (handler),
                                               path, submitted))
@@ -475,10 +469,10 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
   g_hash_table_insert (mstatus, g_strdup (path),
                        response_new (props, 0));
 
-  status = set_response_multistatus (req, mstatus);
+  status = set_response_multistatus (req, mstatus, NULL);
 
 end:
-  phodav_lock_store_guard_release (guard);
+  phodav_server_write_unlock (handler_get_server (handler));
   g_clear_object (&file);
 
   return status;

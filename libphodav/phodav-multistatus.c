@@ -76,12 +76,31 @@ status_to_string (gint status)
                           status, soup_status_get_phrase (status));
 }
 
+#define MULTISTATUS_CHUNK_SIZE (64 * 1024)
+
+typedef struct _MultistatusPull
+{
+  GHashTable *mstatus;
+  PhodavRequest *req;
+  GHashTableIter iter;
+  gboolean iter_started;
+  gboolean doc_started;
+  gboolean doc_done;
+  xmlTextWriterPtr writer;
+  xmlOutputBufferPtr output;
+  GByteArray *buffer;
+  GList *pending_buffers;
+  xmlNsPtr ns;
+} MultistatusPull;
+
 static int
 multistatus_write (void *context, const char *buffer, int len)
 {
-  PhodavStream *stream = context;
+  MultistatusPull *pull = context;
 
-  return phodav_stream_write (stream, (const guint8 *) buffer, len) ? len : -1;
+  g_byte_array_append (pull->buffer, (const guint8 *) buffer, len);
+
+  return len;
 }
 
 static void
@@ -107,18 +126,28 @@ writer_status (xmlTextWriterPtr writer, gint status)
 }
 
 static void
-writer_prop_node (xmlTextWriterPtr writer, xmlNodePtr node)
+multistatus_free_buffers (MultistatusPull *pull)
+{
+  g_list_free_full (pull->pending_buffers, (GDestroyNotify) xmlBufferFree);
+  pull->pending_buffers = NULL;
+}
+
+/* xmlTextWriterWriteRaw() keeps a reference to the raw buffer until the
+ * output buffer is flushed: keep it alive until then */
+static void
+writer_prop_node (MultistatusPull *pull, xmlNodePtr node)
 {
   xmlBufferPtr buffer = xmlBufferCreate ();
 
   xmlNodeDump (buffer, NULL, node, 0, 0);
-  xmlTextWriterWriteRaw (writer, xmlBufferContent (buffer));
-  xmlBufferFree (buffer);
+  xmlTextWriterWriteRaw (pull->writer, xmlBufferContent (buffer));
+  pull->pending_buffers = g_list_prepend (pull->pending_buffers, buffer);
 }
 
 static void
-writer_propstat (xmlTextWriterPtr writer, GList *props)
+writer_propstat (MultistatusPull *pull, GList *props)
 {
+  xmlTextWriterPtr writer = pull->writer;
   GList *l = props;
 
   while (l)
@@ -130,7 +159,7 @@ writer_propstat (xmlTextWriterPtr writer, GList *props)
 
       while (l && ((ResponseProp *) l->data)->status == status)
         {
-          writer_prop_node (writer, ((ResponseProp *) l->data)->node);
+          writer_prop_node (pull, ((ResponseProp *) l->data)->node);
           l = l->next;
         }
 
@@ -140,64 +169,134 @@ writer_propstat (xmlTextWriterPtr writer, GList *props)
     }
 }
 
+static gboolean
+multistatus_doc_start (MultistatusPull *pull, GError **error)
+{
+  pull->output = xmlOutputBufferCreateIO (multistatus_write, NULL, pull, NULL);
+  if (!pull->output)
+    goto fail;
+
+  pull->writer = xmlNewTextWriter (pull->output);
+  if (!pull->writer)
+    goto fail;
+
+  xmlTextWriterStartDocument (pull->writer, NULL, "UTF-8", NULL);
+  xmlTextWriterStartElementNS (pull->writer, BAD_CAST "D",
+                               BAD_CAST "multistatus", BAD_CAST "DAV:");
+  pull->doc_started = TRUE;
+
+  return TRUE;
+
+fail:
+  g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                       "Cannot create the multistatus writer");
+  return FALSE;
+}
+
+static gboolean
+multistatus_write_response (MultistatusPull *pull, const gchar *path, Response *resp)
+{
+  g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
+                                                  G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
+  g_autoptr(GUri) new_uri = g_uri_parse_relative (phodav_request_get_uri (pull->req), escaped,
+                                                  SOUP_HTTP_URI_FLAGS, NULL);
+  g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
+
+  writer_start (pull->writer, "response");
+  writer_text (pull->writer, "href", text);
+
+  if (resp->props)
+    writer_propstat (pull, resp->props);
+  else if (resp->status)
+    writer_status (pull->writer, resp->status);
+
+  xmlTextWriterEndElement (pull->writer); /* response */
+
+  return TRUE;
+}
+
+static GBytes *
+multistatus_pull (gpointer data, GCancellable *cancellable, GError **error)
+{
+  MultistatusPull *pull = data;
+
+  if (!pull->doc_started && !multistatus_doc_start (pull, error))
+    return NULL;
+
+  while (!pull->doc_done && pull->buffer->len < MULTISTATUS_CHUNK_SIZE)
+    {
+      gchar *path;
+      Response *resp;
+
+      if (!pull->iter_started)
+        {
+          g_hash_table_iter_init (&pull->iter, pull->mstatus);
+          pull->iter_started = TRUE;
+        }
+
+      if (g_hash_table_iter_next (&pull->iter, (gpointer *) &path, (gpointer *) &resp))
+        {
+          multistatus_write_response (pull, path, resp);
+          xmlOutputBufferFlush (pull->output);
+          multistatus_free_buffers (pull);
+        }
+      else
+        {
+          xmlTextWriterEndDocument (pull->writer);
+          xmlOutputBufferFlush (pull->output);
+          multistatus_free_buffers (pull);
+          xmlFreeTextWriter (pull->writer);
+          pull->writer = NULL;
+          pull->output = NULL;
+          pull->doc_done = TRUE;
+        }
+    }
+
+  if (pull->buffer->len == 0)
+    return NULL;
+
+  {
+    GBytes *bytes = g_byte_array_free_to_bytes (g_steal_pointer (&pull->buffer));
+
+    pull->buffer = g_byte_array_new ();
+    return bytes;
+  }
+}
+
+static void
+multistatus_pull_free (gpointer data)
+{
+  MultistatusPull *pull = data;
+
+  if (pull->writer)
+    xmlFreeTextWriter (pull->writer);
+  else if (pull->output)
+    xmlOutputBufferClose (pull->output);
+  multistatus_free_buffers (pull);
+  g_clear_pointer (&pull->buffer, g_byte_array_unref);
+  g_clear_pointer (&pull->mstatus, g_hash_table_unref);
+  if (pull->ns)
+    xmlFreeNs (pull->ns);
+  g_clear_pointer (&pull->req, phodav_request_unref);
+  g_free (pull);
+}
+
 gint
 set_response_multistatus (PhodavRequest *req,
-                          GHashTable *mstatus)
+                          GHashTable *mstatus,
+                          xmlNsPtr ns)
 {
-  GHashTableIter iter;
-  Response *resp;
-  gchar *path;
-  PhodavStream *stream;
-  xmlOutputBufferPtr output;
-  xmlTextWriterPtr writer;
+  MultistatusPull *pull = g_new0 (MultistatusPull, 1);
 
-  stream = phodav_request_stream_start (req, SOUP_STATUS_MULTI_STATUS,
-                                        "application/xml");
-  if (!stream)
-    return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  pull->mstatus = g_hash_table_ref (mstatus);
+  pull->req = phodav_request_ref (req);
+  pull->buffer = g_byte_array_new ();
+  pull->ns = ns;
 
-  output = xmlOutputBufferCreateIO (multistatus_write, NULL, stream, NULL);
-  if (!output)
-    {
-      phodav_stream_end (stream);
-      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
-    }
-
-  writer = xmlNewTextWriter (output);
-  if (!writer)
-    {
-      xmlOutputBufferClose (output);
-      phodav_stream_end (stream);
-      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
-    }
-
-  xmlTextWriterStartDocument (writer, NULL, "UTF-8", NULL);
-  xmlTextWriterStartElementNS (writer, BAD_CAST "D",
-                               BAD_CAST "multistatus", BAD_CAST "DAV:");
-
-  g_hash_table_iter_init (&iter, mstatus);
-  while (g_hash_table_iter_next (&iter, (gpointer *) &path, (gpointer *) &resp))
-    {
-      g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
-                                                      G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
-      g_autoptr(GUri) new_uri = g_uri_parse_relative (phodav_request_get_uri (req), escaped,
-                                                      SOUP_HTTP_URI_FLAGS, NULL);
-      g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
-
-      writer_start (writer, "response");
-      writer_text (writer, "href", text);
-
-      if (resp->props)
-        writer_propstat (writer, resp->props);
-      else if (resp->status)
-        writer_status (writer, resp->status);
-
-      xmlTextWriterEndElement (writer); /* response */
-    }
-
-  xmlTextWriterEndDocument (writer);
-  xmlFreeTextWriter (writer);
-  phodav_stream_end (stream);
+  phodav_request_stream_start (req, SOUP_STATUS_MULTI_STATUS,
+                               "application/xml",
+                               multistatus_pull, pull,
+                               multistatus_pull_free);
 
   return SOUP_STATUS_MULTI_STATUS;
 }

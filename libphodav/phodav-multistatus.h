@@ -34,6 +34,9 @@ Response *response_new (GList *props,
                         gint status);
 void response_free (Response *h);
 
+/* @ns is the namespace the response property nodes were built with;
+ * it is owned by the streaming response from now on */
 gint set_response_multistatus (PhodavRequest *req,
-                               GHashTable *mstatus);
+                               GHashTable *mstatus,
+                               xmlNsPtr ns);
 G_END_DECLS

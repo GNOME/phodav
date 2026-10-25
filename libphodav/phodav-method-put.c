@@ -380,18 +380,13 @@ method_put_got_chunk (SoupServerMessage *msg,
 }
 
 static void
-put_commit_task (GTask *task,
-                 gpointer source_object,
-                 gpointer task_data,
-                 GCancellable *cancellable)
+put_commit_run (gpointer data)
 {
-  PutContext *ctx = task_data;
+  PutContext *ctx = data;
   g_autoptr(GError) error = NULL;
-  GList *paths = g_list_prepend (NULL, ctx->path);
-  PhodavLockGuard *guard = phodav_lock_store_guard_acquire (ctx->server, paths);
   gint status;
 
-  g_list_free (paths);
+  phodav_server_write_lock (ctx->server);
 
   if (g_cancellable_is_cancelled (ctx->cancellable))
     status = 0;
@@ -403,22 +398,17 @@ put_commit_task (GTask *task,
   else
     status = put_commit (ctx, ctx->cancellable, &error);
 
-  phodav_lock_store_guard_release (guard);
+  phodav_server_write_unlock (ctx->server);
 
   ctx->commit_status = status;
   ctx->commit_error = g_steal_pointer (&error);
-  g_task_return_boolean (task, TRUE);
 }
 
 static void
-put_commit_done (GObject *source_object,
-                 GAsyncResult *res,
-                 gpointer user_data)
+put_commit_done (gpointer data)
 {
-  PutContext *ctx = user_data;
+  PutContext *ctx = data;
   gint status = ctx->commit_status;
-
-  g_task_propagate_boolean (G_TASK (res), NULL);
 
   if (ctx->commit_error)
     g_debug ("PUT: failed to commit the uploaded file: %s",
@@ -467,8 +457,6 @@ put_commit_done (GObject *source_object,
 static void
 put_finish (PutContext *ctx)
 {
-  GTask *task;
-
   if (put_context_is_decided (ctx) || ctx->writing || ctx->chunks->length > 0 ||
       ctx->committing)
     return;
@@ -479,11 +467,8 @@ put_finish (PutContext *ctx)
   /* hold the response until the commit worker has decided the outcome */
   soup_server_message_pause (ctx->msg);
 
-  task = g_task_new (NULL, ctx->cancellable, put_commit_done,
-                     put_context_ref (ctx));
-  g_task_set_task_data (task, ctx, NULL);
-  g_task_run_in_thread (task, put_commit_task);
-  g_object_unref (task);
+  phodav_server_dispatch (ctx->server, put_commit_run, put_commit_done,
+                          put_context_ref (ctx));
 }
 
 static void
@@ -702,9 +687,9 @@ end:
   return status;
 }
 
-/* the lock check and the staged file creation run on a worker under a
- * path guard, so that no LOCK/UNLOCK/MOVE can slip between them and
- * PUT does not block the main loop */
+/* the lock check and the staged file creation run on a worker under
+ * the filesystem write lock, so that no LOCK/UNLOCK/MOVE can slip
+ * between them and PUT does not block the main loop */
 typedef struct _PutStart
 {
   PhodavRequest *req;
@@ -724,25 +709,21 @@ put_start_free (PutStart *start)
 }
 
 static void
-put_start_task (GTask *task,
-                gpointer source_object,
-                gpointer task_data,
-                GCancellable *cancellable)
+put_start_run (gpointer data)
 {
-  PutStart *start = task_data;
+  PutStart *start = data;
   PhodavRequest *req = start->req;
   PathHandler *handler = phodav_request_get_handler (req);
   PhodavServer *server = handler_get_server (handler);
   const gchar *path = phodav_request_get_path (req);
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   guint64 max_upload = handler_get_max_upload (handler);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autolist(LockSubmitted) submitted = NULL;
   g_autoptr(GFile) file = NULL;
   g_autoptr(GError) error = NULL;
-  GList *paths = g_list_prepend (NULL, (gpointer) path);
-  PhodavLockGuard *guard = phodav_lock_store_guard_acquire (server, paths);
 
-  g_list_free (paths);
+  phodav_server_write_lock (server);
 
   if (g_cancellable_is_cancelled (cancellable))
     goto out;
@@ -776,27 +757,19 @@ put_start_task (GTask *task,
     }
 
 out:
-  phodav_lock_store_guard_release (guard);
-  g_task_return_boolean (task, TRUE);
+  phodav_server_write_unlock (server);
 }
 
 static void
-put_start_done (GObject *source_object,
-                GAsyncResult *res,
-                gpointer user_data)
+put_start_done (gpointer data)
 {
-  PutStart *start = user_data;
+  PutStart *start = data;
   PhodavRequest *req = start->req;
   SoupServerMessage *msg = phodav_request_get_message (req);
   gboolean finished = phodav_request_is_finished (req);
   gboolean cancelled = g_cancellable_is_cancelled (phodav_request_get_cancellable (req));
-  g_autoptr(GError) task_error = NULL;
   gint status = start->status;
 
-  g_task_propagate_boolean (G_TASK (res), &task_error);
-
-  if (task_error)
-    g_debug ("PUT start failed: %s", task_error->message);
   if (start->error)
     g_debug ("%s %s: %s", phodav_request_get_method (req),
              phodav_request_get_path (req), start->error->message);
@@ -805,7 +778,7 @@ put_start_done (GObject *source_object,
     {
       /* the client is gone, do not touch its message */
     }
-  else if (cancelled || task_error || !start->ctx)
+  else if (cancelled || !start->ctx)
     {
       if (cancelled)
         status = phodav_request_is_server_cancelled (req)
@@ -844,7 +817,6 @@ phodav_method_put (PhodavRequest *req, GError **err)
   SoupServerMessage *msg = phodav_request_get_message (req);
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   PutStart *start = g_new0 (PutStart, 1);
-  GTask *task;
 
   (void) err;
 
@@ -856,7 +828,7 @@ phodav_method_put (PhodavRequest *req, GError **err)
 
   /* the request body is streamed to the file, or drained without
    * being accumulated when the request is refused below and the
-   * client is still sending it. Pause until the guarded start has
+   * client is still sending it. Pause until the locked start has
    * run, so no body chunk is missed before the handlers are connected */
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
   soup_server_message_pause (msg);
@@ -864,9 +836,6 @@ phodav_method_put (PhodavRequest *req, GError **err)
   start->req = phodav_request_ref (req);
   start->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  task = g_task_new (NULL, phodav_request_get_cancellable (req),
-                     put_start_done, start);
-  g_task_set_task_data (task, start, NULL);
-  g_task_run_in_thread (task, put_start_task);
-  g_object_unref (task);
+  phodav_server_dispatch (handler_get_server (phodav_request_get_handler (req)),
+                          put_start_run, put_start_done, start);
 }

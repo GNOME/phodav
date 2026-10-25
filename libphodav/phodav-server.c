@@ -26,10 +26,10 @@
  * The DAV methods run on worker threads, outside the main context
  * the #SoupServer is listened from: the request headers are copied and
  * the body is referenced first, and the response is applied back on
- * the main context when the method returns. The lock store reserves
- * the affected paths with per-path guards, so operations on disjoint
- * resources run concurrently and only overlapping mutations wait. A
- * slow request never blocks the main loop.
+ * the main context when the method returns. The methods share a
+ * private, bounded worker pool; a single reader-writer lock serializes
+ * the filesystem operations, and the streaming responses pull their
+ * chunks on demand instead of holding a worker for the whole transfer.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
@@ -54,7 +54,96 @@ static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
  * when they are used, this only reclaims the memory */
 #define LOCK_EXPIRY_INTERVAL 1
 
+/* the DAV methods are filesystem-bound: a handful of workers is enough
+ * to make progress without letting requests pile up on the process
+ * wide pool shared with the embedding application */
+#define PHODAV_WORKER_THREADS MAX (2, MIN (g_get_num_processors (), 8))
+
 static gboolean expire_locks_timeout (gpointer user_data);
+
+typedef struct _PhodavJob
+{
+  PhodavServer *self;
+  PhodavTaskFunc run;
+  PhodavTaskFunc done;
+  gpointer data;
+} PhodavJob;
+
+static gboolean
+phodav_job_done (gpointer data)
+{
+  PhodavJob *job = data;
+
+  job->done (job->data);
+  g_object_unref (job->self);
+  g_free (job);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+phodav_job_run (gpointer data, gpointer user_data)
+{
+  PhodavJob *job = data;
+
+  job->run (job->data);
+
+  g_main_context_invoke_full (job->self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              phodav_job_done, job, NULL);
+}
+
+void
+phodav_server_dispatch (PhodavServer *self,
+                        PhodavTaskFunc run,
+                        PhodavTaskFunc done,
+                        gpointer data)
+{
+  PhodavJob *job = g_new0 (PhodavJob, 1);
+  g_autoptr(GError) error = NULL;
+
+  job->self = g_object_ref (self);
+  job->run = run;
+  job->done = done;
+  job->data = data;
+
+  if (self->pool &&
+      g_thread_pool_push (self->pool, job, &error))
+    return;
+
+  if (error)
+    g_debug ("cannot queue the worker task: %s", error->message);
+
+  /* the server was stopped: still run the completion on the main
+   * context, so that the caller releases what it handed over */
+  g_main_context_invoke_full (self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              phodav_job_done, job, NULL);
+}
+
+void
+phodav_server_read_lock (PhodavServer *self)
+{
+  g_rw_lock_reader_lock (&self->fs_lock);
+}
+
+void
+phodav_server_read_unlock (PhodavServer *self)
+{
+  g_rw_lock_reader_unlock (&self->fs_lock);
+}
+
+void
+phodav_server_write_lock (PhodavServer *self)
+{
+  g_rw_lock_writer_lock (&self->fs_lock);
+}
+
+void
+phodav_server_write_unlock (PhodavServer *self)
+{
+  g_rw_lock_writer_unlock (&self->fs_lock);
+}
 
 PhodavServer *
 handler_get_server (PathHandler *handler)
@@ -153,9 +242,8 @@ phodav_server_init (PhodavServer *self)
   self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
-  g_rec_mutex_init (&self->lock_store_mutex);
-  g_mutex_init (&self->guard_mutex);
-  g_cond_init (&self->guard_cond);
+  g_mutex_init (&self->lock_store_mutex);
+  g_rw_lock_init (&self->fs_lock);
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
@@ -168,7 +256,7 @@ phodav_server_init (PhodavServer *self)
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {
-  server_expire_locks (PHODAV_SERVER (user_data));
+  phodav_lock_store_expire_locks (PHODAV_SERVER (user_data));
 
   return G_SOURCE_CONTINUE;
 }
@@ -228,6 +316,10 @@ phodav_server_constructed (GObject *gobject)
    * have happened already, registering again only replaces them */
   update_root_handler (self);
 
+  self->pool = g_thread_pool_new (phodav_job_run, NULL,
+                                  PHODAV_WORKER_THREADS,
+                                  TRUE, NULL);
+
   g_signal_connect (self->server, "request-started", G_CALLBACK (phodav_server_request_started), self);
 
   {
@@ -281,6 +373,15 @@ server_stop (PhodavServer *self)
     g_cancellable_cancel (self->cancellable);
 
   g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+
+  /* let the tasks already queued run: they observe the cancellation
+   * and release their references; dropping them here would leak their
+   * data */
+  if (self->pool)
+    {
+      g_thread_pool_free (self->pool, FALSE, FALSE);
+      self->pool = NULL;
+    }
 }
 
 static void
@@ -315,10 +416,8 @@ phodav_server_finalize (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  g_list_free_full (self->guards, g_free);
-  g_cond_clear (&self->guard_cond);
-  g_mutex_clear (&self->guard_mutex);
-  g_rec_mutex_clear (&self->lock_store_mutex);
+  g_rw_lock_clear (&self->fs_lock);
+  g_mutex_clear (&self->lock_store_mutex);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->finalize)
