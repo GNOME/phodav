@@ -14,9 +14,7 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
-#ifdef HAVE_SYS_XATTR_H
-#include <sys/xattr.h>
-#endif
+#include "phodav-xattr.h"
 
 static xmlBufferPtr
 node_children_to_string (xmlNodePtr node)
@@ -38,63 +36,6 @@ xattr_target (GFile *file)
     return phodav_virtual_dir_root_get_real (PHODAV_VIRTUAL_DIR (file));
 
   return g_object_ref (file);
-}
-
-static gint
-xattr_no_attr_errno (void)
-{
-#if defined(ENOATTR)
-  return ENOATTR;
-#elif defined(ENODATA)
-  return ENODATA;
-#else
-  return ENOENT;
-#endif
-}
-
-#ifdef HAVE_SYS_XATTR_H
-static gssize
-xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
-{
-#ifdef __APPLE__
-  return getxattr (path, name, value, size, 0, 0);
-#else
-  return getxattr (path, name, value, size);
-#endif
-}
-#endif /* HAVE_SYS_XATTR_H */
-
-static gint
-xattr_remove (const gchar *path, const gchar *name)
-{
-#ifdef HAVE_SYS_XATTR_H
-  if (!path)
-    return SOUP_STATUS_FORBIDDEN;
-
-#ifdef __APPLE__
-  if (removexattr (path, name, 0) == 0)
-#else
-  if (removexattr (path, name) == 0)
-#endif
-    return SOUP_STATUS_OK;
-
-  /* removing a property which is not set is not an error: PROPPATCH
-   * removals are idempotent, and litmus deletes the same property
-   * twice */
-  if (errno == xattr_no_attr_errno ())
-    return SOUP_STATUS_OK;
-
-  if (errno == EACCES || errno == EPERM)
-    return SOUP_STATUS_FORBIDDEN;
-
-  if (errno == ENOENT)
-    return SOUP_STATUS_NOT_FOUND;
-
-  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
-#else
-  g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
-  return SOUP_STATUS_OK;
-#endif
 }
 
 static gint
@@ -143,7 +84,7 @@ prop_remove (GFile *file, xmlNodePtr attrnode)
     return SOUP_STATUS_FORBIDDEN;
 
   path = g_file_get_path (target);
-  return xattr_remove (path, attrname);
+  return phodav_xattr_remove (path, attrname);
 }
 
 typedef enum
@@ -229,13 +170,13 @@ prop_snapshot (GFile *target, const gchar *gio_name, const gchar *raw_name, gcha
 
     if (path)
       {
-        gssize size = xattr_get (path, raw_name, NULL, 0);
+        gssize size = phodav_xattr_get (path, raw_name, NULL, 0);
 
         if (size >= 0)
           {
             g_autofree gchar *buf = g_malloc (size + 1);
 
-            if (xattr_get (path, raw_name, buf, size) != size)
+            if (phodav_xattr_get (path, raw_name, buf, size) != size)
               {
                 g_debug ("PROPPATCH: failed to read the previous value of %s",
                          raw_name);
@@ -252,7 +193,7 @@ prop_snapshot (GFile *target, const gchar *gio_name, const gchar *raw_name, gcha
         {
           gint errsv = errno;
 
-          if (errsv == xattr_no_attr_errno () || errsv == ENOENT)
+          if (errsv == phodav_xattr_no_attr_errno () || errsv == ENOENT)
             return SOUP_STATUS_OK;
 
           g_debug ("PROPPATCH: failed to read the previous value of %s: %s",
@@ -326,7 +267,7 @@ prop_change_rollback (GFile *file, PropChange *change, GCancellable *cancellable
     {
       g_autofree gchar *path = g_file_get_path (target);
 
-      if (xattr_remove (path, change->raw_name) != SOUP_STATUS_OK)
+      if (phodav_xattr_remove (path, change->raw_name) != SOUP_STATUS_OK)
         g_debug ("PROPPATCH: failed to remove %s", change->raw_name);
     }
 }

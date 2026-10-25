@@ -6,17 +6,12 @@
 
 #include "config.h"
 
-#include <sys/types.h>
-
-#ifdef HAVE_SYS_XATTR_H
-#include <sys/xattr.h>
-#endif
-
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
 #include "phodav-priv.h"
 #include "phodav-utils.h"
+#include "phodav-xattr.h"
 
 typedef struct _PropFind
 {
@@ -474,18 +469,6 @@ prop_xattr (const gchar *xattr)
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 
-#ifdef HAVE_SYS_XATTR_H
-static gssize
-xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
-{
-#ifdef __APPLE__
-  return getxattr (path, name, value, size, 0, 0);
-#else
-  return getxattr (path, name, value, size);
-#endif
-}
-#endif /* HAVE_SYS_XATTR_H */
-
 /* GIO escapes non-ASCII bytes in extended attribute values, which breaks
  * UTF-8 property values. Read the raw value when possible and fall back
  * to the escaped GIO value otherwise. */
@@ -499,13 +482,13 @@ xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
     {
       /* the "xattr::" namespace lists user attributes only */
       g_autofree gchar *name = g_strdup_printf ("user.%s", xattr + strlen ("xattr::"));
-      gssize len = xattr_get (path, name, NULL, 0);
+      gssize len = phodav_xattr_get (path, name, NULL, 0);
 
       if (len > 0)
         {
           g_autofree gchar *value = g_malloc (len + 1);
 
-          if (xattr_get (path, name, value, len) == len)
+          if (phodav_xattr_get (path, name, value, len) == len)
             {
               value[len] = '\0';
 

@@ -22,7 +22,8 @@ sources = [
   'phodav-path.c',
   'phodav-server.c',
   'phodav-utils.c',
-  'phodav-virtual-dir.c'
+  'phodav-virtual-dir.c',
+  'phodav-xattr.c'
 ]
 
 # the same list, as file objects usable from the other
