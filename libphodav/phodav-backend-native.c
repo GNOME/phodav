@@ -203,7 +203,13 @@ resolve_native (PhodavBackend *backend,
       gint errsv = errno;
 
       if (errsv == ENOENT && mode == PHODAV_PATH_CREATE)
-        return phodav_path_new (backend, NULL, -1, parent_fd, name);
+        {
+          PhodavPath *path = phodav_path_new (backend, NULL, -1,
+                                              parent_fd, name);
+
+          g_free (name);
+          return path;
+        }
 
       close (parent_fd);
       g_free (name);
