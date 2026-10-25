@@ -21,6 +21,8 @@ server_get_path (PhodavServer *self, const gchar *_path)
   Path *p;
   g_autofree gchar *path = phodav_path_canonicalize (_path);
 
+  g_rec_mutex_lock (&self->lock_mutex);
+
   p = g_hash_table_lookup (self->paths, path);
   if (!p)
     {
@@ -28,6 +30,8 @@ server_get_path (PhodavServer *self, const gchar *_path)
       p->path = g_steal_pointer (&path);
       g_hash_table_insert (self->paths, p->path, path_ref (p));
     }
+
+  g_rec_mutex_unlock (&self->lock_mutex);
 
   return p;
 }
@@ -39,14 +43,20 @@ void
 server_remove_path_if_empty (PhodavServer *self, const gchar *_path)
 {
   g_autofree gchar *path = phodav_path_canonicalize (_path);
-  Path *p = g_hash_table_lookup (self->paths, path);
+  Path *p;
 
+  g_rec_mutex_lock (&self->lock_mutex);
+
+  p = g_hash_table_lookup (self->paths, path);
   if (!p)
-    return;
+    goto out;
 
   path_expire_locks (p);
   if (!p->locks)
     g_hash_table_remove (self->paths, path);
+
+out:
+  g_rec_mutex_unlock (&self->lock_mutex);
 }
 
 /* free the locks whose timeout has elapsed, and drop the empty paths
@@ -58,8 +68,10 @@ server_expire_locks (PhodavServer *self)
   GHashTableIter iter;
   Path *path;
 
+  g_rec_mutex_lock (&self->lock_mutex);
+
   if (g_hash_table_size (self->paths) == 0)
-    return;
+    goto out;
 
   g_hash_table_iter_init (&iter, self->paths);
   while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
@@ -70,6 +82,9 @@ server_expire_locks (PhodavServer *self)
       if (!path->locks)
         g_hash_table_iter_remove (&iter);
     }
+
+out:
+  g_rec_mutex_unlock (&self->lock_mutex);
 }
 
 /* destroy the locks rooted on a deleted resource and its members, and
@@ -81,8 +96,10 @@ server_remove_locks (PhodavServer *self, const gchar *_path)
   Path *path;
   g_autofree gchar *root = phodav_path_canonicalize (_path);
 
+  g_rec_mutex_lock (&self->lock_mutex);
+
   if (g_hash_table_size (self->paths) == 0)
-    return;
+    goto out;
 
   g_hash_table_iter_init (&iter, self->paths);
   while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
@@ -97,6 +114,9 @@ server_remove_locks (PhodavServer *self, const gchar *_path)
       /* the path is only kept alive by the table when it has no locks */
       g_hash_table_iter_remove (&iter);
     }
+
+out:
+  g_rec_mutex_unlock (&self->lock_mutex);
 }
 
 gboolean
@@ -107,6 +127,8 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
   gchar *key = NULL;
   Path *p;
   const gchar *segment = canonical + 1;
+
+  g_rec_mutex_lock (&self->lock_mutex);
 
   /* canonical is "/" or "/segment[/segment...]"; visit each prefix
    * from the first segment down to the whole path */
@@ -132,6 +154,7 @@ server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gp
   ret = TRUE;
 
 end:
+  g_rec_mutex_unlock (&self->lock_mutex);
   return ret;
 }
 
@@ -220,9 +243,12 @@ server_tree_has_other_locks (PhodavServer *self, const gchar *_path, GList *lock
   g_autofree gchar *root = phodav_path_canonicalize (_path);
   GHashTableIter iter;
   Path *path;
+  gboolean found = FALSE;
+
+  g_rec_mutex_lock (&self->lock_mutex);
 
   if (g_hash_table_size (self->paths) == 0)
-    return FALSE;
+    goto out;
 
   g_hash_table_iter_init (&iter, self->paths);
   while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
@@ -236,10 +262,16 @@ server_tree_has_other_locks (PhodavServer *self, const gchar *_path, GList *lock
 
       for (l = path->locks; l != NULL; l = l->next)
         if (!locks_submitted_has (locks, l->data))
-          return TRUE;
+          {
+            found = TRUE;
+            goto out;
+          }
     }
 
-  return FALSE;
+out:
+  g_rec_mutex_unlock (&self->lock_mutex);
+
+  return found;
 }
 
 typedef struct _TreeLockCheck
@@ -285,7 +317,9 @@ server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *
   g_autofree gchar *path = phodav_path_canonicalize (_path);
   TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
 
+  g_rec_mutex_lock (&self->lock_mutex);
   g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
+  g_rec_mutex_unlock (&self->lock_mutex);
 
   return d.conflict;
 }

@@ -72,9 +72,11 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
 }
 
 gint
-phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_delete (PhodavRequest *req, GError **err)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   GFile *file = NULL;
   g_autoptr(GHashTable) mstatus = NULL;
   gint status;
@@ -83,14 +85,14 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
 
   /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
    * client must not submit any other depth */
-  if (!depth_from_string (soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Depth"), &depth) ||
+  if (!depth_from_string (soup_message_headers_get_one (phodav_request_get_request_headers (req), "Depth"), &depth) ||
       depth != DEPTH_INFINITY)
     {
       status = SOUP_STATUS_BAD_REQUEST;
       goto end;
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -109,7 +111,7 @@ phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar 
   status = phodav_delete_file (handler_get_server (handler), path, file, mstatus, cancellable);
   if (status == SOUP_STATUS_NO_CONTENT)
     if (g_hash_table_size (mstatus) > 0)
-      status = set_response_multistatus (msg, mstatus);
+      status = set_response_multistatus (req, mstatus);
 
 end:
   g_clear_object (&file);

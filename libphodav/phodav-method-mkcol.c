@@ -32,13 +32,15 @@ do_mkcol_file (GFile *file, GCancellable *cancellable, GError **err)
 }
 
 gint
-phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_mkcol (PhodavRequest *req, GError **err)
 {
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
   GFile *file = NULL;
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
-  SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
+  SoupMessageBody *request_body = phodav_request_get_request_body (req);
 
   if (request_body && request_body->length)
     {
@@ -46,7 +48,7 @@ phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *
       goto end;
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 

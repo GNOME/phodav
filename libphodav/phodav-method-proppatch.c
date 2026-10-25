@@ -376,9 +376,11 @@ prop_collect (GList **changes, xmlNodePtr instruction, PropOp op)
 }
 
 gint
-phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_proppatch (PhodavRequest *req, GError **err)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   GFile *file = NULL;
   g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
   g_auto(DavDoc) doc = {
@@ -390,13 +392,13 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
   g_autolist(LockSubmitted) submitted = NULL;
   gint status;
 
-  if (!davdoc_parse (&doc, soup_server_message_get_request_body (msg), "propertyupdate"))
+  if (!davdoc_parse (&doc, phodav_request_get_request_body (req), "propertyupdate"))
     {
       status = SOUP_STATUS_BAD_REQUEST;
       goto end;
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -454,7 +456,7 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
   g_hash_table_insert (mstatus, g_strdup (path),
                        response_new (props, 0));
 
-  status = set_response_multistatus (msg, mstatus);
+  status = set_response_multistatus (req, mstatus);
 
 end:
   g_clear_object (&file);

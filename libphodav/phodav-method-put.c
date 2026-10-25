@@ -151,7 +151,8 @@ put_context_new (PathHandler *handler,
                  GFileOutputStream *output,
                  gint status,
                  const gchar *if_match,
-                 const gchar *if_none_match)
+                 const gchar *if_none_match,
+                 GCancellable *cancellable)
 {
   PutContext *ctx = g_new0 (PutContext, 1);
 
@@ -160,7 +161,7 @@ put_context_new (PathHandler *handler,
   /* the handler is owned by the SoupServer registration, and may be
    * freed before the asynchronous write completes: keep what the
    * callbacks need */
-  ctx->cancellable = g_object_ref (handler_get_cancellable (handler));
+  ctx->cancellable = g_object_ref (cancellable);
   ctx->max_upload = handler_get_max_upload (handler);
   ctx->file = g_object_ref (file);
   ctx->temp_file = g_object_ref (temp_file);
@@ -557,8 +558,10 @@ put_temp_open (GFile *file, GFile **temp_file, GFileOutputStream **output, GCanc
 }
 
 static gint
-put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext **out, GCancellable *cancellable, GError **err)
+put_start (PhodavRequest *req, GFile *file, PutContext **out, GCancellable *cancellable, GError **err)
 {
+  PathHandler *handler = phodav_request_get_handler (req);
+  SoupServerMessage *msg = phodav_request_get_message (req);
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GFile) temp_file = NULL;
@@ -566,7 +569,7 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
   gboolean exists = FALSE;
   g_autofree gchar *etag = NULL;
   const gchar *if_match, *if_none_match;
-  SoupMessageHeaders *headers = soup_server_message_get_request_headers (msg);
+  SoupMessageHeaders *headers = phodav_request_get_request_headers (req);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
   *out = NULL;
@@ -618,71 +621,167 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
 
   status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
   *out = put_context_new (handler, msg, file, temp_file, output, status,
-                          if_match, if_none_match);
+                          if_match, if_none_match, cancellable);
 
 end:
   g_clear_object (&output);
   return status;
 }
 
-void
-phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+/* the lock check and the staged file creation run on the serialized
+ * pool, so that no LOCK/UNLOCK/MOVE can slip between them and PUT does
+ * not block the main loop while another serialized method runs */
+typedef struct _PutStart
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
-  GFile *file = NULL;
-  g_autolist(LockSubmitted) submitted = NULL;
-  PutContext *ctx = NULL;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  guint64 max_upload = handler_get_max_upload (handler);
+  PhodavRequest *req;
+  PutContext *ctx;
   gint status;
+  GError *error;
+} PutStart;
 
-  g_debug ("%s %s HTTP/1.%d %s %s", soup_server_message_get_method (msg), path, soup_server_message_get_http_version (msg),
+static void
+put_start_free (PutStart *start)
+{
+  if (start->ctx)
+    put_context_unref (start->ctx);
+  g_clear_pointer (&start->req, phodav_request_unref);
+  g_clear_error (&start->error);
+  g_free (start);
+}
+
+static void
+put_start_task (GTask *task,
+                gpointer source_object,
+                gpointer task_data,
+                GCancellable *cancellable)
+{
+  PutStart *start = task_data;
+  PhodavRequest *req = start->req;
+  PathHandler *handler = phodav_request_get_handler (req);
+  PhodavServer *server = handler_get_server (handler);
+  const gchar *path = phodav_request_get_path (req);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  guint64 max_upload = handler_get_max_upload (handler);
+  g_autolist(LockSubmitted) submitted = NULL;
+  g_autoptr(GFile) file = NULL;
+  g_autoptr(GError) error = NULL;
+
+  g_mutex_lock (&server->mutation_mutex);
+
+  if (g_cancellable_is_cancelled (cancellable))
+    goto out;
+
+  /* an upload which is over the limit is refused before anything is
+   * written to disk, RFC 9110 section 15.5.15; a chunked body has
+   * no Content-Length and is cut off while it is streamed */
+  if (max_upload > 0 &&
+      (guint64) soup_message_headers_get_content_length (request_headers) > max_upload)
+    {
+      start->status = SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE;
+      goto out;
+    }
+
+  start->status = phodav_check_if (req, &submitted);
+  if (start->status != SOUP_STATUS_OK)
+    goto out;
+
+  file = handler_get_file_for_path (handler, path);
+  start->status = put_start (req, file, &start->ctx, cancellable, &error);
+  if (!start->ctx)
+    start->error = g_steal_pointer (&error);
+
+out:
+  g_mutex_unlock (&server->mutation_mutex);
+  g_task_return_boolean (task, TRUE);
+}
+
+static void
+put_start_done (GObject *source_object,
+                GAsyncResult *res,
+                gpointer user_data)
+{
+  PutStart *start = user_data;
+  PhodavRequest *req = start->req;
+  SoupServerMessage *msg = phodav_request_get_message (req);
+  gboolean finished = phodav_request_is_finished (req);
+  gboolean cancelled = g_cancellable_is_cancelled (phodav_request_get_cancellable (req));
+  g_autoptr(GError) task_error = NULL;
+  gint status = start->status;
+
+  g_task_propagate_boolean (G_TASK (res), &task_error);
+
+  if (task_error)
+    g_debug ("PUT start failed: %s", task_error->message);
+  if (start->error)
+    g_debug ("%s %s: %s", phodav_request_get_method (req),
+             phodav_request_get_path (req), start->error->message);
+
+  if (finished)
+    {
+      /* the client is gone, do not touch its message */
+    }
+  else if (cancelled || task_error || !start->ctx)
+    {
+      if (cancelled)
+        status = phodav_request_is_server_cancelled (req)
+                   ? SOUP_STATUS_SERVICE_UNAVAILABLE
+                   : SOUP_STATUS_INTERNAL_SERVER_ERROR;
+      else if (status == 0)
+        status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+      soup_server_message_set_status (msg, status, NULL);
+      soup_server_message_unpause (msg);
+    }
+  else
+    {
+      PutContext *ctx = start->ctx;
+
+      start->ctx = NULL;
+      g_debug ("PUT temp %p", ctx->output);
+
+      /* the request is answered from method_put_got_body(), once its
+       * whole body has been received and the staged file committed:
+       * answering here would tell a "Expect: 100-continue" client its
+       * upload succeeded before it even sent the body */
+      g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), ctx);
+      g_signal_connect (msg, "got-body", G_CALLBACK (method_put_got_body), ctx);
+      g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), ctx);
+
+      soup_server_message_unpause (msg);
+    }
+
+  put_start_free (start);
+}
+
+void
+phodav_method_put (PhodavRequest *req, GError **err)
+{
+  SoupServerMessage *msg = phodav_request_get_message (req);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  PutStart *start = g_new0 (PutStart, 1);
+  GTask *task;
+
+  (void) err;
+
+  g_debug ("%s %s HTTP/1.%d %s %s",
+           phodav_request_get_method (req), phodav_request_get_path (req),
+           soup_server_message_get_http_version (msg),
            soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
            soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
 
   /* the request body is streamed to the file, or drained without
    * being accumulated when the request is refused below and the
-   * client is still sending it */
+   * client is still sending it. Pause until the serialized start has
+   * run, so no body chunk is missed before the handlers are connected */
   soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
+  soup_server_message_pause (msg);
 
-  /* the read-only refusal is enforced by the method dispatch, in
-   * got_headers(), before the upload is started */
+  start->req = phodav_request_ref (req);
+  start->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  /* an upload which is over the limit is refused before anything is
-   * written to disk, RFC 9110 section 15.5.15; a chunked body has
-   * no Content-Length and is cut off while it is streamed */
-  if (max_upload > 0 && (guint64) soup_message_headers_get_content_length (request_headers) > max_upload)
-    {
-      status = SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE;
-      goto end;
-    }
-
-  status = phodav_check_if (handler, msg, path, &submitted);
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  file = handler_get_file_for_path (handler, path);
-  status = put_start (msg, handler, file, &ctx, cancellable, err);
-  if (!ctx)
-    goto end;
-
-  g_debug ("PUT temp %p", ctx->output);
-
-  /* the request is answered from method_put_got_body(), once its
-   * whole body has been received and the staged file committed:
-   * answering here would tell a "Expect: 100-continue" client its
-   * upload succeeded before it even sent the body */
-  g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), ctx);
-  g_signal_connect (msg, "got-body", G_CALLBACK (method_put_got_body), ctx);
-  g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), ctx);
-
-  g_clear_object (&file);
-  return;
-
-end:
-  /* the request is refused: answer right away, the client may still
-   * be sending its body, which is drained without being accumulated */
-  soup_server_message_set_status (msg, status, NULL);
-  g_clear_object (&file);
-  g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
+  task = g_task_new (NULL, phodav_request_get_cancellable (req),
+                     put_start_done, start);
+  g_task_set_task_data (task, start, NULL);
+  phodav_request_run_serialized (req, task, put_start_task);
+  g_object_unref (task);
 }

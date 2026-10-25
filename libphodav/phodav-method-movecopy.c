@@ -109,11 +109,11 @@ movecopy_once (gboolean copy, GFile *file, GFile *dest, GFileCopyFlags flags, GC
 }
 
 static gint
-do_movecopy_file (SoupServerMessage *msg, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *dest, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
-  gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   GFileCopyFlags flags = G_FILE_COPY_ALL_METADATA;
   gboolean overwrite;
   gboolean exists;
@@ -184,19 +184,21 @@ do_movecopy_file (SoupServerMessage *msg, PhodavServer *server, GFile *file, GFi
 }
 
 gint
-phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_movecopy (PhodavRequest *req, GError **err)
 {
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
   GFile *file = NULL, *dest_file = NULL;
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
   const gchar *dest;
-  gboolean copy = soup_server_message_get_method (msg) == SOUP_METHOD_COPY;
+  gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
   DepthType depth = DEPTH_INFINITY;
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
 
   /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
    * are valid for COPY and MOVE, an invalid depth must be rejected
@@ -259,7 +261,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       goto end;
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
     goto end;
 
@@ -292,7 +294,7 @@ phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gcha
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (msg, server, file, dest_file, udest, depth,
+  status = do_movecopy_file (req, server, file, dest_file, udest, depth,
                              cancellable, err);
 
 end:

@@ -141,9 +141,11 @@ parse_locktype (xmlNodePtr rt)
 }
 
 gint
-phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_lock (PhodavRequest *req, GError **err)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   Path *lpath = NULL;
   xmlChar *mem = NULL;
   gint size = 0;
@@ -163,7 +165,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
   DAVLock *lock = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean exists;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body;
 
   /* RFC 4918 section 10.2: only the depths 0 and infinity are valid
@@ -174,12 +176,12 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
 
   timeout = timeout_from_string (soup_message_headers_get_one (request_headers, "Timeout"));
 
-  request_body = soup_server_message_get_request_body (msg);
+  request_body = phodav_request_get_request_body (req);
   if (!request_body->length)
     {
       /* an empty body refreshes an existing lock, which must be
        * identified with an If header (RFC 4918 section 9.10.2) */
-      status = phodav_check_if_refresh (handler, msg, path, &submitted);
+      status = phodav_check_if_refresh (req, &submitted);
       if (status != SOUP_STATUS_OK)
         goto end;
 
@@ -284,7 +286,7 @@ phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *p
 
   /* the lock is committed: advertise its token */
   ltoken = g_strdup_printf ("<%s>", token);
-  soup_message_headers_append (soup_server_message_get_response_headers (msg), "Lock-Token", ltoken);
+  soup_message_headers_append (phodav_request_get_response_headers (req), "Lock-Token", ltoken);
 
 body:
   root = xmlNewNode (NULL, BAD_CAST "prop");
@@ -295,8 +297,8 @@ body:
   xmlAddChild (node, dav_lock_get_activelock_node (lock, ns));
 
   xml_node_to_string (root, &mem, &size);
-  soup_server_message_set_response (msg, "application/xml",
-                                    SOUP_MEMORY_TAKE, (gchar *) mem, size);
+  phodav_request_set_response (req, "application/xml",
+                               SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
 end:
   return status;

@@ -27,6 +27,7 @@ G_BEGIN_DECLS
 typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
+typedef struct _PhodavRequest PhodavRequest;
 
 typedef enum _DAVLockScopeType
 {
@@ -87,12 +88,29 @@ struct _PhodavServer
   gboolean constructing;
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
+
+  /* protects the lock table during a lookup or update; recursive
+   * because the lock helpers call each other. It does not keep the
+   * borrowed Path * and DAVLock * pointers alive after a helper returns:
+   * callers which retain one hold mutation_mutex for the whole
+   * request, and the expiry sweep takes mutation_mutex before it
+   * frees anything */
+  GRecMutex lock_mutex;
+  /* serializes the requests which can observe or change the lock
+   * table (and the expiry sweep), so that the borrowed locks stay
+   * valid, and keeps their filesystem changes atomic now that they
+   * run outside the main loop */
+  GMutex mutation_mutex;
+  /* the single-thread pool which runs the serialized methods, so that
+   * waiting requests do not occupy the shared GTask pool */
+  GThreadPool *serialized_pool;
 };
 
 struct _PathHandler
 {
-  PhodavServer *self;
+  PhodavServer *self; /* borrowed, kept alive by the request */
   GFile *file;
+  gint ref_count;
 };
 
 typedef gboolean (*PathCb) (const gchar *key,
@@ -108,8 +126,10 @@ const gchar *handler_get_relative_path (PathHandler *handler, const gchar *path)
 gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNUC_PURE;
 /* the shared root, borrowed */
 GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
-GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
+PathHandler *path_handler_ref (PathHandler *handler);
+void path_handler_unref (PathHandler *handler);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PathHandler, path_handler_unref)
 guint64 handler_get_max_upload (PathHandler *handler) G_GNUC_PURE;
 
 /* the SoupServer callbacks, registered and disconnected by the
@@ -150,19 +170,52 @@ Path *server_get_path (PhodavServer *self,
 void server_remove_path_if_empty (PhodavServer *self,
                                   const gchar *_path);
 
-gint phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
-gint phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks);
+gint phodav_check_if (PhodavRequest *req, GList **locks);
+gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
 
 gint phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable);
 
-gint phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_movecopy (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_lock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-gint phodav_method_unlock (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-void phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
+/* per-request state: the request headers are copied and the request
+ * body is referenced before the method runs outside the main loop.
+ * The body stays shared with the message, which is safe once it is
+ * complete and the message is paused. The response is applied back on
+ * the main loop once the method returns. */
+PhodavRequest *phodav_request_new (PathHandler *handler,
+                                   SoupServerMessage *msg,
+                                   const gchar *path);
+PhodavRequest *phodav_request_ref (PhodavRequest *req);
+void phodav_request_unref (PhodavRequest *req);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavRequest, phodav_request_unref)
+
+PathHandler *phodav_request_get_handler (PhodavRequest *req) G_GNUC_PURE;
+SoupServerMessage *phodav_request_get_message (PhodavRequest *req) G_GNUC_PURE;
+const gchar *phodav_request_get_method (PhodavRequest *req) G_GNUC_PURE;
+const gchar *phodav_request_get_path (PhodavRequest *req) G_GNUC_PURE;
+SoupMessageHeaders *phodav_request_get_request_headers (PhodavRequest *req) G_GNUC_PURE;
+SoupMessageBody *phodav_request_get_request_body (PhodavRequest *req) G_GNUC_PURE;
+GUri *phodav_request_get_uri (PhodavRequest *req) G_GNUC_PURE;
+GCancellable *phodav_request_get_cancellable (PhodavRequest *req) G_GNUC_PURE;
+SoupMessageHeaders *phodav_request_get_response_headers (PhodavRequest *req) G_GNUC_PURE;
+void phodav_request_set_status (PhodavRequest *req, guint status, const gchar *reason);
+guint phodav_request_get_status (PhodavRequest *req) G_GNUC_PURE;
+void phodav_request_set_response (PhodavRequest *req,
+                                  const gchar *content_type,
+                                  SoupMemoryUse use,
+                                  const gchar *body,
+                                  gsize len);
+void phodav_request_set_body_bytes (PhodavRequest *req, GBytes *bytes);
+void phodav_request_run_serialized (PhodavRequest *req, GTask *task, GTaskThreadFunc func);
+gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
+gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
+
+gint phodav_method_get (PhodavRequest *req, GError **err);
+gint phodav_method_propfind (PhodavRequest *req, GError **err);
+gint phodav_method_proppatch (PhodavRequest *req, GError **err);
+gint phodav_method_mkcol (PhodavRequest *req, GError **err);
+gint phodav_method_delete (PhodavRequest *req, GError **err);
+gint phodav_method_movecopy (PhodavRequest *req, GError **err);
+gint phodav_method_lock (PhodavRequest *req, GError **err);
+gint phodav_method_unlock (PhodavRequest *req, GError **err);
+void phodav_method_put (PhodavRequest *req, GError **err);
 
 G_END_DECLS

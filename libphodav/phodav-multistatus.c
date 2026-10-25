@@ -121,7 +121,7 @@ add_propstat (xmlNodePtr parent, xmlNsPtr ns, GList *props)
 }
 
 gint
-set_response_multistatus (SoupServerMessage *msg,
+set_response_multistatus (PhodavRequest *req,
                           GHashTable *mstatus)
 {
   xmlChar *mem = NULL;
@@ -151,7 +151,7 @@ set_response_multistatus (SoupServerMessage *msg,
        * serialized. */
       g_autofree gchar *escaped = g_uri_escape_bytes ((const guint8 *) path, strlen (path),
                                                       G_URI_RESERVED_CHARS_ALLOWED_IN_PATH);
-      g_autoptr(GUri) new_uri = g_uri_parse_relative (soup_server_message_get_uri (msg), escaped,
+      g_autoptr(GUri) new_uri = g_uri_parse_relative (phodav_request_get_uri (req), escaped,
                                                       SOUP_HTTP_URI_FLAGS, NULL);
       g_autofree gchar *text = new_uri ? g_uri_to_string (new_uri) : g_strdup (escaped);
       xmlNodePtr href = xmlNewChild (response, ns, BAD_CAST "href", NULL);
@@ -167,8 +167,8 @@ set_response_multistatus (SoupServerMessage *msg,
     }
 
   xml_node_to_string (root, &mem, &size);
-  soup_server_message_set_response (msg, "application/xml",
-                                    SOUP_MEMORY_TAKE, (gchar *) mem, size);
+  phodav_request_set_response (req, "application/xml",
+                               SOUP_MEMORY_TAKE, (gchar *) mem, size);
 
   return SOUP_STATUS_MULTI_STATUS;
 }

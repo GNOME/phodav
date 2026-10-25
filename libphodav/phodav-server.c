@@ -23,10 +23,16 @@
  *
  * PhodavServer implements a simple WebDAV server.
  *
- * The DAV methods are handled synchronously from the #SoupServer
- * callbacks: a #PhodavServer must be used from a single thread, the
- * one running the main context the #SoupServer is listened from,
- * and a slow request delays the other requests.
+ * The DAV methods run on worker threads, outside the main context
+ * the #SoupServer is listened from: the request headers are copied and
+ * the body is referenced first, and the response is applied back on
+ * the main context when the method returns. The methods which may
+ * observe or change the lock table are serialized, while GET and HEAD
+ * run concurrently. A slow request does not block the main loop; it
+ * can still delay the other serialized methods.
+ *
+ * A #PhodavServer must still be created and disposed on the thread
+ * running the main context of its #SoupServer.
  */
 
 G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
@@ -111,12 +117,6 @@ handler_get_root_file (PathHandler *handler)
   return handler->file;
 }
 
-GCancellable *
-handler_get_cancellable (PathHandler *handler)
-{
-  return handler->self->cancellable;
-}
-
 guint64
 handler_get_max_upload (PathHandler *handler)
 {
@@ -130,12 +130,24 @@ path_handler_new (PhodavServer *self, GFile *file)
 
   h->self = self;
   h->file = g_object_ref (file);
+  h->ref_count = 1;
   return h;
 }
 
-static void
-path_handler_free (PathHandler *h)
+PathHandler *
+path_handler_ref (PathHandler *h)
 {
+  g_atomic_int_inc (&h->ref_count);
+
+  return h;
+}
+
+void
+path_handler_unref (PathHandler *h)
+{
+  if (!g_atomic_int_dec_and_test (&h->ref_count))
+    return;
+
   g_object_unref (h->file);
   g_free (h);
 }
@@ -143,10 +155,15 @@ path_handler_free (PathHandler *h)
 static void
 phodav_server_init (PhodavServer *self)
 {
+  /* the DAV methods build and parse XML on worker threads */
+  xmlInitParser ();
+
   self->constructing = TRUE;
   self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
+  g_rec_mutex_init (&self->lock_mutex);
+  g_mutex_init (&self->mutation_mutex);
 
   self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
                                        NULL, (GDestroyNotify) path_unref);
@@ -159,7 +176,16 @@ phodav_server_init (PhodavServer *self)
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {
-  server_expire_locks (PHODAV_SERVER (user_data));
+  PhodavServer *self = PHODAV_SERVER (user_data);
+
+  /* the sweep frees locks, which a request running on a worker thread
+   * may be using: take the same serialization lock as the methods,
+   * without ever blocking the main loop behind a slow request */
+  if (g_mutex_trylock (&self->mutation_mutex))
+    {
+      server_expire_locks (self);
+      g_mutex_unlock (&self->mutation_mutex);
+    }
 
   return G_SOURCE_CONTINUE;
 }
@@ -188,7 +214,7 @@ update_root_handler (PhodavServer *self)
   soup_server_add_handler (self->server, self->base_path,
                            phodav_server_callback,
                            handler,
-                           (GDestroyNotify) path_handler_free);
+                           (GDestroyNotify) path_handler_unref);
 
   self->root_handler = handler;
   self->handler_path = g_strdup (self->base_path);
@@ -252,6 +278,10 @@ phodav_server_dispose (GObject *gobject)
   g_clear_pointer (&self->expire_locks_source, g_source_destroy);
   g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
 
+  /* stop the requests which are still running on their worker thread */
+  if (self->cancellable)
+    g_cancellable_cancel (self->cancellable);
+
   /* SoupServer could live longer than PhodavServer,
    * this frees the PhodavHandler passed as user_data;
    * dispose may run again, the server is already gone then */
@@ -277,6 +307,25 @@ phodav_server_dispose (GObject *gobject)
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->dispose)
     G_OBJECT_CLASS (phodav_server_parent_class)->dispose (gobject);
+}
+
+static void
+phodav_server_finalize (GObject *gobject)
+{
+  PhodavServer *self = PHODAV_SERVER (gobject);
+
+  if (self->serialized_pool)
+    {
+      g_thread_pool_free (self->serialized_pool, FALSE, TRUE);
+      self->serialized_pool = NULL;
+    }
+
+  g_rec_mutex_clear (&self->lock_mutex);
+  g_mutex_clear (&self->mutation_mutex);
+
+  /* Chain up to the parent class */
+  if (G_OBJECT_CLASS (phodav_server_parent_class)->finalize)
+    G_OBJECT_CLASS (phodav_server_parent_class)->finalize (gobject);
 }
 
 static void
@@ -394,6 +443,7 @@ phodav_server_class_init (PhodavServerClass *klass)
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
   gobject_class->dispose = phodav_server_dispose;
+  gobject_class->finalize = phodav_server_finalize;
   gobject_class->constructed = phodav_server_constructed;
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;

@@ -34,6 +34,6 @@ Response *response_new (GList *props,
                         gint status);
 void response_free (Response *h);
 
-gint set_response_multistatus (SoupServerMessage *msg,
+gint set_response_multistatus (PhodavRequest *req,
                                GHashTable *mstatus);
 G_END_DECLS

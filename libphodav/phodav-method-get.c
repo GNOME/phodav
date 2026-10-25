@@ -114,9 +114,9 @@ get_directory_listing (GFile *file, GCancellable *cancellable, GError **err)
 /* the headers which are common to the GET and HEAD responses of a
  * directory */
 static void
-method_get_directory_set_headers (SoupServerMessage *msg)
+method_get_directory_set_headers (PhodavRequest *req)
 {
-  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+  SoupMessageHeaders *response_headers = phodav_request_get_response_headers (req);
 
   soup_message_headers_set_content_type (response_headers,
                                          "text/html; charset=utf-8", NULL);
@@ -130,17 +130,17 @@ method_get_directory_set_headers (SoupServerMessage *msg)
 }
 
 static gint
-method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **error)
+method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **error)
 {
   GString *listing;
   gsize len;
 
-  method_get_directory_set_headers (msg);
+  method_get_directory_set_headers (req);
 
   /* a HEAD request carries no representation, and the listing is
    * generated on the fly: do not enumerate the whole directory just
    * to throw its content away */
-  if (soup_server_message_get_method (msg) == SOUP_METHOD_HEAD)
+  if (g_strcmp0 (phodav_request_get_method (req), "HEAD") == 0)
     return SOUP_STATUS_OK;
 
   listing = get_directory_listing (file, cancellable, error);
@@ -157,13 +157,9 @@ method_get_directory (SoupServerMessage *msg, GFile *file, GCancellable *cancell
     }
 
   len = listing->len;
-  /* a listing has no ranges: take the header over, so that
-   * libsoup does not apply its own partial-content handling to
-   * the generated page */
-  soup_message_headers_remove (soup_server_message_get_request_headers (msg), "Range");
-  soup_server_message_set_response (msg, "text/html; charset=utf-8",
-                                    SOUP_MEMORY_TAKE,
-                                    g_string_free_and_steal (listing), len);
+  phodav_request_set_response (req, "text/html; charset=utf-8",
+                               SOUP_MEMORY_TAKE,
+                               g_string_free_and_steal (listing), len);
 
   return SOUP_STATUS_OK;
 }
@@ -193,10 +189,10 @@ method_get_add_validators (SoupMessageHeaders *response_headers, const gchar *et
 }
 
 static gint
-method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, const gchar *etag, guint64 mtime)
+method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gchar *etag, guint64 mtime)
 {
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  SoupMessageHeaders *response_headers = phodav_request_get_response_headers (req);
   GMappedFile *mapping;
   g_autoptr(GBytes) buffer = NULL;
   g_autofree gchar *path = g_file_get_path (file);
@@ -205,12 +201,6 @@ method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, cons
   HttpRangeType range;
 
   range = http_request_range (request_headers, etag, mtime, size, &first, &last);
-
-  /* the range has been evaluated here: take the request header
-   * over, so that libsoup does not apply its own partial-content
-   * handling on top of the answer (it ignores the If-Range
-   * precondition, and answers unsatisfiable ranges with 200) */
-  soup_message_headers_remove (request_headers, "Range");
 
   /* there is no satisfiable byte in the representation,
    * RFC 9110 section 14.2 */
@@ -243,7 +233,7 @@ method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, cons
         g_strdup_printf ("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%" G_GUINT64_FORMAT,
                          first, last, size);
 
-      soup_message_body_append_bytes (soup_server_message_get_response_body (msg), slice);
+      phodav_request_set_body_bytes (req, g_bytes_ref (slice));
       soup_message_headers_append (response_headers, "Content-Range", content_range);
       return SOUP_STATUS_PARTIAL_CONTENT;
     }
@@ -251,25 +241,25 @@ method_get_file_body (SoupServerMessage *msg, GFile *file, GFileInfo *info, cons
   /* an empty file has no content to append, libsoup refuses
    * empty bodies */
   if (g_bytes_get_size (buffer) > 0)
-    soup_message_body_append_bytes (soup_server_message_get_response_body (msg), buffer);
+    phodav_request_set_body_bytes (req, g_bytes_ref (buffer));
 
   return SOUP_STATUS_OK;
 }
 
 static gint
-method_get_file (SoupServerMessage *msg, GFile *file, GFileInfo *info)
+method_get_file (PhodavRequest *req, GFile *file, GFileInfo *info)
 {
   g_autofree gchar *etag = phodav_etag_from_info (info);
   guint64 mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
   const gchar *content_type;
-  SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+  SoupMessageHeaders *response_headers = phodav_request_get_response_headers (req);
   const gchar *method;
 
   g_warn_if_fail (etag != NULL);
 
   method_get_add_validators (response_headers, etag, mtime);
 
-  if (http_request_not_modified (soup_server_message_get_request_headers (msg), etag, mtime))
+  if (http_request_not_modified (phodav_request_get_request_headers (req), etag, mtime))
     {
       /* RFC 9110 section 15.4.5: no body, and no representation
        * metadata beyond the validators */
@@ -287,11 +277,11 @@ method_get_file (SoupServerMessage *msg, GFile *file, GFileInfo *info)
   /* byte ranges are supported on files, RFC 9110 section 14.4 */
   soup_message_headers_append (response_headers, "Accept-Ranges", "bytes");
 
-  method = soup_server_message_get_method (msg);
-  if (method == SOUP_METHOD_GET)
-    return method_get_file_body (msg, file, info, etag, mtime);
+  method = phodav_request_get_method (req);
+  if (g_strcmp0 (method, "GET") == 0)
+    return method_get_file_body (req, file, info, etag, mtime);
 
-  if (method == SOUP_METHOD_HEAD)
+  if (g_strcmp0 (method, "HEAD") == 0)
     {
       g_autofree gchar *length = NULL;
 
@@ -310,7 +300,7 @@ method_get_file (SoupServerMessage *msg, GFile *file, GFileInfo *info)
 }
 
 static gint
-method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GError **err)
+method_get (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
@@ -322,9 +312,9 @@ method_get (SoupServerMessage *msg, GFile *file, GCancellable *cancellable, GErr
     goto end;
 
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
-    status = method_get_directory (msg, file, cancellable, &error);
+    status = method_get_directory (req, file, cancellable, &error);
   else
-    status = method_get_file (msg, file, info);
+    status = method_get_file (req, file, info);
 
 end:
   if (error)
@@ -339,14 +329,15 @@ end:
 }
 
 gint
-phodav_method_get (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+phodav_method_get (PhodavRequest *req, GError **err)
 {
+  PathHandler *handler = phodav_request_get_handler (req);
   GFile *file;
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status;
 
-  file = handler_get_file_for_path (handler, path);
-  status = method_get (msg, file, cancellable, err);
+  file = handler_get_file_for_path (handler, phodav_request_get_path (req));
+  status = method_get (req, file, cancellable, err);
   g_object_unref (file);
 
   return status;
