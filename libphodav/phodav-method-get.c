@@ -111,9 +111,9 @@ get_directory_pull (gpointer data, GCancellable *cancellable, GError **error)
 }
 
 static GString *
-get_directory_header (GFile *file)
+get_directory_header (const gchar *path)
 {
-  g_autofree gchar *name = g_file_get_basename (file);
+  g_autofree gchar *name = g_path_get_basename (path);
   g_autofree gchar *escaped = g_markup_escape_text (name, -1);
   GString *header = g_string_new ("<html>\r\n");
 
@@ -149,7 +149,7 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
 
   pull = g_new0 (GetDirectoryPull, 1);
   pull->e = g_steal_pointer (&e);
-  pull->buffer = get_directory_header (file);
+  pull->buffer = get_directory_header (phodav_request_get_path (req));
 
   phodav_request_stream_start (req, SOUP_STATUS_OK,
                                "text/html; charset=utf-8",
@@ -455,7 +455,7 @@ phodav_method_get (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   PhodavServer *server = handler_get_server (handler);
-  GFile *file;
+  g_autoptr(PhodavPath) handle = NULL;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
@@ -463,17 +463,17 @@ phodav_method_get (PhodavRequest *req, GError **err)
    * the stream keeps reading from the opened handle afterwards */
   phodav_server_read_lock (server);
 
-  file = phodav_path_resolve (handler, phodav_request_get_path (req),
-                              PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, phodav_request_get_path (req),
+                                PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     {
       phodav_server_read_unlock (server);
       return status;
     }
 
-  status = method_get (req, file, cancellable, err);
+  status = method_get (req, phodav_path_get_file (handle),
+                       cancellable, err);
   phodav_server_read_unlock (server);
-  g_object_unref (file);
 
   return status;
 }

@@ -12,7 +12,7 @@
 #include "phodav-virtual-dir.h"
 
 static gboolean
-do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, GFile *src, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, GFile *src, GFile *src_named, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GFileEnumerator) e = NULL;
 
@@ -29,6 +29,7 @@ do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, 
     {
       g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, err);
       g_autoptr(GFile) src_child = NULL;
+      g_autoptr(GFile) src_child_named = NULL;
       g_autoptr(GFile) dest_child = NULL;
       g_autofree gchar *src_child_path = NULL;
       g_autofree gchar *dest_child_path = NULL;
@@ -50,36 +51,45 @@ do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, 
       src_child_path = g_build_path ("/", src_path, name, NULL);
       dest_child_path = g_build_path ("/", dest_path, name, NULL);
 
-      src_child = phodav_path_resolve (handler, src_child_path,
-                                       PHODAV_PATH_EXISTING, &status);
-      if (!src_child)
-        {
-          g_set_error_literal (err, G_IO_ERROR,
-                               status == SOUP_STATUS_FORBIDDEN
-                                 ? G_IO_ERROR_PERMISSION_DENIED
-                                 : G_IO_ERROR_FAILED,
-                               "Cannot resolve the COPY source");
-          return FALSE;
-        }
+      {
+        g_autoptr(PhodavPath) src_handle = NULL;
+        g_autoptr(PhodavPath) dest_handle = NULL;
 
-      dest_child = phodav_path_resolve (handler, dest_child_path,
-                                        PHODAV_PATH_CREATE, &status);
-      if (!dest_child)
-        {
-          g_set_error_literal (err, G_IO_ERROR,
-                               status == SOUP_STATUS_FORBIDDEN
-                                 ? G_IO_ERROR_PERMISSION_DENIED
-                                 : G_IO_ERROR_FAILED,
-                               "Cannot resolve the COPY destination");
-          return FALSE;
-        }
+        src_handle = phodav_path_resolve (handler, src_child_path,
+                                          PHODAV_PATH_EXISTING, &status);
+        if (!src_handle)
+          {
+            g_set_error_literal (err, G_IO_ERROR,
+                                 status == SOUP_STATUS_FORBIDDEN
+                                   ? G_IO_ERROR_PERMISSION_DENIED
+                                   : G_IO_ERROR_FAILED,
+                                 "Cannot resolve the COPY source");
+            return FALSE;
+          }
+        src_child = g_object_ref (phodav_path_get_file (src_handle));
+        src_child_named = g_object_ref (phodav_path_get_named_file (src_handle));
+
+        dest_handle = phodav_path_resolve (handler, dest_child_path,
+                                           PHODAV_PATH_CREATE, &status);
+        if (!dest_handle)
+          {
+            g_set_error_literal (err, G_IO_ERROR,
+                                 status == SOUP_STATUS_FORBIDDEN
+                                   ? G_IO_ERROR_PERMISSION_DENIED
+                                   : G_IO_ERROR_FAILED,
+                                 "Cannot resolve the COPY destination");
+            return FALSE;
+          }
+        dest_child = g_object_ref (phodav_path_get_named_file (dest_handle));
+      }
 
       isdir = g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY;
 
       if (isdir)
         {
           if (!do_copy_r (handler, src_child_path, dest_child_path,
-                          src_child, dest_child, flags, cancellable, err))
+                          src_child, src_child_named, dest_child, flags,
+                          cancellable, err))
             return FALSE;
         }
       else if (!g_file_copy (src_child, dest_child, flags, cancellable, NULL, NULL, err))
@@ -90,15 +100,15 @@ do_copy_r (PathHandler *handler, const gchar *src_path, const gchar *dest_path, 
 }
 
 static gboolean
-movecopy_once (gboolean copy, GFile *file, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+movecopy_once (gboolean copy, GFile *file, GFile *named_file, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
 {
   return copy
            ? g_file_copy (file, dest, flags, cancellable, NULL, NULL, err)
-           : g_file_move (file, dest, flags, cancellable, NULL, NULL, err);
+           : g_file_move (named_file, dest, flags, cancellable, NULL, NULL, err);
 }
 
 static gint
-do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
+do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *named_file, GFile *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gboolean copy = g_strcmp0 (phodav_request_get_method (req), "COPY") == 0;
@@ -122,7 +132,7 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
   if (overwrite && exists)
     {
       g_autoptr(GFileInfo) src_info = g_file_query_info (file, G_FILE_ATTRIBUTE_STANDARD_TYPE,
-                                                         G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                                         G_FILE_QUERY_INFO_NONE,
                                                          cancellable, NULL);
       g_autoptr(GFileInfo) dest_info = g_file_query_info (dest, G_FILE_ATTRIBUTE_STANDARD_TYPE,
                                                           G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
@@ -131,21 +141,21 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
       if (src_info && dest_info &&
           (g_file_info_get_file_type (src_info) == G_FILE_TYPE_DIRECTORY ||
            g_file_info_get_file_type (dest_info) == G_FILE_TYPE_DIRECTORY))
-        phodav_delete_file (server, dest_path, dest, NULL, cancellable);
+        phodav_delete_file (server, dest_path, dest, dest, NULL, cancellable);
     }
 
   /* the request was validated to be depth 0 or infinity */
-  ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
+  ok = movecopy_once (copy, file, named_file, dest, flags, cancellable, &error);
 
   /* an existing destination of another kind cannot be replaced in
    * place: remove it, then try again with the destination gone */
   if (!ok && overwrite &&
       (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY) ||
        g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_MERGE)) &&
-      phodav_delete_file (server, dest_path, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
+      phodav_delete_file (server, dest_path, dest, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
-      ok = movecopy_once (copy, file, dest, flags, cancellable, &error);
+      ok = movecopy_once (copy, file, named_file, dest, flags, cancellable, &error);
     }
 
   /* a directory cannot be copied in one go; the depth of the request
@@ -156,7 +166,7 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
       g_clear_error (&error);
       ok = depth == DEPTH_INFINITY
              ? do_copy_r (phodav_request_get_handler (req), src_path, dest_path,
-                          file, dest, flags, cancellable, &error)
+                          file, named_file, dest, flags, cancellable, &error)
              : g_file_make_directory_with_parents (dest, cancellable, &error);
     }
 
@@ -167,8 +177,13 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
     return SOUP_STATUS_PRECONDITION_FAILED;
 
   if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-    return SOUP_STATUS_CONFLICT;
+    {
+      g_debug ("MOVE/COPY source or destination is missing: %s",
+               error->message);
+      return SOUP_STATUS_CONFLICT;
+    }
 
+  g_debug ("MOVE/COPY failed: %s", error->message);
   g_propagate_error (err, g_steal_pointer (&error));
   return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 }
@@ -178,7 +193,9 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
-  GFile *file = NULL, *dest_file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  g_autoptr(PhodavPath) dest_handle = NULL;
+  GFile *file, *named_file, *dest_file;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
@@ -267,8 +284,8 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     {
       /* a missing MOVE/COPY source is a conflict, like the backend
        * error the copy operation used to report */
@@ -277,9 +294,13 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  dest_file = phodav_path_resolve (handler, udest, PHODAV_PATH_CREATE, &status);
-  if (!dest_file)
+  dest_handle = phodav_path_resolve (handler, udest, PHODAV_PATH_CREATE, &status);
+  if (!dest_handle)
     goto end;
+
+  file = phodav_path_get_file (handle);
+  named_file = phodav_path_get_named_file (handle);
+  dest_file = phodav_path_get_named_file (dest_handle);
 
   /* take the short path as g_file_copy seems to be rather complicated */
   if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))
@@ -287,14 +308,12 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       status = SOUP_STATUS_FORBIDDEN;
       goto end;
     }
-  status = do_movecopy_file (req, server, file, dest_file, path, udest, depth,
-                             cancellable, err);
+  status = do_movecopy_file (req, server, file, named_file, dest_file, path,
+                             udest, depth, cancellable, err);
 
 end:
   phodav_server_write_unlock (server);
   if (dest_uri)
     g_uri_unref (dest_uri);
-  g_clear_object (&file);
-  g_clear_object (&dest_file);
   return status;
 }

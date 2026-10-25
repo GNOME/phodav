@@ -128,7 +128,8 @@ check_token (PathHandler *handler, const gchar *path, const gchar *token)
 static gboolean
 check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancellable *cancellable)
 {
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *fetag = NULL;
@@ -140,9 +141,11 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancell
   if (!handler_path_is_covered (handler, path))
     return FALSE;
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     return FALSE;
+
+  file = phodav_path_get_file (handle);
 
   info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
                             G_FILE_QUERY_INFO_NONE, cancellable, &error);

@@ -322,7 +322,8 @@ end:
 static ResponseProp *
 prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
 {
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
@@ -334,10 +335,11 @@ prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
-                              &status);
-  if (!file)
+  handle = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                                &status);
+  if (!handle)
     goto end;
+  file = phodav_path_get_named_file (handle);
 
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
@@ -361,7 +363,8 @@ end:
 static ResponseProp *
 prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
 {
-  GFile *file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   gint status = SOUP_STATUS_OK;
   GCancellable *cancellable = ctx->cancellable;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
@@ -372,10 +375,11 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
-                              &status);
-  if (!file)
+  handle = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                                &status);
+  if (!handle)
     goto end;
+  file = phodav_path_get_named_file (handle);
 
   if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
@@ -393,7 +397,6 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
-  g_clear_object (&file);
   return response_prop_new (node, status);
 }
 
@@ -586,13 +589,15 @@ propfind_query_zero (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xm
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(GError) err = NULL;
   g_autoptr(GFileInfo) info = NULL;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     return status;
+  file = phodav_path_get_file (handle);
 
   info = g_file_query_info (file, FILE_QUERY,
                             G_FILE_QUERY_INFO_NONE, cancellable, &err);
@@ -617,7 +622,8 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   const gchar *path = phodav_request_get_path (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(GError) err = NULL;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   g_autoptr(GFileEnumerator) e = NULL;
   gint status;
 
@@ -625,9 +631,10 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   if (status != SOUP_STATUS_OK)
     return status;
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     return status;
+  file = phodav_path_get_file (handle);
 
   e = g_file_enumerate_children (file, FILE_QUERY,
                                  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
@@ -643,16 +650,18 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
         break;
 
       g_autofree gchar *child_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
-      g_autoptr(GFile) child = NULL;
+      g_autoptr(PhodavPath) child_handle = NULL;
+      GFile *child;
       gint child_status;
 
       if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
         continue;
 
-      child = phodav_path_resolve (handler, child_path, PHODAV_PATH_EXISTING,
-                                   &child_status);
-      if (!child)
+      child_handle = phodav_path_resolve (handler, child_path, PHODAV_PATH_EXISTING,
+                                          &child_status);
+      if (!child_handle)
         continue;
+      child = phodav_path_get_file (child_handle);
 
       /* the properties of a member are queried on the member, not
        * on the collection it was listed from */

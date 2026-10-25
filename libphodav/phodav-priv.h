@@ -27,6 +27,7 @@ G_BEGIN_DECLS
 typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
+typedef struct _PhodavPath PhodavPath;
 typedef struct _PhodavRequest PhodavRequest;
 typedef struct _PhodavStream PhodavStream;
 
@@ -119,8 +120,19 @@ typedef enum
 
 /* the single filesystem policy entry point: it rejects symlinked
  * components, enforces the requested existence mode, and maps any
- * failure to an HTTP status in @status */
-GFile *phodav_path_resolve (PathHandler *handler, const gchar *path, PhodavPathMode mode, gint *status);
+ * failure to an HTTP status in @status. The returned handle keeps the
+ * resolved object open, so later operations can use it instead of
+ * looking the path up again. */
+PhodavPath *phodav_path_resolve (PathHandler *handler, const gchar *path, PhodavPathMode mode, gint *status);
+PhodavPath *phodav_path_ref (PhodavPath *path);
+void phodav_path_unref (PhodavPath *path);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavPath, phodav_path_unref)
+/* the object to read or query: the held descriptor when available */
+GFile *phodav_path_get_file (PhodavPath *path) G_GNUC_PURE;
+/* the object to modify by name: its parent directory is held open too */
+GFile *phodav_path_get_named_file (PhodavPath *path) G_GNUC_PURE;
+const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
+int phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);
 gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
 gboolean phodav_path_rename (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
@@ -172,7 +184,7 @@ void phodav_lock_store_remove_locks (PhodavServer *self,
 gint phodav_check_if (PhodavRequest *req, GList **locks);
 gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
 
-gint phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable);
+gint phodav_delete_file (PhodavServer *server, const gchar *path, GFile *dir_file, GFile *entry_file, GHashTable *mstatus, GCancellable *cancellable);
 
 /* per-request state: the request headers are copied and the request
  * body is referenced before the method runs outside the main loop.

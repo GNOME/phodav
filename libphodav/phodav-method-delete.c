@@ -12,13 +12,13 @@
 #include "phodav-utils.h"
 
 gint
-phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
+phodav_delete_file (PhodavServer *server, const gchar *path, GFile *dir_file, GFile *entry_file, GHashTable *mstatus, GCancellable *cancellable)
 {
   g_autoptr(GFileEnumerator) e = NULL;
   g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_NO_CONTENT;
 
-  e = g_file_enumerate_children (file, "standard::*",
+  e = g_file_enumerate_children (dir_file, "standard::*",
                                  G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                  cancellable, NULL);
   if (e)
@@ -28,7 +28,8 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
           g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &error);
           if (!info)
             break;
-          g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
+          g_autoptr(GFile) del = g_file_get_child (dir_file, g_file_info_get_name (info));
+          g_autoptr(GFile) del_dir = NULL;
           /* the multistatus keys are the decoded resource paths, the
            * hrefs are escaped when the response is built */
           g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
@@ -44,7 +45,13 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
               continue;
             }
 
-          phodav_delete_file (server, del_path, del, mstatus, cancellable);
+          if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+            del_dir = g_file_get_child (del, ".");
+          else
+            del_dir = g_object_ref (del);
+
+          phodav_delete_file (server, del_path, del_dir, del,
+                              mstatus, cancellable);
         }
 
       g_file_enumerator_close (e, cancellable, NULL);
@@ -54,7 +61,7 @@ phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashT
     g_debug ("DELETE: enumeration error: %s", error->message);
 
   g_autoptr(GError) del_error = NULL;
-  if (!g_file_delete (file, cancellable, &del_error))
+  if (!g_file_delete (entry_file, cancellable, &del_error))
     {
       if (mstatus)
         {
@@ -79,7 +86,7 @@ phodav_method_delete (PhodavRequest *req, GError **err)
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
-  GFile *file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GHashTable) mstatus = NULL;
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
@@ -109,20 +116,22 @@ phodav_method_delete (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
     goto end;
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 
-  status = phodav_delete_file (handler_get_server (handler), path, file, mstatus, cancellable);
+  status = phodav_delete_file (handler_get_server (handler), path,
+                               phodav_path_get_file (handle),
+                               phodav_path_get_named_file (handle),
+                               mstatus, cancellable);
   if (status == SOUP_STATUS_NO_CONTENT)
     if (g_hash_table_size (mstatus) > 0)
       status = set_response_multistatus (req, mstatus, NULL);
 
 end:
   phodav_server_write_unlock (handler_get_server (handler));
-  g_clear_object (&file);
 
   return status;
 }

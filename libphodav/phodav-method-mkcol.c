@@ -29,7 +29,7 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
-  GFile *file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   gint status;
   g_autolist(LockSubmitted) submitted = NULL;
@@ -54,14 +54,13 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
       goto end;
     }
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!handle)
     goto end;
 
-  status = do_mkcol_file (file, cancellable, err);
+  status = do_mkcol_file (phodav_path_get_file (handle), cancellable, err);
 
 end:
   phodav_server_write_unlock (handler_get_server (handler));
-  g_clear_object (&file);
   return status;
 }

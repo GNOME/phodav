@@ -34,7 +34,7 @@ typedef struct _PutContext
   gchar *path;
   GList *submitted; /* the lock tokens accepted at the start */
   guint64 max_upload;
-  GFile *file;      /* the destination of the upload */
+  PhodavPath *handle; /* keeps the destination and its parent open */
   GFile *temp_file; /* the staged upload, renamed over the destination on success */
   GFileOutputStream *output;
   gchar *if_match; /* the conditional headers, rechecked before the rename */
@@ -132,7 +132,7 @@ put_context_free (PutContext *ctx)
   g_clear_object (&ctx->server);
   g_free (ctx->path);
   g_list_free_full (ctx->submitted, (GDestroyNotify) lock_submitted_free);
-  g_clear_object (&ctx->file);
+  g_clear_pointer (&ctx->handle, phodav_path_unref);
   g_clear_object (&ctx->output);
   g_clear_pointer (&ctx->chunk, g_bytes_unref);
   if (ctx->chunks)
@@ -156,7 +156,7 @@ put_context_unref (PutContext *ctx)
 static PutContext *
 put_context_new (PathHandler *handler,
                  SoupServerMessage *msg,
-                 GFile *file,
+                 PhodavPath *handle,
                  GFile *temp_file,
                  GFileOutputStream *output,
                  gint status,
@@ -173,7 +173,7 @@ put_context_new (PathHandler *handler,
    * callbacks need */
   ctx->cancellable = g_object_ref (cancellable);
   ctx->max_upload = handler_get_max_upload (handler);
-  ctx->file = g_object_ref (file);
+  ctx->handle = phodav_path_ref (handle);
   ctx->temp_file = g_object_ref (temp_file);
   ctx->output = g_object_ref (output);
   ctx->chunks = g_queue_new ();
@@ -507,13 +507,13 @@ put_context_close (PutContext *ctx, GCancellable *cancellable, GError **error)
 /* query the current destination; a missing destination is not an
  * error, and returns NULL with @error unset */
 static GFileInfo *
-put_query_destination (GFile *file, GCancellable *cancellable, GError **error)
+put_query_destination (GFile *file, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error)
 {
   g_autoptr(GError) local_error = NULL;
   GFileInfo *info;
 
   info = g_file_query_info (file, "standard::type,standard::size,etag::*,unix::inode",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &local_error);
+                            flags, cancellable, &local_error);
   if (info)
     return info;
 
@@ -534,7 +534,9 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
   g_autofree gchar *etag = NULL;
   gboolean exists = FALSE;
 
-  info = put_query_destination (ctx->file, cancellable, &error);
+  info = put_query_destination (phodav_path_get_named_file (ctx->handle),
+                                G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                cancellable, &error);
   if (error)
     {
       g_propagate_error (err, g_steal_pointer (&error));
@@ -548,12 +550,16 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
 
       if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
         return SOUP_STATUS_METHOD_NOT_ALLOWED;
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
+        return SOUP_STATUS_FORBIDDEN;
     }
 
   if (!put_preconditions_hold (ctx->if_match, ctx->if_none_match, etag, exists))
     return SOUP_STATUS_PRECONDITION_FAILED;
 
-  if (!phodav_path_rename (ctx->temp_file, ctx->file, cancellable, &error))
+  if (!phodav_path_rename (ctx->temp_file,
+                           phodav_path_get_named_file (ctx->handle),
+                           cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         return SOUP_STATUS_CONFLICT;
@@ -617,8 +623,10 @@ put_temp_open (GFile *file, GFile **temp_file, GFileOutputStream **output, GCanc
 }
 
 static gint
-put_start (PhodavRequest *req, GFile *file, PutContext **out, GCancellable *cancellable, GError **err)
+put_start (PhodavRequest *req, PhodavPath *handle, PutContext **out, GCancellable *cancellable, GError **err)
 {
+  GFile *query_file = phodav_path_get_file (handle);
+  GFile *dest_file = phodav_path_get_named_file (handle);
   PathHandler *handler = phodav_request_get_handler (req);
   SoupServerMessage *msg = phodav_request_get_message (req);
   g_autoptr(GError) error = NULL;
@@ -633,7 +641,8 @@ put_start (PhodavRequest *req, GFile *file, PutContext **out, GCancellable *canc
 
   *out = NULL;
 
-  info = put_query_destination (file, cancellable, &error);
+  info = put_query_destination (query_file, G_FILE_QUERY_INFO_NONE,
+                                cancellable, &error);
   if (error)
     {
       g_propagate_error (err, g_steal_pointer (&error));
@@ -664,7 +673,7 @@ put_start (PhodavRequest *req, GFile *file, PutContext **out, GCancellable *canc
       goto end;
     }
 
-  if (!put_temp_open (file, &temp_file, &output, cancellable, &error))
+  if (!put_temp_open (dest_file, &temp_file, &output, cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         {
@@ -679,7 +688,7 @@ put_start (PhodavRequest *req, GFile *file, PutContext **out, GCancellable *canc
     }
 
   status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
-  *out = put_context_new (handler, msg, file, temp_file, output, status,
+  *out = put_context_new (handler, msg, handle, temp_file, output, status,
                           if_match, if_none_match, cancellable);
 
 end:
@@ -720,7 +729,7 @@ put_start_run (gpointer data)
   guint64 max_upload = handler_get_max_upload (handler);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autolist(LockSubmitted) submitted = NULL;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GError) error = NULL;
 
   phodav_server_write_lock (server);
@@ -742,11 +751,11 @@ put_start_run (gpointer data)
   if (start->status != SOUP_STATUS_OK)
     goto out;
 
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &start->status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &start->status);
+  if (!handle)
     goto out;
 
-  start->status = put_start (req, file, &start->ctx, cancellable, &error);
+  start->status = put_start (req, handle, &start->ctx, cancellable, &error);
   if (!start->ctx)
     start->error = g_steal_pointer (&error);
   else

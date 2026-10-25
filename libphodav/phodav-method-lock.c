@@ -113,7 +113,8 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   g_autolist(LockSubmitted) submitted = NULL;
   gint status = SOUP_STATUS_BAD_REQUEST;
   gboolean exists;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body;
 
@@ -193,10 +194,11 @@ phodav_method_lock (PhodavRequest *req, GError **err)
 
   /* an existing resource is locked in place; only an unmapped URL
    * needs an empty resource */
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!handle)
     goto end;
 
+  file = phodav_path_get_file (handle);
   exists = g_file_query_exists (file, cancellable);
 
   {

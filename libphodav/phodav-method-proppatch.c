@@ -381,7 +381,8 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
-  GFile *file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
   g_auto(DavDoc) doc = {
     0,
@@ -412,9 +413,10 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
     }
 
   /* a missing resource is reported per property in the multistatus */
-  file = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
-  if (!file)
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_CREATE, &status);
+  if (!handle)
     goto end;
+  file = phodav_path_get_file (handle);
 
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
@@ -473,7 +475,6 @@ phodav_method_proppatch (PhodavRequest *req, GError **err)
 
 end:
   phodav_server_write_unlock (handler_get_server (handler));
-  g_clear_object (&file);
 
   return status;
 }
