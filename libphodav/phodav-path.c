@@ -186,12 +186,10 @@ phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error)
   g_autofree gchar *path = g_file_get_path (file);
   int fd;
 
-  if (!path)
-    {
-      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
-                           "The file has no native path");
-      return FALSE;
-    }
+  /* a generic backend has no descriptor to sync: closing its output
+   * stream already flushed the upload to the backend */
+  if (!path || !g_file_is_native (file))
+    return TRUE;
 
   fd = g_open (path, O_RDONLY, 0);
   if (fd < 0)

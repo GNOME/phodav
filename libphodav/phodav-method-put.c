@@ -462,8 +462,8 @@ put_commit_done (GObject *source_object,
 /* the whole body has been received and written to the staged file:
  * close it, revalidate the locks and rename it over the destination on
  * a worker thread. The response is not written until the commit is
- * settled, so a client which sees a success knows its upload is
- * durable. */
+ * settled, so a client which sees a success knows its upload was
+ * committed and, for a native file, synced. */
 static void
 put_finish (PutContext *ctx)
 {

@@ -174,15 +174,82 @@ method_get_add_validators (SoupMessageHeaders *response_headers, const gchar *et
 }
 
 static gboolean
-stream_file_range (PhodavRequest *req, GFile *file, const gchar *path, guint64 first, guint64 count, PhodavStream *stream, GCancellable *cancellable)
+stream_file_range_gio (GFile *file, guint64 first, guint64 count,
+                       PhodavStream *stream, GCancellable *cancellable)
 {
   g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
+  g_autoptr(GFileInputStream) in = NULL;
+  guint64 remaining = count;
   gboolean ok = TRUE;
 
+  in = g_file_read (file, cancellable, NULL);
+  if (!in)
+    return FALSE;
+
+  if (first > 0)
+    {
+      if (G_IS_SEEKABLE (in))
+        {
+          if (!g_seekable_seek (G_SEEKABLE (in), first, G_SEEK_SET,
+                                cancellable, NULL))
+            return FALSE;
+        }
+      else
+        {
+          /* a non-seekable backend cannot jump to the start of the
+           * range: consume the bytes before it */
+          guint64 skip = first;
+
+          while (skip > 0)
+            {
+              gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, skip);
+              gssize n = g_input_stream_read (G_INPUT_STREAM (in), buffer, want,
+                                              cancellable, NULL);
+
+              if (n <= 0)
+                return FALSE;
+
+              skip -= n;
+            }
+        }
+    }
+
+  while (remaining > 0 && !g_cancellable_is_cancelled (cancellable))
+    {
+      gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, remaining);
+      gssize n = g_input_stream_read (G_INPUT_STREAM (in), buffer, want,
+                                      cancellable, NULL);
+
+      if (n <= 0)
+        {
+          /* an early EOF or a read error leaves the promised range
+           * incomplete */
+          ok = FALSE;
+          break;
+        }
+
+      if (!phodav_stream_write (stream, buffer, n))
+        {
+          ok = FALSE;
+          break;
+        }
+
+      remaining -= n;
+    }
+
+  return ok && remaining == 0;
+}
+
 #ifdef G_OS_UNIX
-  int fd;
+static gboolean
+stream_file_range_native (const gchar *path, guint64 first, guint64 count,
+                          PhodavStream *stream, GCancellable *cancellable)
+{
+  g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
   guint64 offset = first;
   guint64 remaining = count;
+  gboolean ok = TRUE;
+  int fd;
 
   fd = g_open (path, O_RDONLY, 0);
   if (fd < 0)
@@ -219,46 +286,22 @@ stream_file_range (PhodavRequest *req, GFile *file, const gchar *path, guint64 f
     }
 
   close (fd);
-  ok = ok && remaining == 0;
-#else
-  g_autoptr(GFileInputStream) in = NULL;
-  guint64 remaining = count;
 
-  in = g_file_read (file, cancellable, NULL);
-  if (!in)
-    return FALSE;
-
-  if (first > 0 && G_IS_SEEKABLE (in) &&
-      !g_seekable_seek (G_SEEKABLE (in), first, G_SEEK_SET, cancellable, NULL))
-    return FALSE;
-
-  while (remaining > 0 && !g_cancellable_is_cancelled (cancellable))
-    {
-      gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, remaining);
-      gssize n = g_input_stream_read (G_INPUT_STREAM (in), buffer, want,
-                                      cancellable, NULL);
-
-      if (n <= 0)
-        {
-          /* an early EOF or a read error leaves the promised range
-           * incomplete */
-          ok = FALSE;
-          break;
-        }
-
-      if (!phodav_stream_write (stream, buffer, n))
-        {
-          ok = FALSE;
-          break;
-        }
-
-      remaining -= n;
-    }
-
-  ok = ok && remaining == 0;
+  return ok && remaining == 0;
+}
 #endif
 
-  return ok;
+static gboolean
+stream_file_range (GFile *file, const gchar *path, guint64 first, guint64 count,
+                   PhodavStream *stream, GCancellable *cancellable)
+{
+#ifdef G_OS_UNIX
+  /* the native path avoids going through GIO for the common case */
+  if (path && g_file_is_native (file))
+    return stream_file_range_native (path, first, count, stream, cancellable);
+#endif
+
+  return stream_file_range_gio (file, first, count, stream, cancellable);
 }
 
 static gint
@@ -312,8 +355,8 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   if (!stream)
     return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  ok = path && stream_file_range (req, file, path, first, count, stream,
-                                  phodav_request_get_cancellable (req));
+  ok = stream_file_range (file, path, first, count, stream,
+                          phodav_request_get_cancellable (req));
   if (!ok)
     g_debug ("GET: stopped streaming %s", path ?: "(non-native file)");
 
