@@ -126,7 +126,7 @@ get_directory_header (const gchar *path)
 }
 
 static gint
-method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **error)
+method_get_directory (PhodavRequest *req, PhodavPath *path, GCancellable *cancellable, GError **error)
 {
   g_autoptr(GFileEnumerator) e = NULL;
   GetDirectoryPull *pull;
@@ -139,9 +139,9 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
   if (g_strcmp0 (phodav_request_get_method (req), "HEAD") == 0)
     return SOUP_STATUS_OK;
 
-  e = g_file_enumerate_children (file, "standard::*",
-                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                 cancellable, error);
+  e = phodav_path_enumerate (path, "standard::*",
+                             G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                             cancellable, error);
   if (!e)
     return g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
              ? SOUP_STATUS_NOT_FOUND
@@ -258,11 +258,11 @@ get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
 }
 
 static gint
-method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gchar *etag, guint64 mtime)
+method_get_file_body (PhodavRequest *req, PhodavPath *handle, GFileInfo *info, const gchar *etag, guint64 mtime)
 {
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageHeaders *response_headers = phodav_request_get_response_headers (req);
-  g_autofree gchar *path = g_file_get_path (file);
+  g_autofree gchar *path = g_file_get_path (phodav_path_get_file (handle));
   guint64 size = (guint64) g_file_info_get_size (info);
   guint64 first = 0, last = 0;
   guint64 count;
@@ -310,14 +310,17 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   pull->fd = -1;
 
 #ifdef G_OS_UNIX
-  /* the native path avoids going through GIO for the common case */
-  if (path && g_file_is_native (file))
-    pull->fd = g_open (path, O_RDONLY, 0);
+  /* duplicate the descriptor held by the resolved handle: reading it
+   * later does not resolve the path again */
+  if (phodav_path_get_fd (handle) >= 0)
+    pull->fd = fcntl (phodav_path_get_fd (handle), F_DUPFD_CLOEXEC, 0);
 #endif
 
   if (pull->fd < 0)
     {
-      pull->stream = g_file_read (file, phodav_request_get_cancellable (req), NULL);
+      pull->stream = phodav_path_open (handle,
+                                       phodav_request_get_cancellable (req),
+                                       NULL);
       if (!pull->stream)
         {
           get_file_pull_free (pull);
@@ -369,7 +372,7 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
 }
 
 static gint
-method_get_file (PhodavRequest *req, GFile *file, GFileInfo *info)
+method_get_file (PhodavRequest *req, PhodavPath *handle, GFileInfo *info)
 {
   g_autofree gchar *etag = phodav_etag_from_info (info);
   guint64 mtime = g_file_info_get_attribute_uint64 (info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
@@ -401,7 +404,7 @@ method_get_file (PhodavRequest *req, GFile *file, GFileInfo *info)
 
   method = phodav_request_get_method (req);
   if (g_strcmp0 (method, "GET") == 0)
-    return method_get_file_body (req, file, info, etag, mtime);
+    return method_get_file_body (req, handle, info, etag, mtime);
 
   if (g_strcmp0 (method, "HEAD") == 0)
     {
@@ -422,21 +425,21 @@ method_get_file (PhodavRequest *req, GFile *file, GFileInfo *info)
 }
 
 static gint
-method_get (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **err)
+method_get (PhodavRequest *req, PhodavPath *handle, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_NOT_FOUND;
 
-  info = g_file_query_info (file, "standard::*,etag::*,time::modified,unix::inode",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  info = phodav_path_query_info (handle, "standard::*,etag::*,time::modified,unix::inode",
+                                 G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     goto end;
 
   if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
-    status = method_get_directory (req, file, cancellable, &error);
+    status = method_get_directory (req, handle, cancellable, &error);
   else
-    status = method_get_file (req, file, info);
+    status = method_get_file (req, handle, info);
 
 end:
   if (error)
@@ -471,8 +474,7 @@ phodav_method_get (PhodavRequest *req, GError **err)
       return status;
     }
 
-  status = method_get (req, phodav_path_get_file (handle),
-                       cancellable, err);
+  status = method_get (req, handle, cancellable, err);
   phodav_server_read_unlock (server);
 
   return status;

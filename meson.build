@@ -51,6 +51,41 @@ if compiler.has_header('sys/xattr.h')
   conf.set('HAVE_SYS_XATTR_H', 1)
 endif
 
+# the descriptor-relative filesystem layer is optional: it needs the
+# *at() family and the related open/stat flags. Fall back to plain GIO
+# when the platform does not provide all of them.
+if host_machine.system() != 'windows'
+  dirfd_code = '''
+#define _GNU_SOURCE
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+int main (void)
+{
+  struct stat st;
+  int fd = openat (AT_FDCWD, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  int r = 0;
+
+  if (fd < 0)
+    return 0;
+
+  r |= fstatat (fd, ".", &st, AT_SYMLINK_NOFOLLOW);
+  r |= mkdirat (fd, ".", 0700);
+  r |= unlinkat (fd, ".", AT_REMOVEDIR);
+  r |= renameat (fd, ".", fd, ".");
+  r |= fcntl (fd, F_DUPFD_CLOEXEC, 0) < 0;
+  close (fd);
+
+  return r;
+}
+'''
+  if compiler.links(dirfd_code, name : 'descriptor-relative filesystem operations')
+    conf.set('HAVE_DIRFD_OPERATIONS', 1)
+  endif
+endif
+
 # Turn any accidental use of an API which is deprecated, or only
 # available in a newer version than the ones supported here, into a
 # compiler warning: the CI builds with -Dwerror=true, so that it fails
@@ -93,6 +128,7 @@ configure_file(
 summary({
   'mDNS / Avahi support' : d1.found() and d2.found(),
   'xattr support' : conf.has('HAVE_SYS_XATTR_H'),
+  'Descriptor-relative filesystem operations' : conf.has('HAVE_DIRFD_OPERATIONS'),
   'Introspection data' : build_gir,
   'API reference (gi-docgen)' : build_docs,
   'Manual pages' : build_man,

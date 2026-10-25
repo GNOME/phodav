@@ -129,7 +129,6 @@ static gboolean
 check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancellable *cancellable)
 {
   g_autoptr(PhodavPath) handle = NULL;
-  GFile *file;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *fetag = NULL;
@@ -145,10 +144,8 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancell
   if (!handle)
     return FALSE;
 
-  file = phodav_path_get_file (handle);
-
-  info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  info = phodav_path_query_info (handle, "etag::*,standard::size,unix::inode",
+                                 G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     {
       /* the resource cannot be queried: its etag cannot match the

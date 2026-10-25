@@ -199,7 +199,14 @@ phodav_method_lock (PhodavRequest *req, GError **err)
     goto end;
 
   file = phodav_path_get_file (handle);
-  exists = g_file_query_exists (file, cancellable);
+  {
+    g_autoptr(GFileInfo) info = NULL;
+
+    info = phodav_path_query_info (handle, "standard::type",
+                                   G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                   cancellable, NULL);
+    exists = info != NULL;
+  }
 
   {
     PhodavServer *server = handler_get_server (handler);

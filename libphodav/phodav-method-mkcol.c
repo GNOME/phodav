@@ -10,12 +10,12 @@
 #include "phodav-priv.h"
 
 static gint
-do_mkcol_file (GFile *file, GCancellable *cancellable, GError **err)
+do_mkcol_file (PhodavPath *path, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_CREATED;
 
-  if (!g_file_make_directory (file, cancellable, &error))
+  if (!phodav_path_mkdir (path, cancellable, &error))
     {
       status = phodav_status_from_error (error);
       g_propagate_error (err, g_steal_pointer (&error));
@@ -58,7 +58,7 @@ phodav_method_mkcol (PhodavRequest *req, GError **err)
   if (!handle)
     goto end;
 
-  status = do_mkcol_file (phodav_path_get_file (handle), cancellable, err);
+  status = do_mkcol_file (handle, cancellable, err);
 
 end:
   phodav_server_write_unlock (handler_get_server (handler));

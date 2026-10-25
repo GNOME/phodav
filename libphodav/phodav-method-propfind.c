@@ -599,8 +599,8 @@ propfind_query_zero (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xm
     return status;
   file = phodav_path_get_file (handle);
 
-  info = g_file_query_info (file, FILE_QUERY,
-                            G_FILE_QUERY_INFO_NONE, cancellable, &err);
+  info = phodav_path_query_info (handle, FILE_QUERY,
+                                 G_FILE_QUERY_INFO_NONE, cancellable, &err);
   if (err)
     {
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
@@ -623,7 +623,6 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(GError) err = NULL;
   g_autoptr(PhodavPath) handle = NULL;
-  GFile *file;
   g_autoptr(GFileEnumerator) e = NULL;
   gint status;
 
@@ -634,11 +633,10 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
   if (!handle)
     return status;
-  file = phodav_path_get_file (handle);
 
-  e = g_file_enumerate_children (file, FILE_QUERY,
-                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                 cancellable, &err);
+  e = phodav_path_enumerate (handle, FILE_QUERY,
+                             G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                             cancellable, &err);
   if (!e)
     goto end;
 
@@ -657,8 +655,10 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
       if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
         continue;
 
-      child_handle = phodav_path_resolve (handler, child_path, PHODAV_PATH_EXISTING,
-                                          &child_status);
+      child_handle = phodav_path_resolve_child (handle,
+                                                g_file_info_get_name (info),
+                                                PHODAV_PATH_EXISTING,
+                                                &child_status);
       if (!child_handle)
         continue;
       child = phodav_path_get_file (child_handle);

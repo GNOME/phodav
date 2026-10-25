@@ -517,13 +517,14 @@ put_context_close (PutContext *ctx, GCancellable *cancellable, GError **error)
 /* query the current destination; a missing destination is not an
  * error, and returns NULL with @error unset */
 static GFileInfo *
-put_query_destination (GFile *file, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error)
+put_query_destination (PhodavPath *path, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error)
 {
   g_autoptr(GError) local_error = NULL;
   GFileInfo *info;
 
-  info = g_file_query_info (file, "standard::type,standard::size,etag::*,unix::inode",
-                            flags, cancellable, &local_error);
+  info = phodav_path_query_info (path,
+                                 "standard::type,standard::size,etag::*,unix::inode",
+                                 flags, cancellable, &local_error);
   if (info)
     return info;
 
@@ -544,7 +545,7 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
   g_autofree gchar *etag = NULL;
   gboolean exists = FALSE;
 
-  info = put_query_destination (phodav_path_get_named_file (ctx->handle),
+  info = put_query_destination (ctx->handle,
                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
                                 cancellable, &error);
   if (error)
@@ -567,7 +568,7 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
   if (!put_preconditions_hold (ctx->if_match, ctx->if_none_match, etag, exists))
     return SOUP_STATUS_PRECONDITION_FAILED;
 
-  if (!phodav_path_rename (ctx->temp_file,
+  if (!phodav_path_rename_files (ctx->temp_file,
                            phodav_path_get_named_file (ctx->handle),
                            cancellable, &error))
     {
@@ -635,7 +636,6 @@ put_temp_open (GFile *file, GFile **temp_file, GFileOutputStream **output, GCanc
 static gint
 put_start (PhodavRequest *req, PhodavPath *handle, PutContext **out, GCancellable *cancellable, GError **err)
 {
-  GFile *query_file = phodav_path_get_file (handle);
   GFile *dest_file = phodav_path_get_named_file (handle);
   PathHandler *handler = phodav_request_get_handler (req);
   SoupServerMessage *msg = phodav_request_get_message (req);
@@ -651,7 +651,7 @@ put_start (PhodavRequest *req, PhodavPath *handle, PutContext **out, GCancellabl
 
   *out = NULL;
 
-  info = put_query_destination (query_file, G_FILE_QUERY_INFO_NONE,
+  info = put_query_destination (handle, G_FILE_QUERY_INFO_NONE,
                                 cancellable, &error);
   if (error)
     {

@@ -138,9 +138,26 @@ const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
 int phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);
 gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
-/* rename without syncing: callers sync the staged file first, outside
+/* rename a staged GFile without syncing: callers sync it first, outside
  * the filesystem write lock */
-gboolean phodav_path_rename (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
+gboolean phodav_path_rename_files (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
+
+/* the descriptor-based operations layer: every lookup below is done
+ * relative to a held handle, never by rebuilding an absolute path */
+PhodavPath *phodav_path_resolve_child (PhodavPath *parent, const gchar *name, PhodavPathMode mode, gint *status);
+GFileInfo *phodav_path_query_info (PhodavPath *path, const gchar *attributes, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error);
+GFileInputStream *phodav_path_open (PhodavPath *path, GCancellable *cancellable, GError **error);
+GFileEnumerator *phodav_path_enumerate (PhodavPath *path, const gchar *attributes, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error);
+gboolean phodav_path_mkdir (PhodavPath *path, GCancellable *cancellable, GError **error);
+gboolean phodav_path_unlink (PhodavPath *path, GCancellable *cancellable, GError **error);
+gboolean phodav_path_unlink_child (PhodavPath *parent, const gchar *name, GCancellable *cancellable, GError **error);
+gboolean phodav_path_copy (PhodavPath *from, PhodavPath *to, GFileCopyFlags flags, gboolean recursive, GCancellable *cancellable, GError **error);
+gboolean phodav_path_rename (PhodavPath *from, PhodavPath *to, GCancellable *cancellable, GError **error);
+gboolean phodav_path_move (PhodavPath *from, PhodavPath *to, GFileCopyFlags flags, GCancellable *cancellable, GError **error);
+/* remove @path and its members; @notify receives the relative path and
+ * status of every entry which could not be removed */
+typedef void (*PhodavPathDeleteNotify) (const gchar *path, gint status, gpointer data);
+gint phodav_path_delete_tree (PhodavServer *server, PhodavPath *path, const gchar *rel_path, PhodavPathDeleteNotify notify, gpointer data, GCancellable *cancellable);
 
 /* the share-relative path of @path, borrowed; NULL when @path is not
  * part of the share mounted at the base path */
@@ -193,8 +210,6 @@ void phodav_lock_store_remove_locks (PhodavServer *self,
 
 gint phodav_check_if (PhodavRequest *req, GList **locks);
 gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
-
-gint phodav_delete_file (PhodavServer *server, const gchar *path, GFile *dir_file, GFile *entry_file, GHashTable *mstatus, GCancellable *cancellable);
 
 /* per-request state: the request headers are copied and the request
  * body is referenced before the method runs outside the main loop.
