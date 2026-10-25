@@ -43,6 +43,24 @@ stream_write_string (PhodavStream *stream, const gchar *str)
   return phodav_stream_write (stream, (const guint8 *) str, strlen (str));
 }
 
+/* A failure which follows the client going away needs no answer: the
+ * message is already finished, and cutting the connection would only
+ * risk discarding a connection the client may still reuse. Every other
+ * failure (a read error, a short read, a server-side cancellation) must
+ * abort the response, so that a truncated body is not mistaken for the
+ * complete representation. */
+static void
+stream_finish (PhodavRequest *req, PhodavStream *stream, gboolean ok)
+{
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
+
+  if (ok || (g_cancellable_is_cancelled (cancellable) &&
+             phodav_request_is_finished (req)))
+    phodav_stream_end (stream);
+  else
+    phodav_stream_abort (stream);
+}
+
 static gint
 method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable, GError **error)
 {
@@ -51,6 +69,7 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
   PhodavStream *stream;
   g_autofree gchar *name = NULL;
   g_autofree gchar *escaped = NULL;
+  gboolean ok = TRUE;
   gint status = SOUP_STATUS_OK;
 
   method_get_directory_set_headers (req);
@@ -82,7 +101,10 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
   g_string_append_printf (header, "<body><h1>Index of %s</h1>\r\n<p>\r\n",
                           escaped);
   if (!stream_write_string (stream, header->str))
-    goto out;
+    {
+      ok = FALSE;
+      goto out;
+    }
 
   while (TRUE)
     {
@@ -93,7 +115,10 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
       g_autofree gchar *line = NULL;
 
       if (!g_file_enumerator_iterate (e, &info, NULL, cancellable, error))
-        break;
+        {
+          ok = FALSE;
+          break;
+        }
 
       if (info == NULL)
         break;
@@ -108,14 +133,18 @@ method_get_directory (PhodavRequest *req, GFile *file, GCancellable *cancellable
                                       href, dir ? "/" : "", base);
 
       if (!stream_write_string (stream, line))
-        break;
+        {
+          ok = FALSE;
+          break;
+        }
     }
 
-  stream_write_string (stream, "</p></body>\r\n</html>\r\n");
+  if (ok && !stream_write_string (stream, "</p></body>\r\n</html>\r\n"))
+    ok = FALSE;
 
 out:
   g_file_enumerator_close (e, cancellable, NULL);
-  phodav_stream_end (stream);
+  stream_finish (req, stream, ok);
 
   return status;
 }
@@ -172,16 +201,25 @@ stream_file_range (PhodavRequest *req, GFile *file, const gchar *path, guint64 f
           break;
         }
       if (n == 0)
-        break;
+        {
+          /* the file shrank while it was being sent: fewer bytes than
+           * the announced representation must not look complete */
+          ok = FALSE;
+          break;
+        }
 
       if (!phodav_stream_write (stream, buffer, n))
-        break;
+        {
+          ok = FALSE;
+          break;
+        }
 
       offset += n;
       remaining -= n;
     }
 
   close (fd);
+  ok = ok && remaining == 0;
 #else
   g_autoptr(GFileInputStream) in = NULL;
   guint64 remaining = count;
@@ -202,15 +240,22 @@ stream_file_range (PhodavRequest *req, GFile *file, const gchar *path, guint64 f
 
       if (n <= 0)
         {
-          ok = n == 0;
+          /* an early EOF or a read error leaves the promised range
+           * incomplete */
+          ok = FALSE;
           break;
         }
 
       if (!phodav_stream_write (stream, buffer, n))
-        break;
+        {
+          ok = FALSE;
+          break;
+        }
 
       remaining -= n;
     }
+
+  ok = ok && remaining == 0;
 #endif
 
   return ok;
@@ -228,6 +273,7 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   gint status;
   HttpRangeType range;
   PhodavStream *stream;
+  gboolean ok;
 
   range = http_request_range (request_headers, etag, mtime, size, &first, &last);
 
@@ -266,11 +312,12 @@ method_get_file_body (PhodavRequest *req, GFile *file, GFileInfo *info, const gc
   if (!stream)
     return SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  if (!path || !stream_file_range (req, file, path, first, count, stream,
-                                   phodav_request_get_cancellable (req)))
+  ok = path && stream_file_range (req, file, path, first, count, stream,
+                                  phodav_request_get_cancellable (req));
+  if (!ok)
     g_debug ("GET: stopped streaming %s", path ?: "(non-native file)");
 
-  phodav_stream_end (stream);
+  stream_finish (req, stream, ok);
 
   return status;
 }

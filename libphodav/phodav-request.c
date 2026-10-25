@@ -413,6 +413,7 @@ struct _PhodavStream
   gboolean op_done;
   gboolean chunk_written;
   gboolean failed;
+  gboolean aborted;
   gboolean started;
   gboolean ended;
   guint status;
@@ -482,8 +483,36 @@ stream_end_cb (gpointer data)
 {
   PhodavStream *stream = data;
   SoupServerMessage *msg = stream->req->msg;
+  gboolean aborted;
 
-  if (!stream->failed)
+  g_mutex_lock (&stream->mutex);
+  aborted = stream->aborted;
+  g_mutex_unlock (&stream->mutex);
+
+  if (aborted)
+    {
+      GIOStream *connection;
+      GSocket *socket;
+
+      /* The headers of a chunked response are already on the wire: the
+       * only way to signal that the body is not the complete
+       * representation is to cut the connection, rather than to send
+       * the terminating zero-length chunk. Stealing the connection
+       * makes libsoup flush and terminate the body being written, so
+       * shut the socket down first to make that flush fail. */
+      socket = soup_server_message_get_socket (msg);
+      if (socket)
+        g_socket_shutdown (socket, TRUE, TRUE, NULL);
+
+      connection = soup_server_message_steal_connection (msg);
+
+      if (connection)
+        {
+          g_io_stream_close (connection, NULL, NULL);
+          g_object_unref (connection);
+        }
+    }
+  else if (!stream->failed)
     {
       soup_message_body_complete (soup_server_message_get_response_body (msg));
       soup_server_message_unpause (msg);
@@ -602,12 +631,14 @@ phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len)
 }
 
 static void
-stream_finish (PhodavStream *stream)
+stream_finish (PhodavStream *stream,
+               gboolean aborted)
 {
   PhodavStream *ref = stream;
 
   g_mutex_lock (&ref->mutex);
   ref->op_done = FALSE;
+  ref->aborted = aborted;
   g_mutex_unlock (&ref->mutex);
   g_main_context_invoke_full (ref->req->context, G_PRIORITY_DEFAULT,
                               stream_end_cb, ref, NULL);
@@ -624,14 +655,14 @@ void
 phodav_stream_end (PhodavStream *stream)
 {
   if (stream)
-    stream_finish (stream);
+    stream_finish (stream, FALSE);
 }
 
 void
 phodav_stream_abort (PhodavStream *stream)
 {
   if (stream)
-    stream_finish (stream);
+    stream_finish (stream, TRUE);
 }
 
 static void

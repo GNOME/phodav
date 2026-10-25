@@ -221,6 +221,8 @@ gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
 /* incremental response bodies */
 PhodavStream *phodav_request_stream_start (PhodavRequest *req, guint status, const gchar *content_type);
 gboolean phodav_stream_write (PhodavStream *stream, const guint8 *data, gsize len);
+/* end terminates the body cleanly, abort cuts the connection so that
+ * a truncated body cannot be mistaken for the complete representation */
 void phodav_stream_end (PhodavStream *stream);
 void phodav_stream_abort (PhodavStream *stream);
 /* the value-returning lock service */
