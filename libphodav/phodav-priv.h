@@ -88,6 +88,7 @@ struct _PhodavServer
   gboolean readonly;
   guint64 max_upload;
   gboolean constructing;
+  gboolean stopped;
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 

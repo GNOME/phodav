@@ -858,6 +858,37 @@ test_server_lock_conflict (void)
 }
 
 static void
+test_server_stop (void)
+{
+  g_autoptr(GFile) root = g_file_new_for_path (g_get_tmp_dir ());
+  g_autoptr(PhodavServer) server = phodav_server_new_for_root_file (root);
+  PhodavServer *request_ref = g_object_ref (server);
+
+  g_assert_nonnull (server->root_handler);
+  g_assert_cmpstr (server->handler_path, ==, "/");
+  g_assert_false (g_cancellable_is_cancelled (server->cancellable));
+
+  phodav_server_stop (server);
+
+  /* the handler is unregistered and the in-flight work cancelled, even
+   * though this reference (standing for a request) keeps the object
+   * alive */
+  g_assert_true (server->stopped);
+  g_assert_true (g_cancellable_is_cancelled (server->cancellable));
+  g_assert_null (server->root_handler);
+  g_assert_null (server->handler_path);
+  g_assert_null (server->expire_locks_source);
+
+  /* stopping twice is harmless, and later property changes do not
+   * register the handler again */
+  phodav_server_stop (server);
+  g_object_set (server, "base-path", "/dav", NULL);
+  g_assert_null (server->root_handler);
+
+  g_object_unref (request_ref);
+}
+
+static void
 test_server_dispose (void)
 {
   GLogLevelFlags fatal;
@@ -1006,6 +1037,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
   g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);
   g_test_add_func ("/server/dispose", test_server_dispose);
+  g_test_add_func ("/server/stop", test_server_stop);
   g_test_add_func ("/server/injected-soup-server", test_server_injected_soup_server);
 
   return g_test_run ();

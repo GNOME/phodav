@@ -178,6 +178,11 @@ update_root_handler (PhodavServer *self)
 {
   PathHandler *handler;
 
+  /* stop() unregistered the handler for good: property changes must
+   * not bring it back */
+  if (self->stopped)
+    return;
+
   /* the handler is registered at the base path, which may have
    * changed since the last registration */
   if (self->root_handler)
@@ -254,20 +259,15 @@ free_path_locks (gpointer key, gpointer value, gpointer user_data)
 }
 
 static void
-phodav_server_dispose (GObject *gobject)
+server_stop (PhodavServer *self)
 {
-  PhodavServer *self = PHODAV_SERVER (gobject);
+  if (self->stopped)
+    return;
 
-  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
-  g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
+  self->stopped = TRUE;
 
-  /* stop the requests which are still running on their worker thread */
-  if (self->cancellable)
-    g_cancellable_cancel (self->cancellable);
-
-  /* SoupServer could live longer than PhodavServer,
-   * this frees the PhodavHandler passed as user_data;
-   * dispose may run again, the server is already gone then */
+  /* first stop accepting new requests, then cancel the ones which are
+   * already running; they keep their references until they complete */
   if (self->server)
     {
       if (self->handler_path)
@@ -276,6 +276,24 @@ phodav_server_dispose (GObject *gobject)
     }
   self->root_handler = NULL;
   g_clear_pointer (&self->handler_path, g_free);
+
+  if (self->cancellable)
+    g_cancellable_cancel (self->cancellable);
+
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+}
+
+static void
+phodav_server_dispose (GObject *gobject)
+{
+  PhodavServer *self = PHODAV_SERVER (gobject);
+
+  server_stop (self);
+  g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
+
+  /* SoupServer could live longer than PhodavServer,
+   * this frees the PhodavHandler passed as user_data;
+   * dispose may run again, the server is already gone then */
   g_clear_pointer (&self->base_path, g_free);
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
@@ -551,6 +569,32 @@ phodav_server_get_soup_server (PhodavServer *self)
   g_return_val_if_fail (PHODAV_IS_SERVER (self), NULL);
 
   return self->server;
+}
+
+/**
+ * phodav_server_stop:
+ * @server: a #PhodavServer
+ *
+ * Stops serving DAV requests.
+ *
+ * The DAV handler is unregistered from the #SoupServer, the requests
+ * already in progress are cancelled, and the lock expiry sweep is
+ * stopped. The references held by the cancelled requests keep the
+ * server alive until they complete, but no new request is accepted.
+ *
+ * Unlike disposing the server, this does not wait for the outstanding
+ * requests, so it can be called from the main context while the server
+ * is busy. It must be called on the thread running the main context of
+ * the #SoupServer. A stopped server cannot be restarted.
+ *
+ * Since: 3.1
+ **/
+void
+phodav_server_stop (PhodavServer *self)
+{
+  g_return_if_fail (PHODAV_IS_SERVER (self));
+
+  server_stop (self);
 }
 
 /**

@@ -54,6 +54,7 @@ typedef struct _RequestCancel
   GCancellable *cancellable;
   GCancellable *server_cancellable;
   gulong server_handler;
+  GWeakRef server;
   gint server_cancelled;
   gint finished;
 } RequestCancel;
@@ -769,6 +770,7 @@ request_cancel_free (gpointer data)
   if (cancel->server_handler)
     g_cancellable_disconnect (cancel->server_cancellable, cancel->server_handler);
   g_clear_object (&cancel->server_cancellable);
+  g_weak_ref_clear (&cancel->server);
   g_object_unref (cancel->cancellable);
   g_free (cancel);
 }
@@ -790,12 +792,18 @@ static void
 got_headers (SoupServerMessage *msg,
              gpointer user_data)
 {
-  PhodavServer *self = user_data;
+  RequestCancel *cancel = user_data;
+  g_autoptr(PhodavServer) self = g_weak_ref_get (&cancel->server);
   GUri *uri = soup_server_message_get_uri (msg);
   const gchar *path = g_uri_get_path (uri);
   const gchar *method = soup_server_message_get_method (msg);
   SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
   const DavMethod *m = dav_method_lookup (method);
+
+  /* the server was stopped and disposed while this request was in
+   * flight: there is nothing left to handle it */
+  if (!self)
+    return;
 
   /* the requests already answered (an authentication challenge, an
    * invalid path...) are not phodav's to handle */
@@ -879,11 +887,12 @@ phodav_server_request_started (SoupServer *server,
   cancel->server_handler = g_cancellable_connect (cancel->server_cancellable,
                                                   G_CALLBACK (request_cancelled),
                                                   cancel, NULL);
+  g_weak_ref_init (&cancel->server, self);
   g_object_set_data_full (G_OBJECT (message), "phodav-request-cancel",
                           cancel, request_cancel_free);
 
   g_signal_connect (message, "finished", G_CALLBACK (message_finished), NULL);
-  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
+  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), cancel);
 }
 
 void

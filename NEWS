@@ -27,8 +27,10 @@ New features:
 - get: answer conditional requests with Not Modified
 - put: implement If-Match and If-None-Match conditionals
 - server: allow constructing with an existing SoupServer, add
-  max-upload and base-path properties, and leave the handlers of a
-  shared server alone when an auth domain is configured
+  max-upload and base-path properties, add phodav_server_stop() to
+  unregister the DAV handler and cancel the in-flight requests, and
+  leave the handlers of a shared server alone when an auth domain is
+  configured
 - virtual-dir: report a modification time and etag
 - virtual-dir: implement the GFile URI, dup, prefix and relative path
   operations
