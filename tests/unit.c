@@ -475,9 +475,17 @@ test_dav_lock_new (void)
   g_assert_cmpuint (lock->timeout, >, (guint64) now);
   g_assert_cmpuint (lock->timeout, <=, (guint64) now + 60);
 
-  /* refreshing with 0 makes the lock infinite */
+  /* a missing or infinite timeout is capped too, so a client cannot
+   * keep a lock forever */
   dav_lock_refresh_timeout (lock, 0);
-  g_assert_cmpuint (lock->timeout, ==, 0);
+  g_assert_cmpuint (lock->timeout, >, (guint64) now);
+  g_assert_cmpuint (lock->timeout, <=, (guint64) now + PHODAV_LOCK_TIMEOUT_MAX);
+
+  /* an oversized finite timeout is capped as well */
+  dav_lock_refresh_timeout (lock, PHODAV_LOCK_TIMEOUT_MAX + 1000);
+  g_assert_cmpuint (lock->timeout, >, (guint64) now);
+  g_assert_cmpuint (lock->timeout, <=, (guint64) now + PHODAV_LOCK_TIMEOUT_MAX);
+
   dav_lock_refresh_timeout (lock, 10);
   g_assert_cmpuint (lock->timeout, >, (guint64) now);
   g_assert_cmpuint (lock->timeout, <=, (guint64) now + 70);
@@ -812,6 +820,95 @@ test_server_lock_expiry (void)
 }
 
 static void
+test_server_expiry_index (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *slow_token = new_token ();
+  g_autofree gchar *fast_token = new_token ();
+  gint64 now = g_get_monotonic_time () / G_USEC_PER_SEC;
+  g_autofree gchar *refreshed = NULL;
+  gint64 next;
+
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/slow", slow_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 100),
+                   ==, SOUP_STATUS_OK);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/fast", fast_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 10),
+                   ==, SOUP_STATUS_OK);
+
+  /* the expiry index returns the earliest deadline without walking
+   * the paths again */
+  next = phodav_lock_store_next_expiry (server);
+  g_assert_cmpint (next, >, now);
+  g_assert_cmpint (next, <=, now + 10);
+
+  /* refreshing the earliest lock moves it to the front of the index */
+  {
+    g_autolist(LockSubmitted) submitted =
+                 g_list_append (NULL, lock_submitted_new ("/fast", fast_token));
+
+    g_assert_cmpint (phodav_lock_store_refresh_lock (server, "/fast", submitted,
+                                                     5, &refreshed),
+                     ==, SOUP_STATUS_OK);
+    g_assert_cmpstr (refreshed, ==, fast_token);
+  }
+  next = phodav_lock_store_next_expiry (server);
+  g_assert_cmpint (next, >, now);
+  g_assert_cmpint (next, <=, now + 5);
+
+  /* removing the earliest lock leaves the other deadline in place */
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/fast", fast_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  next = phodav_lock_store_next_expiry (server);
+  g_assert_cmpint (next, >, now + 5);
+  g_assert_cmpint (next, <=, now + 100);
+
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/slow", slow_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpint (phodav_lock_store_next_expiry (server), ==, 0);
+}
+
+static void
+test_server_lock_limit (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *first_token = new_token ();
+  g_autofree gchar *extra_token = new_token ();
+  g_autofree gchar *replacement_token = new_token ();
+
+  for (guint i = 0; i < PHODAV_LOCK_COUNT_MAX; i++)
+    {
+      g_autofree gchar *path = g_strdup_printf ("/limited/%u", i);
+      g_autofree gchar *token = i == 0 ? g_strdup (first_token) : new_token ();
+
+      g_assert_cmpint (phodav_lock_store_add_lock (server, path, token,
+                                                   DAV_LOCK_SCOPE_SHARED,
+                                                   DAV_LOCK_WRITE, DEPTH_ZERO,
+                                                   NULL, 60),
+                       ==, SOUP_STATUS_OK);
+    }
+
+  /* the store refuses one more lock, but accepts another one after a
+   * lock was released */
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/limited/extra", extra_token,
+                                               DAV_LOCK_SCOPE_SHARED,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 60),
+                   ==, SOUP_STATUS_INSUFFICIENT_STORAGE);
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/limited/0", first_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/limited/extra", replacement_token,
+                                               DAV_LOCK_SCOPE_SHARED,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 60),
+                   ==, SOUP_STATUS_OK);
+}
+
+static void
 test_server_lock_conflict (void)
 {
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
@@ -1042,6 +1139,8 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/server/tree-other-locks", test_server_tree_other_locks);
   g_test_add_func ("/lock/expiry", test_dav_lock_expiry);
   g_test_add_func ("/server/lock-expiry", test_server_lock_expiry);
+  g_test_add_func ("/server/expiry-index", test_server_expiry_index);
+  g_test_add_func ("/server/lock-limit", test_server_lock_limit);
   g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);
   g_test_add_func ("/server/dispose", test_server_dispose);
   g_test_add_func ("/server/stop", test_server_stop);

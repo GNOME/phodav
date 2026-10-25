@@ -71,6 +71,8 @@ struct _DAVLock
   DepthType depth;
   xmlNodePtr owner;
   guint64 timeout;
+  /* position in the lock store expiry heap, -1 when not queued */
+  gint expiry_index;
 };
 
 typedef enum

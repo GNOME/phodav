@@ -14,10 +14,12 @@
 void
 dav_lock_refresh_timeout (DAVLock *lock, guint timeout)
 {
-  if (timeout)
-    lock->timeout = g_get_monotonic_time () / G_USEC_PER_SEC + timeout;
-  else
-    lock->timeout = 0;
+  /* an unbounded or missing timeout is capped too, so that a client
+   * cannot keep a lock forever or ask for an absurd deadline */
+  if (timeout == 0 || timeout > PHODAV_LOCK_TIMEOUT_MAX)
+    timeout = PHODAV_LOCK_TIMEOUT_MAX;
+
+  lock->timeout = g_get_monotonic_time () / G_USEC_PER_SEC + timeout;
 }
 
 gboolean
@@ -37,6 +39,7 @@ dav_lock_new (Path *path, const gchar *token, DAVLockScopeType scope, DAVLockTyp
 
   lock = g_new0 (DAVLock, 1);
   lock->path = path_ref (path);
+  lock->expiry_index = -1;
   /* copy the NUL terminator too, do not rely on the struct padding */
   memcpy (lock->token, token, DAV_LOCK_TOKEN_LENGTH + 1);
   lock->scope = scope;

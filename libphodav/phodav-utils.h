@@ -31,8 +31,8 @@ gboolean depth_from_string (const gchar *depth, DepthType *out);
 const gchar *depth_to_string (DepthType depth);
 
 /* parse the Timeout header of a LOCK request (RFC 4918 section 10.7):
- * a missing header, "Infinite" and an unrecognized value all mean
- * no timeout */
+ * a missing header, "Infinite" and an unrecognized value return 0,
+ * which the lock store maps to its bounded default timeout */
 guint timeout_from_string (const gchar *timeout);
 
 /* is @path the tree rooted at @root, or one of its members? */

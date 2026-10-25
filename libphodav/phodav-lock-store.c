@@ -26,12 +26,152 @@ struct _PhodavPathTrieNode
   Path *path;     /* owned reference, NULL when the path has no entry */
   GHashTable *children;
   PhodavPathTrieNode *parent; /* borrowed */
+  PhodavPathTrie *trie;       /* borrowed, the owning lock store */
 };
 
 struct _PhodavPathTrie
 {
   PhodavPathTrieNode *root;
+  /* min-heap of DAVLock *, keyed by the absolute timeout; the earliest
+   * deadline is always at index 0 */
+  GArray *expiry;
+  guint lock_count;
 };
+
+static void
+lock_store_heap_swap (PhodavPathTrie *trie, guint a, guint b)
+{
+  DAVLock *da = g_array_index (trie->expiry, DAVLock *, a);
+  DAVLock *db = g_array_index (trie->expiry, DAVLock *, b);
+
+  g_array_index (trie->expiry, DAVLock *, a) = db;
+  g_array_index (trie->expiry, DAVLock *, b) = da;
+  da->expiry_index = b;
+  db->expiry_index = a;
+}
+
+static void
+lock_store_heap_sift_up (PhodavPathTrie *trie, guint index)
+{
+  while (index > 0)
+    {
+      guint parent = (index - 1) / 2;
+      DAVLock *lock = g_array_index (trie->expiry, DAVLock *, index);
+      DAVLock *up = g_array_index (trie->expiry, DAVLock *, parent);
+
+      if (up->timeout <= lock->timeout)
+        break;
+
+      lock_store_heap_swap (trie, index, parent);
+      index = parent;
+    }
+}
+
+static void
+lock_store_heap_sift_down (PhodavPathTrie *trie, guint index)
+{
+  for (;;)
+    {
+      guint left = index * 2 + 1;
+      guint right = left + 1;
+      guint smallest;
+      DAVLock *lock, *child;
+
+      if (left >= trie->expiry->len)
+        break;
+
+      smallest = left;
+      if (right < trie->expiry->len &&
+          g_array_index (trie->expiry, DAVLock *, right)->timeout <
+            g_array_index (trie->expiry, DAVLock *, left)->timeout)
+        smallest = right;
+
+      lock = g_array_index (trie->expiry, DAVLock *, index);
+      child = g_array_index (trie->expiry, DAVLock *, smallest);
+      if (lock->timeout <= child->timeout)
+        break;
+
+      lock_store_heap_swap (trie, index, smallest);
+      index = smallest;
+    }
+}
+
+static void
+lock_store_heap_insert (PhodavPathTrie *trie, DAVLock *lock)
+{
+  if (lock->timeout == 0)
+    {
+      lock->expiry_index = -1;
+      return;
+    }
+
+  g_array_append_val (trie->expiry, lock);
+  lock->expiry_index = trie->expiry->len - 1;
+  lock_store_heap_sift_up (trie, lock->expiry_index);
+}
+
+static void
+lock_store_heap_remove (PhodavPathTrie *trie, DAVLock *lock)
+{
+  guint index, last;
+
+  if (lock->expiry_index < 0)
+    return;
+
+  index = lock->expiry_index;
+  last = trie->expiry->len - 1;
+  lock->expiry_index = -1;
+
+  if (index != last)
+    {
+      DAVLock *moved = g_array_index (trie->expiry, DAVLock *, last);
+
+      g_array_index (trie->expiry, DAVLock *, index) = moved;
+      moved->expiry_index = index;
+    }
+
+  g_array_set_size (trie->expiry, last);
+  if (index < last)
+    {
+      lock_store_heap_sift_down (trie, index);
+      lock_store_heap_sift_up (trie, index);
+    }
+}
+
+static void
+lock_store_free_lock_locked (PhodavPathTrie *trie, DAVLock *lock)
+{
+  lock_store_heap_remove (trie, lock);
+  g_assert (trie->lock_count > 0);
+  trie->lock_count--;
+  dav_lock_free (lock);
+}
+
+static void
+lock_store_expire_path_locked (PhodavPathTrie *trie, Path *path)
+{
+  GList *l = path->locks;
+
+  while (l)
+    {
+      GList *next = l->next;
+      DAVLock *lock = l->data;
+
+      if (dav_lock_is_expired (lock))
+        lock_store_free_lock_locked (trie, lock);
+
+      l = next;
+    }
+}
+
+static void
+lock_path_expire_locks (Path *path)
+{
+  if (path->store)
+    lock_store_expire_path_locked (path->store, path);
+  else
+    path_expire_locks (path);
+}
 
 static void
 path_trie_node_free (gpointer data)
@@ -44,7 +184,7 @@ path_trie_node_free (gpointer data)
   if (node->path)
     {
       while (node->path->locks)
-        dav_lock_free (node->path->locks->data);
+        lock_store_free_lock_locked (node->trie, node->path->locks->data);
 
       path_unref (node->path);
     }
@@ -55,7 +195,9 @@ path_trie_node_free (gpointer data)
 }
 
 static PhodavPathTrieNode *
-path_trie_node_new (PhodavPathTrieNode *parent, const gchar *segment)
+path_trie_node_new (PhodavPathTrie *trie,
+                    PhodavPathTrieNode *parent,
+                    const gchar *segment)
 {
   PhodavPathTrieNode *node = g_new0 (PhodavPathTrieNode, 1);
 
@@ -63,6 +205,7 @@ path_trie_node_new (PhodavPathTrieNode *parent, const gchar *segment)
   node->children = g_hash_table_new_full (g_str_hash, g_str_equal,
                                           g_free, path_trie_node_free);
   node->parent = parent;
+  node->trie = trie;
 
   return node;
 }
@@ -72,7 +215,8 @@ phodav_lock_store_paths_new (void)
 {
   PhodavPathTrie *trie = g_new0 (PhodavPathTrie, 1);
 
-  trie->root = path_trie_node_new (NULL, NULL);
+  trie->expiry = g_array_new (FALSE, FALSE, sizeof (DAVLock *));
+  trie->root = path_trie_node_new (trie, NULL, NULL);
 
   return trie;
 }
@@ -84,6 +228,7 @@ phodav_lock_store_paths_free (PhodavPathTrie *trie)
     return;
 
   path_trie_node_free (trie->root);
+  g_array_unref (trie->expiry);
   g_free (trie);
 }
 
@@ -129,7 +274,7 @@ path_trie_lookup_node (PhodavPathTrie *trie, const gchar *path, gboolean create)
           if (!create)
             return NULL;
 
-          child = path_trie_node_new (node, segment);
+          child = path_trie_node_new (node->trie, node, segment);
           g_hash_table_insert (node->children, g_strdup (segment), child);
         }
 
@@ -179,7 +324,7 @@ path_trie_remove_subtree (PhodavPathTrie *trie, const gchar *path)
       if (node->path)
         {
           while (node->path->locks)
-            dav_lock_free (node->path->locks->data);
+            lock_store_free_lock_locked (node->trie, node->path->locks->data);
 
           path_unref (node->path);
           node->path = NULL;
@@ -201,6 +346,7 @@ lock_store_get_path_locked (PhodavServer *self, const gchar *_path)
 
       p->path = g_steal_pointer (&path);
       p->refs = 1;
+      p->store = self->paths;
       node->path = p;
     }
 
@@ -219,7 +365,7 @@ lock_store_remove_path_if_empty_locked (PhodavServer *self, const gchar *_path)
   if (!node || !node->path)
     return;
 
-  path_expire_locks (node->path);
+  lock_path_expire_locks (node->path);
   if (node->path->locks)
     return;
 
@@ -228,45 +374,16 @@ lock_store_remove_path_if_empty_locked (PhodavServer *self, const gchar *_path)
   path_trie_prune_node (node);
 }
 
-static gint64
-path_trie_next_expiry_node (PhodavPathTrieNode *node)
-{
-  GHashTableIter iter;
-  PhodavPathTrieNode *child;
-  gint64 next = 0;
-
-  if (node->path)
-    {
-      GList *l;
-
-      for (l = node->path->locks; l; l = l->next)
-        {
-          DAVLock *lock = l->data;
-
-          if (lock->timeout && (!next || lock->timeout < next))
-            next = lock->timeout;
-        }
-    }
-
-  g_hash_table_iter_init (&iter, node->children);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &child))
-    {
-      gint64 child_next = path_trie_next_expiry_node (child);
-
-      if (child_next && (!next || child_next < next))
-        next = child_next;
-    }
-
-  return next;
-}
-
 gint64
 phodav_lock_store_next_expiry (PhodavServer *self)
 {
   gint64 next;
 
   g_mutex_lock (&self->lock_store_mutex);
-  next = path_trie_next_expiry_node (self->paths->root);
+  if (self->paths->expiry->len)
+    next = g_array_index (self->paths->expiry, DAVLock *, 0)->timeout;
+  else
+    next = 0;
   g_mutex_unlock (&self->lock_store_mutex);
 
   return next;
@@ -276,14 +393,14 @@ phodav_lock_store_next_expiry (PhodavServer *self)
  * neither a lock nor a descendant. Returns TRUE when @node can be
  * dropped from its parent. */
 static gboolean
-path_trie_expire_node (PhodavPathTrieNode *node)
+path_trie_expire_node (PhodavPathTrie *trie, PhodavPathTrieNode *node)
 {
   GHashTableIter iter;
   PhodavPathTrieNode *child;
 
   if (node->path)
     {
-      path_expire_locks (node->path);
+      lock_store_expire_path_locked (trie, node->path);
 
       if (!node->path->locks)
         {
@@ -294,7 +411,7 @@ path_trie_expire_node (PhodavPathTrieNode *node)
 
   g_hash_table_iter_init (&iter, node->children);
   while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &child))
-    if (path_trie_expire_node (child))
+    if (path_trie_expire_node (trie, child))
       g_hash_table_iter_remove (&iter);
 
   return node->parent && !node->path &&
@@ -308,7 +425,7 @@ void
 phodav_lock_store_expire_locks (PhodavServer *self)
 {
   g_mutex_lock (&self->lock_store_mutex);
-  path_trie_expire_node (self->paths->root);
+  path_trie_expire_node (self->paths, self->paths->root);
   g_mutex_unlock (&self->lock_store_mutex);
 
   phodav_server_schedule_lock_expiry (self);
@@ -429,7 +546,7 @@ _path_get_lock (Path *path, gpointer data)
   PathGetLock *d = data;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     {
@@ -473,7 +590,7 @@ other_lock_exists (Path *path, gpointer data)
   GList *locks = data;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     {
@@ -502,7 +619,7 @@ tree_other_lock_exists (Path *path, gpointer data)
   GList *locks = data;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     if (!locks_submitted_has (locks, l->data))
@@ -533,7 +650,7 @@ tree_check_lock_cb (Path *path, gpointer user_data)
   TreeLockCheck *d = user_data;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   /* the lock root itself and its ancestors are checked by
    * lock_store_foreach_parent_path_locked() in add_lock */
@@ -616,7 +733,7 @@ check_exclusive_lock (Path *path, gpointer data)
   DAVLock *other = NULL;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   for (l = path->locks; l; l = l->next)
     {
@@ -640,6 +757,20 @@ phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *
 
   g_mutex_lock (&self->lock_store_mutex);
 
+  if (self->paths->lock_count >= PHODAV_LOCK_COUNT_MAX)
+    {
+      /* the table may be full only of expired locks: reclaim them
+       * before refusing the request */
+      path_trie_expire_node (self->paths, self->paths->root);
+
+      if (self->paths->lock_count >= PHODAV_LOCK_COUNT_MAX)
+        {
+          g_debug ("lock store full: %u locks", self->paths->lock_count);
+          status = SOUP_STATUS_INSUFFICIENT_STORAGE;
+          goto out;
+        }
+    }
+
   p = lock_store_get_path_locked (self, path);
   lock = dav_lock_new (p, token, scope, type, depth, owner, timeout);
   if (!lock_store_foreach_parent_path_locked (self, path, check_exclusive_lock, lock) ||
@@ -652,6 +783,8 @@ phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *
     }
 
   path_add_lock (p, lock);
+  lock_store_heap_insert (self->paths, lock);
+  self->paths->lock_count++;
   status = SOUP_STATUS_OK;
 
 out:
@@ -677,7 +810,9 @@ phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GList *su
       if (!lock)
         continue;
 
+      lock_store_heap_remove (self->paths, lock);
       dav_lock_refresh_timeout (lock, timeout);
+      lock_store_heap_insert (self->paths, lock);
       *refreshed_token = g_strdup (lock->token);
       status = SOUP_STATUS_OK;
       break;
@@ -714,7 +849,7 @@ phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gcha
   lock = lock_store_get_lock_locked (self, path, token);
   if (lock)
     {
-      dav_lock_free (lock);
+      lock_store_free_lock_locked (self->paths, lock);
       lock_store_remove_path_if_empty_locked (self, path);
       status = SOUP_STATUS_NO_CONTENT;
     }
@@ -730,7 +865,7 @@ lockdiscovery_cb (Path *path, gpointer data)
   xmlNodePtr node = data;
   GList *l;
 
-  path_expire_locks (path);
+  lock_path_expire_locks (path);
 
   for (l = path->locks; l != NULL; l = l->next)
     xmlAddChild (node, dav_lock_get_activelock_node (l->data, NULL));
