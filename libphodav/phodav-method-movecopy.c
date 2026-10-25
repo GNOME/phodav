@@ -107,6 +107,26 @@ movecopy_once (gboolean copy, GFile *file, GFile *named_file, GFile *dest, GFile
            : g_file_move (named_file, dest, flags, cancellable, NULL, NULL, err);
 }
 
+/* a COPY is long and leaves the source untouched: it runs outside the
+ * filesystem write lock. A MOVE commits with a rename, which must not
+ * interleave with another mutation: it is taken under the write lock. */
+static gboolean
+movecopy_once_committed (PhodavServer *server, gboolean copy, GFile *file, GFile *named_file, GFile *dest, GFileCopyFlags flags, GCancellable *cancellable, GError **err)
+{
+  gboolean ok;
+
+  if (copy)
+    return movecopy_once (TRUE, file, named_file, dest, flags,
+                          cancellable, err);
+
+  phodav_server_write_lock (server);
+  ok = movecopy_once (FALSE, file, named_file, dest, flags,
+                      cancellable, err);
+  phodav_server_write_unlock (server);
+
+  return ok;
+}
+
 static gint
 do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *named_file, GFile *dest, const gchar *src_path, const gchar *dest_path, DepthType depth, GCancellable *cancellable, GError **err)
 {
@@ -145,7 +165,8 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
     }
 
   /* the request was validated to be depth 0 or infinity */
-  ok = movecopy_once (copy, file, named_file, dest, flags, cancellable, &error);
+  ok = movecopy_once_committed (server, copy, file, named_file, dest,
+                                flags, cancellable, &error);
 
   /* an existing destination of another kind cannot be replaced in
    * place: remove it, then try again with the destination gone */
@@ -155,7 +176,8 @@ do_movecopy_file (PhodavRequest *req, PhodavServer *server, GFile *file, GFile *
       phodav_delete_file (server, dest_path, dest, dest, NULL, cancellable) == SOUP_STATUS_NO_CONTENT)
     {
       g_clear_error (&error);
-      ok = movecopy_once (copy, file, named_file, dest, flags, cancellable, &error);
+      ok = movecopy_once_committed (server, copy, file, named_file, dest,
+                                    flags, cancellable, &error);
     }
 
   /* a directory cannot be copied in one go; the depth of the request
@@ -195,7 +217,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   const gchar *path = phodav_request_get_path (req);
   g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(PhodavPath) dest_handle = NULL;
-  GFile *file, *named_file, *dest_file;
+  GFile *file = NULL, *named_file = NULL, *dest_file = NULL;
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   PhodavServer *server = handler_get_server (handler);
   GUri *dest_uri = NULL;
@@ -206,8 +228,6 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   g_autofree gchar *udest = NULL;
   g_autolist(LockSubmitted) submitted = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
-
-  phodav_server_write_lock (server);
 
   /* RFC 4918 section 9.8.3 and 10.2: only the depths 0 and infinity
    * are valid for COPY and MOVE, an invalid depth must be rejected
@@ -261,9 +281,14 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       }
   }
 
+  /* the lock check and the resolution of both resources are the
+   * decision point: take the write lock only for them, then let the
+   * long copy or the rename run without holding it. */
+  phodav_server_write_lock (server);
+
   status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    goto unlock;
 
   /* moving a collection removes its members with it: the tokens of
    * the locks held on them must be submitted too. A COPY leaves the
@@ -271,7 +296,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   if (!copy && phodav_lock_store_tree_has_other_locks (server, path, submitted))
     {
       status = SOUP_STATUS_LOCKED;
-      goto end;
+      goto unlock;
     }
 
   /* overwriting a collection removes its members: their lock tokens
@@ -281,7 +306,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       phodav_lock_store_tree_has_other_locks (server, udest, submitted))
     {
       status = SOUP_STATUS_LOCKED;
-      goto end;
+      goto unlock;
     }
 
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
@@ -290,12 +315,12 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
       /* a missing MOVE/COPY source is reported as a conflict */
       if (status == SOUP_STATUS_NOT_FOUND)
         status = SOUP_STATUS_CONFLICT;
-      goto end;
+      goto unlock;
     }
 
   dest_handle = phodav_path_resolve (handler, udest, PHODAV_PATH_CREATE, &status);
   if (!dest_handle)
-    goto end;
+    goto unlock;
 
   file = phodav_path_get_file (handle);
   named_file = phodav_path_get_named_file (handle);
@@ -305,13 +330,17 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   if (PHODAV_IS_VIRTUAL_DIR (file) || PHODAV_IS_VIRTUAL_DIR (dest_file))
     {
       status = SOUP_STATUS_FORBIDDEN;
-      goto end;
+      goto unlock;
     }
-  status = do_movecopy_file (req, server, file, named_file, dest_file, path,
-                             udest, depth, cancellable, err);
+
+unlock:
+  phodav_server_write_unlock (server);
+
+  if (status == SOUP_STATUS_OK && handle && dest_handle)
+    status = do_movecopy_file (req, server, file, named_file, dest_file, path,
+                               udest, depth, cancellable, err);
 
 end:
-  phodav_server_write_unlock (server);
   if (dest_uri)
     g_uri_unref (dest_uri);
   return status;

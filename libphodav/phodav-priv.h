@@ -92,8 +92,11 @@ struct _PhodavServer
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 
-  /* the private, bounded pool the DAV methods run on */
+  /* the private, bounded pools the DAV methods and the response
+   * producers run on; keeping them apart lets a download keep making
+   * progress while the request workers wait for the filesystem lock */
   GThreadPool *pool;
+  GThreadPool *stream_pool;
 
   /* protects the lock table during a lookup or update. It never covers
    * a filesystem operation: the value-returning lock store API only
@@ -135,6 +138,8 @@ const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
 int phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);
 gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
+/* rename without syncing: callers sync the staged file first, outside
+ * the filesystem write lock */
 gboolean phodav_path_rename (GFile *from, GFile *to, GCancellable *cancellable, GError **error);
 
 /* the share-relative path of @path, borrowed; NULL when @path is not
@@ -161,14 +166,19 @@ void phodav_server_callback (SoupServer *server,
                              GHashTable *query,
                              gpointer user_data);
 
-/* the private worker pool shared by the request dispatch, the PUT
- * commit and the streaming producers; @done runs on the server context
- * and owns @data */
+/* the private worker pools: the request dispatch and the PUT commit
+ * use the request pool, the streaming producers have their own so that
+ * they are not queued behind requests waiting for the filesystem lock.
+ * @done runs on the server context and owns @data */
 typedef void (*PhodavTaskFunc) (gpointer data);
 void phodav_server_dispatch (PhodavServer *self,
                              PhodavTaskFunc run,
                              PhodavTaskFunc done,
                              gpointer data);
+void phodav_server_dispatch_stream (PhodavServer *self,
+                                    PhodavTaskFunc run,
+                                    PhodavTaskFunc done,
+                                    gpointer data);
 
 /* the single filesystem lock: mutations take it for writing, readers
  * share it */
@@ -219,7 +229,7 @@ gboolean phodav_request_is_finished (PhodavRequest *req) G_GNUC_PURE;
 gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
 
 /* incremental response bodies: the main context pulls one chunk at a
- * time from @pull, which runs on the private pool. Returning NULL
+ * time from @pull, which runs on the stream pool. Returning NULL
  * without an error ends the body; an error aborts it. */
 typedef GBytes *(*PhodavStreamPull) (gpointer data,
                                      GCancellable *cancellable,

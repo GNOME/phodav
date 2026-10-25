@@ -27,9 +27,11 @@
  * the #SoupServer is listened from: the request headers are copied and
  * the body is referenced first, and the response is applied back on
  * the main context when the method returns. The methods share a
- * private, bounded worker pool; a single reader-writer lock serializes
- * the filesystem operations, and the streaming responses pull their
- * chunks on demand instead of holding a worker for the whole transfer.
+ * private, bounded worker pool; a reader-writer lock protects the
+ * filesystem decision points, while the long operations (COPY, a
+ * recursive DELETE, syncing an upload) run outside it. The streaming
+ * responses pull their chunks on demand from a separate pool instead
+ * of holding a worker for the whole transfer.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
@@ -56,7 +58,9 @@ static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
 
 /* the DAV methods are filesystem-bound: a handful of workers is enough
  * to make progress without letting requests pile up on the process
- * wide pool shared with the embedding application */
+ * wide pool shared with the embedding application. The stream pulls
+ * get their own pool of that size, so a download does not wait for
+ * request workers blocked on the filesystem lock. */
 #define PHODAV_WORKER_THREADS MAX (2, MIN (g_get_num_processors (), 8))
 
 static gboolean expire_locks_timeout (gpointer user_data);
@@ -93,11 +97,12 @@ phodav_job_run (gpointer data, gpointer user_data)
                               phodav_job_done, job, NULL);
 }
 
-void
-phodav_server_dispatch (PhodavServer *self,
-                        PhodavTaskFunc run,
-                        PhodavTaskFunc done,
-                        gpointer data)
+static void
+phodav_server_dispatch_to (PhodavServer *self,
+                           GThreadPool *pool,
+                           PhodavTaskFunc run,
+                           PhodavTaskFunc done,
+                           gpointer data)
 {
   PhodavJob *job = g_new0 (PhodavJob, 1);
   g_autoptr(GError) error = NULL;
@@ -107,8 +112,7 @@ phodav_server_dispatch (PhodavServer *self,
   job->done = done;
   job->data = data;
 
-  if (self->pool &&
-      g_thread_pool_push (self->pool, job, &error))
+  if (pool && g_thread_pool_push (pool, job, &error))
     return;
 
   if (error)
@@ -119,6 +123,24 @@ phodav_server_dispatch (PhodavServer *self,
   g_main_context_invoke_full (self->expire_locks_context,
                               G_PRIORITY_DEFAULT,
                               phodav_job_done, job, NULL);
+}
+
+void
+phodav_server_dispatch (PhodavServer *self,
+                        PhodavTaskFunc run,
+                        PhodavTaskFunc done,
+                        gpointer data)
+{
+  phodav_server_dispatch_to (self, self->pool, run, done, data);
+}
+
+void
+phodav_server_dispatch_stream (PhodavServer *self,
+                               PhodavTaskFunc run,
+                               PhodavTaskFunc done,
+                               gpointer data)
+{
+  phodav_server_dispatch_to (self, self->stream_pool, run, done, data);
 }
 
 void
@@ -319,6 +341,9 @@ phodav_server_constructed (GObject *gobject)
   self->pool = g_thread_pool_new (phodav_job_run, NULL,
                                   PHODAV_WORKER_THREADS,
                                   TRUE, NULL);
+  self->stream_pool = g_thread_pool_new (phodav_job_run, NULL,
+                                         PHODAV_WORKER_THREADS,
+                                         TRUE, NULL);
 
   g_signal_connect (self->server, "request-started", G_CALLBACK (phodav_server_request_started), self);
 
@@ -381,6 +406,11 @@ server_stop (PhodavServer *self)
     {
       g_thread_pool_free (self->pool, FALSE, FALSE);
       self->pool = NULL;
+    }
+  if (self->stream_pool)
+    {
+      g_thread_pool_free (self->stream_pool, FALSE, FALSE);
+      self->stream_pool = NULL;
     }
 }
 

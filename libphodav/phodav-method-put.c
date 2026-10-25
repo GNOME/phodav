@@ -386,19 +386,29 @@ put_commit_run (gpointer data)
   g_autoptr(GError) error = NULL;
   gint status;
 
-  phodav_server_write_lock (ctx->server);
-
+  /* closing and syncing the staged file may take a while: do it
+   * before taking the filesystem write lock, which only protects the
+   * lock check and the atomic rename below */
   if (g_cancellable_is_cancelled (ctx->cancellable))
     status = 0;
-  else if (phodav_lock_store_path_has_other_locks (ctx->server, ctx->path,
-                                                   ctx->submitted))
-    status = SOUP_STATUS_LOCKED;
   else if (!put_context_close (ctx, ctx->cancellable, &error))
     status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  else if (!phodav_path_sync (ctx->temp_file, ctx->cancellable, &error))
+    status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
   else
-    status = put_commit (ctx, ctx->cancellable, &error);
+    {
+      phodav_server_write_lock (ctx->server);
 
-  phodav_server_write_unlock (ctx->server);
+      if (g_cancellable_is_cancelled (ctx->cancellable))
+        status = 0;
+      else if (phodav_lock_store_path_has_other_locks (ctx->server, ctx->path,
+                                                       ctx->submitted))
+        status = SOUP_STATUS_LOCKED;
+      else
+        status = put_commit (ctx, ctx->cancellable, &error);
+
+      phodav_server_write_unlock (ctx->server);
+    }
 
   ctx->commit_status = status;
   ctx->commit_error = g_steal_pointer (&error);

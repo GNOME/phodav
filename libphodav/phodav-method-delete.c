@@ -84,6 +84,7 @@ gint
 phodav_method_delete (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
+  PhodavServer *server = handler_get_server (handler);
   const gchar *path = phodav_request_get_path (req);
   GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(PhodavPath) handle = NULL;
@@ -92,46 +93,50 @@ phodav_method_delete (PhodavRequest *req, GError **err)
   g_autolist(LockSubmitted) submitted = NULL;
   DepthType depth;
 
-  phodav_server_write_lock (handler_get_server (handler));
-
   /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
    * client must not submit any other depth */
   if (!depth_from_string (soup_message_headers_get_one (phodav_request_get_request_headers (req), "Depth"), &depth) ||
       depth != DEPTH_INFINITY)
-    {
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto end;
-    }
+    return SOUP_STATUS_BAD_REQUEST;
+
+  /* decide under the write lock whether the request may proceed: the
+   * lock check and the resolution of the resource must not race with
+   * a mutation. The recursive deletion itself runs outside the lock,
+   * so it does not stall the other requests. */
+  phodav_server_write_lock (server);
 
   status = phodav_check_if (req, &submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    goto unlock;
 
   /* deleting a collection also deletes its members: the tokens of
    * the locks held on them must be submitted too */
-  if (phodav_lock_store_tree_has_other_locks (handler_get_server (handler),
-                                              path, submitted))
+  if (phodav_lock_store_tree_has_other_locks (server, path, submitted))
     {
       status = SOUP_STATUS_LOCKED;
-      goto end;
+      goto unlock;
     }
 
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
   if (!handle)
-    goto end;
+    goto unlock;
+
+unlock:
+  phodav_server_write_unlock (server);
+
+  if (status != SOUP_STATUS_OK || !handle)
+    return status;
+
   mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                    (GDestroyNotify) response_free);
 
-  status = phodav_delete_file (handler_get_server (handler), path,
+  status = phodav_delete_file (server, path,
                                phodav_path_get_file (handle),
                                phodav_path_get_named_file (handle),
                                mstatus, cancellable);
   if (status == SOUP_STATUS_NO_CONTENT)
     if (g_hash_table_size (mstatus) > 0)
       status = set_response_multistatus (req, mstatus, NULL);
-
-end:
-  phodav_server_write_unlock (handler_get_server (handler));
 
   return status;
 }

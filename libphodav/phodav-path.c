@@ -576,9 +576,8 @@ phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error)
 gboolean
 phodav_path_rename (GFile *from, GFile *to, GCancellable *cancellable, GError **error)
 {
-  if (!phodav_path_sync (from, cancellable, error))
-    return FALSE;
-
+  /* sync the staged file before taking the filesystem write lock, see
+   * phodav_path_sync() */
   return g_file_move (from, to, G_FILE_COPY_OVERWRITE,
                       cancellable, NULL, NULL, error);
 }

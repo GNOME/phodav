@@ -622,8 +622,8 @@ stream_schedule_pull (PhodavStream *stream)
   pull = g_new0 (StreamPull, 1);
   pull->stream = stream_ref (stream);
 
-  phodav_server_dispatch (stream->req->self, stream_pull_run,
-                          stream_pull_done, pull);
+  phodav_server_dispatch_stream (stream->req->self, stream_pull_run,
+                                 stream_pull_done, pull);
 }
 
 static gboolean
@@ -976,8 +976,8 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
 
       /* the handlers run on the private worker pool: the response is
        * built on the request and applied back when the worker
-       * completes. The filesystem operations are serialized by the
-       * server-wide reader-writer lock. */
+       * completes. The server-wide reader-writer lock protects their
+       * filesystem decision points. */
       req->handler_func = m->handler;
 
       soup_server_message_pause (msg);
