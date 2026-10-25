@@ -56,12 +56,6 @@ handler_get_server (PathHandler *handler)
   return handler->self;
 }
 
-const gchar *
-handler_get_base_path (PathHandler *handler)
-{
-  return handler->self->base_path;
-}
-
 /* does @path belong to the share mounted at the base path? This is
  * the same prefix test the DAV handlers are registered with: a
  * request outside it is not phodav's, whatever handler libsoup
@@ -72,12 +66,11 @@ handler_path_is_covered (PathHandler *handler, const gchar *path)
   return path && path_is_covered (path, handler->self->base_path);
 }
 
-/* the request paths begin with a "/" and are relative to the share
- * root, so that the file is looked up under the root, not the
- * filesystem root. The base path is stripped first, so that a share
- * mounted at "/dav" serves "/dav/hello.txt" as "hello.txt". */
-GFile *
-handler_get_file_for_path (PathHandler *handler, const gchar *path)
+/* the share-relative path of @path, borrowed: the base path is
+ * stripped, so that a share mounted at "/dav" maps "/dav/hello.txt"
+ * to "/hello.txt". Returns NULL when @path is not part of the share. */
+const gchar *
+handler_get_relative_path (PathHandler *handler, const gchar *path)
 {
   const gchar *relative = path;
   gsize base_len;
@@ -94,6 +87,20 @@ handler_get_file_for_path (PathHandler *handler, const gchar *path)
       if (!*relative)
         relative = "/";
     }
+
+  return relative;
+}
+
+/* the request paths begin with a "/" and are relative to the share
+ * root, so that the file is looked up under the root, not the
+ * filesystem root. */
+GFile *
+handler_get_file_for_path (PathHandler *handler, const gchar *path)
+{
+  const gchar *relative = handler_get_relative_path (handler, path);
+
+  if (!relative)
+    return NULL;
 
   return g_file_get_child (handler->file, relative + 1);
 }

@@ -101,8 +101,9 @@ typedef gboolean (*PathCb) (const gchar *key,
 
 /* the file of a request path, relative to the share root */
 GFile *handler_get_file_for_path (PathHandler *handler, const gchar *path);
-/* the path prefix the share is mounted at on the SoupServer */
-const gchar *handler_get_base_path (PathHandler *handler) G_GNUC_PURE;
+/* the share-relative path of @path, borrowed; NULL when @path is not
+ * part of the share mounted at the base path */
+const gchar *handler_get_relative_path (PathHandler *handler, const gchar *path) G_GNUC_PURE;
 /* is @path part of the share mounted at the base path? */
 gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNUC_PURE;
 /* the shared root, borrowed */

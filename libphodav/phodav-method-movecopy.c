@@ -20,19 +20,12 @@ path_has_symlink_component (PathHandler *handler,
                             const gchar *path,
                             GCancellable *cancellable)
 {
-  const gchar *base = handler_get_base_path (handler);
-  const gchar *relative = path;
+  const gchar *relative = handler_get_relative_path (handler, path);
   g_auto(GStrv) parts = NULL;
   g_autoptr(GFile) current = g_object_ref (handler_get_root_file (handler));
 
-  /* inspect the path relative to the share root, not the request
-   * path including the base path */
-  if (strlen (base) > 1)
-    {
-      relative = path + strlen (base);
-      if (!*relative)
-        relative = "/";
-    }
+  if (!relative)
+    return TRUE;
 
   parts = g_strsplit (relative, "/", -1);
 
