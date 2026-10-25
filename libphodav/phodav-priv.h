@@ -70,6 +70,31 @@ struct _DAVLock
   guint64 timeout;
 };
 
+/* the state of a PhodavServer, shared by the server, lock store and
+ * request dispatch implementations; private to libphodav */
+struct _PhodavServer
+{
+  GObject parent;
+  SoupServer *server;
+  GCancellable *cancellable;
+  GFile *root_file;
+  gchar *base_path;
+  PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
+  gchar *handler_path;       /* the path the handler is registered at */
+  GHashTable *paths;
+  gboolean readonly;
+  guint64 max_upload;
+  gboolean constructing;
+  GMainContext *expire_locks_context;
+  GSource *expire_locks_source;
+};
+
+struct _PathHandler
+{
+  PhodavServer *self;
+  GFile *file;
+};
+
 typedef gboolean (*PathCb) (const gchar *key,
                             Path *path,
                             gpointer data);
@@ -86,6 +111,17 @@ GCancellable *handler_get_cancellable (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 gboolean handler_get_readonly (PathHandler *handler) G_GNUC_PURE;
 guint64 handler_get_max_upload (PathHandler *handler) G_GNUC_PURE;
+
+/* the SoupServer callbacks, registered and disconnected by the
+ * server, implemented by the request dispatch */
+void phodav_server_request_started (SoupServer *server,
+                                    SoupServerMessage *message,
+                                    gpointer user_data);
+void phodav_server_callback (SoupServer *server,
+                             SoupServerMessage *msg,
+                             const gchar *path,
+                             GHashTable *query,
+                             gpointer user_data);
 
 gboolean server_foreach_parent_path (PhodavServer *server,
                                      const gchar *path,

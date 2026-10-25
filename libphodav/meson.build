@@ -9,6 +9,7 @@ install_headers(headers, subdir : 'libphodav-3.0/libphodav')
 sources = [
   'phodav-if.c',
   'phodav-lock.c',
+  'phodav-lock-store.c',
   'phodav-method-delete.c',
   'phodav-method-get.c',
   'phodav-method-lock.c',
@@ -20,6 +21,7 @@ sources = [
   'phodav-method-unlock.c',
   'phodav-multistatus.c',
   'phodav-path.c',
+  'phodav-request.c',
   'phodav-server.c',
   'phodav-utils.c',
   'phodav-virtual-dir.c',
