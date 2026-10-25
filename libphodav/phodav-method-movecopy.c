@@ -287,8 +287,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
   if (!handle)
     {
-      /* a missing MOVE/COPY source is a conflict, like the backend
-       * error the copy operation used to report */
+      /* a missing MOVE/COPY source is reported as a conflict */
       if (status == SOUP_STATUS_NOT_FOUND)
         status = SOUP_STATUS_CONFLICT;
       goto end;

@@ -1405,11 +1405,10 @@ test_propfind_dedup (DavFixture *f, gconstpointer user_data)
 
 /* Regression test for the multistatus href escaping: the names are
  * URI-escaped in the hrefs, and a client can fetch the resources
- * they report. The markup escaping which used to be applied to the
- * names reported "amp&amp;and.txt" for a file named "amp&and.txt",
- * which cannot be fetched, and left a "?" or a "#" raw in the
- * href, where a client parses them as the query or the fragment
- * separator. */
+ * they report. Applying markup escaping to the names would report
+ * "amp&amp;and.txt" for a file named "amp&and.txt", which cannot be
+ * fetched, and would leave a "?" or a "#" raw in the href, where a
+ * client parses them as the query or the fragment separator. */
 static void
 test_propfind_escaping (DavFixture *f, gconstpointer user_data)
 {
@@ -3347,7 +3346,7 @@ test_shared_server (DavFixture *f, gconstpointer user_data)
   /* an authenticated PUT to the foreign handler is not streamed into
    * the share by phodav: the foreign handler answers, and nothing is
    * written. This is the path libsoup routes without running the
-   * early handlers, which the Authorization header inference used to
+   * early handlers, which the Authorization header inference must not
    * mistake for a phodav request. */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/upload/foreign.txt", "data", NULL),
                     ==, SOUP_STATUS_OK);
