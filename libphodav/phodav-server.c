@@ -266,8 +266,7 @@ phodav_server_init (PhodavServer *self)
   g_mutex_init (&self->lock_store_mutex);
   g_rw_lock_init (&self->fs_lock);
 
-  self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                       NULL, (GDestroyNotify) path_unref);
+  self->paths = phodav_lock_store_paths_new ();
 
   /* the context this server is created on; the lock expiry sweep
    * runs there, like the rest of the server */
@@ -398,16 +397,6 @@ phodav_server_constructed (GObject *gobject)
 }
 
 static void
-free_path_locks (gpointer key, gpointer value, gpointer user_data)
-{
-  Path *path = value;
-
-  /* the locks remove themselves from the list when freed */
-  while (path->locks)
-    dav_lock_free (path->locks->data);
-}
-
-static void
 server_stop (PhodavServer *self)
 {
   if (self->stopped)
@@ -462,11 +451,9 @@ phodav_server_dispose (GObject *gobject)
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
 
-  /* remaining locks hold references on the paths, free them first
-   * so the paths are released with the table */
-  if (self->paths)
-    g_hash_table_foreach (self->paths, free_path_locks, NULL);
-  g_clear_pointer (&self->paths, g_hash_table_unref);
+  /* the trie owns the paths: releasing it also drops the remaining
+   * locks, which hold references on them */
+  g_clear_pointer (&self->paths, phodav_lock_store_paths_free);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->dispose)

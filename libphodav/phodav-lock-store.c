@@ -12,69 +12,249 @@
 #include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
-/* The lock table is keyed on the canonical resource path, so that the
- * locks are found again under whatever spelling of the path the client
- * used in its request. The _locked helpers below assume the lock store
- * mutex is held; the value-returning service takes it once around
- * them. */
+/* The lock store is a trie keyed on the canonical resource path
+ * components. A node may hold the Path for the resource at that exact
+ * path; every child is one path segment deeper. The _locked helpers
+ * below assume the lock store mutex is held; the value-returning
+ * service takes it once around them. */
+
+typedef struct _PhodavPathTrieNode PhodavPathTrieNode;
+
+struct _PhodavPathTrieNode
+{
+  gchar *segment; /* owned, NULL for the root */
+  Path *path;     /* owned reference, NULL when the path has no entry */
+  GHashTable *children;
+  PhodavPathTrieNode *parent; /* borrowed */
+};
+
+struct _PhodavPathTrie
+{
+  PhodavPathTrieNode *root;
+};
+
+static void
+path_trie_node_free (gpointer data)
+{
+  PhodavPathTrieNode *node = data;
+
+  /* dropping the subtree locks first lets the paths be released with
+   * their trie reference */
+  g_hash_table_remove_all (node->children);
+  if (node->path)
+    {
+      while (node->path->locks)
+        dav_lock_free (node->path->locks->data);
+
+      path_unref (node->path);
+    }
+
+  g_hash_table_unref (node->children);
+  g_free (node->segment);
+  g_free (node);
+}
+
+static PhodavPathTrieNode *
+path_trie_node_new (PhodavPathTrieNode *parent, const gchar *segment)
+{
+  PhodavPathTrieNode *node = g_new0 (PhodavPathTrieNode, 1);
+
+  node->segment = g_strdup (segment);
+  node->children = g_hash_table_new_full (g_str_hash, g_str_equal,
+                                          g_free, path_trie_node_free);
+  node->parent = parent;
+
+  return node;
+}
+
+PhodavPathTrie *
+phodav_lock_store_paths_new (void)
+{
+  PhodavPathTrie *trie = g_new0 (PhodavPathTrie, 1);
+
+  trie->root = path_trie_node_new (NULL, NULL);
+
+  return trie;
+}
+
+void
+phodav_lock_store_paths_free (PhodavPathTrie *trie)
+{
+  if (!trie)
+    return;
+
+  path_trie_node_free (trie->root);
+  g_free (trie);
+}
+
+/* canonical paths start with '/', their components are separated by
+ * single '/' and the root is "/" */
+static PhodavPathTrieNode *
+path_trie_lookup_node (PhodavPathTrie *trie, const gchar *path, gboolean create)
+{
+  PhodavPathTrieNode *node = trie->root;
+  const gchar *p = path;
+
+  if (!path || *path != '/')
+    return NULL;
+
+  while (*p)
+    {
+      const gchar *start;
+      const gchar *slash;
+      g_autofree gchar *segment = NULL;
+      PhodavPathTrieNode *child;
+
+      while (*p == '/')
+        p++;
+      if (!*p)
+        break;
+
+      start = p;
+      slash = strchr (start, '/');
+      if (slash)
+        {
+          segment = g_strndup (start, slash - start);
+          p = slash;
+        }
+      else
+        {
+          segment = g_strdup (start);
+          p += strlen (p);
+        }
+
+      child = g_hash_table_lookup (node->children, segment);
+      if (!child)
+        {
+          if (!create)
+            return NULL;
+
+          child = path_trie_node_new (node, segment);
+          g_hash_table_insert (node->children, g_strdup (segment), child);
+        }
+
+      node = child;
+    }
+
+  return node;
+}
+
+/* drop the node and its empty ancestors when it has neither a lock
+ * nor a descendant anymore */
+static void
+path_trie_prune_node (PhodavPathTrieNode *node)
+{
+  while (node->parent && !node->path &&
+         g_hash_table_size (node->children) == 0)
+    {
+      PhodavPathTrieNode *parent = node->parent;
+      g_autofree gchar *segment = g_strdup (node->segment);
+
+      g_hash_table_remove (parent->children, segment);
+      node = parent;
+    }
+}
+
+/* remove @path and all the paths below it */
+static void
+path_trie_remove_subtree (PhodavPathTrie *trie, const gchar *path)
+{
+  PhodavPathTrieNode *node = path_trie_lookup_node (trie, path, FALSE);
+
+  if (!node)
+    return;
+
+  if (node->parent)
+    {
+      PhodavPathTrieNode *parent = node->parent;
+      g_autofree gchar *segment = g_strdup (node->segment);
+
+      g_hash_table_remove (parent->children, segment);
+      path_trie_prune_node (parent);
+    }
+  else
+    {
+      /* keep the root node itself, drop everything it holds */
+      g_hash_table_remove_all (node->children);
+      if (node->path)
+        {
+          while (node->path->locks)
+            dav_lock_free (node->path->locks->data);
+
+          path_unref (node->path);
+          node->path = NULL;
+        }
+    }
+}
 
 static Path *
 lock_store_get_path_locked (PhodavServer *self, const gchar *_path)
 {
-  Path *p;
   g_autofree gchar *path = phodav_path_canonicalize (_path);
+  PhodavPathTrieNode *node = path_trie_lookup_node (self->paths, path, TRUE);
 
-  p = g_hash_table_lookup (self->paths, path);
-  if (!p)
+  g_assert (node != NULL);
+
+  if (!node->path)
     {
-      p = g_new0 (Path, 1);
+      Path *p = g_new0 (Path, 1);
+
       p->path = g_steal_pointer (&path);
-      g_hash_table_insert (self->paths, p->path, path_ref (p));
+      p->refs = 1;
+      node->path = p;
     }
 
-  return p;
+  return node->path;
 }
 
-/* drop the path from the lock table when it holds no lock anymore;
+/* drop the path from the trie when it holds no lock anymore;
  * called when a LOCK request is rolled back, so that a failed request
  * does not leave an empty entry behind */
 static void
 lock_store_remove_path_if_empty_locked (PhodavServer *self, const gchar *_path)
 {
   g_autofree gchar *path = phodav_path_canonicalize (_path);
-  Path *p;
+  PhodavPathTrieNode *node = path_trie_lookup_node (self->paths, path, FALSE);
 
-  p = g_hash_table_lookup (self->paths, path);
-  if (!p)
+  if (!node || !node->path)
     return;
 
-  path_expire_locks (p);
-  if (!p->locks)
-    g_hash_table_remove (self->paths, path);
+  path_expire_locks (node->path);
+  if (node->path->locks)
+    return;
+
+  path_unref (node->path);
+  node->path = NULL;
+  path_trie_prune_node (node);
 }
 
 static gint64
-lock_store_next_expiry_locked (PhodavServer *self)
+path_trie_next_expiry_node (PhodavPathTrieNode *node)
 {
   GHashTableIter iter;
-  Path *path;
+  PhodavPathTrieNode *child;
   gint64 next = 0;
 
-  if (g_hash_table_size (self->paths) == 0)
-    return 0;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
+  if (node->path)
     {
       GList *l;
 
-      for (l = path->locks; l; l = l->next)
+      for (l = node->path->locks; l; l = l->next)
         {
           DAVLock *lock = l->data;
 
           if (lock->timeout && (!next || lock->timeout < next))
             next = lock->timeout;
         }
+    }
+
+  g_hash_table_iter_init (&iter, node->children);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &child))
+    {
+      gint64 child_next = path_trie_next_expiry_node (child);
+
+      if (child_next && (!next || child_next < next))
+        next = child_next;
     }
 
   return next;
@@ -86,37 +266,49 @@ phodav_lock_store_next_expiry (PhodavServer *self)
   gint64 next;
 
   g_mutex_lock (&self->lock_store_mutex);
-  next = lock_store_next_expiry_locked (self);
+  next = path_trie_next_expiry_node (self->paths->root);
   g_mutex_unlock (&self->lock_store_mutex);
 
   return next;
 }
 
+/* expire the locks below @node, and remove the nodes which end up with
+ * neither a lock nor a descendant. Returns TRUE when @node can be
+ * dropped from its parent. */
+static gboolean
+path_trie_expire_node (PhodavPathTrieNode *node)
+{
+  GHashTableIter iter;
+  PhodavPathTrieNode *child;
+
+  if (node->path)
+    {
+      path_expire_locks (node->path);
+
+      if (!node->path->locks)
+        {
+          path_unref (node->path);
+          node->path = NULL;
+        }
+    }
+
+  g_hash_table_iter_init (&iter, node->children);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &child))
+    if (path_trie_expire_node (child))
+      g_hash_table_iter_remove (&iter);
+
+  return node->parent && !node->path &&
+         g_hash_table_size (node->children) == 0;
+}
+
 /* free the locks whose timeout has elapsed, and drop the empty paths
- * so the lock table does not grow without bound with the locks taken
+ * so the trie does not grow without bound with the locks taken
  * over the lifetime of the server */
 void
 phodav_lock_store_expire_locks (PhodavServer *self)
 {
-  GHashTableIter iter;
-  Path *path;
-
   g_mutex_lock (&self->lock_store_mutex);
-
-  if (g_hash_table_size (self->paths) == 0)
-    goto out;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      path_expire_locks (path);
-
-      /* the path is only kept alive by the table when it has no locks */
-      if (!path->locks)
-        g_hash_table_iter_remove (&iter);
-    }
-
-out:
+  path_trie_expire_node (self->paths->root);
   g_mutex_unlock (&self->lock_store_mutex);
 
   phodav_server_schedule_lock_expiry (self);
@@ -127,71 +319,102 @@ out:
 void
 phodav_lock_store_remove_locks (PhodavServer *self, const gchar *_path)
 {
-  GHashTableIter iter;
-  Path *path;
   g_autofree gchar *root = phodav_path_canonicalize (_path);
 
   g_mutex_lock (&self->lock_store_mutex);
-
-  if (g_hash_table_size (self->paths) == 0)
-    goto out;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      if (!path_is_covered (path->path, root))
-        continue;
-
-      /* the locks remove themselves from the list when freed */
-      while (path->locks)
-        dav_lock_free (path->locks->data);
-
-      /* the path is only kept alive by the table when it has no locks */
-      g_hash_table_iter_remove (&iter);
-    }
-
-out:
+  path_trie_remove_subtree (self->paths, root);
   g_mutex_unlock (&self->lock_store_mutex);
 
   phodav_server_schedule_lock_expiry (self);
 }
 
-typedef gboolean (*PathCb) (const gchar *key, Path *path, gpointer data);
+typedef gboolean (*PathCb) (Path *path, gpointer data);
+
+/* visit the root, then each path component down to @path */
+static gboolean
+path_trie_foreach_prefix (PhodavPathTrie *trie, const gchar *path, PathCb cb, gpointer data)
+{
+  PhodavPathTrieNode *node = trie->root;
+  const gchar *p = path;
+
+  if (!path || *path != '/')
+    return TRUE;
+
+  if (node->path && !cb (node->path, data))
+    return FALSE;
+
+  while (*p)
+    {
+      const gchar *start;
+      const gchar *slash;
+      g_autofree gchar *segment = NULL;
+      PhodavPathTrieNode *child;
+
+      while (*p == '/')
+        p++;
+      if (!*p)
+        break;
+
+      start = p;
+      slash = strchr (start, '/');
+      if (slash)
+        {
+          segment = g_strndup (start, slash - start);
+          p = slash;
+        }
+      else
+        {
+          segment = g_strdup (start);
+          p += strlen (p);
+        }
+
+      child = g_hash_table_lookup (node->children, segment);
+      if (!child)
+        break;
+
+      node = child;
+      if (node->path && !cb (node->path, data))
+        return FALSE;
+    }
+
+  return TRUE;
+}
+
+static gboolean
+path_trie_node_foreach (PhodavPathTrieNode *node, PathCb cb, gpointer data)
+{
+  GHashTableIter iter;
+  PhodavPathTrieNode *child;
+
+  if (node->path && !cb (node->path, data))
+    return FALSE;
+
+  g_hash_table_iter_init (&iter, node->children);
+  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &child))
+    if (!path_trie_node_foreach (child, cb, data))
+      return FALSE;
+
+  return TRUE;
+}
+
+/* visit @path and every path below it */
+static gboolean
+path_trie_foreach_subtree (PhodavPathTrie *trie, const gchar *path, PathCb cb, gpointer data)
+{
+  PhodavPathTrieNode *node = path_trie_lookup_node (trie, path, FALSE);
+
+  if (!node)
+    return TRUE;
+
+  return path_trie_node_foreach (node, cb, data);
+}
 
 static gboolean
 lock_store_foreach_parent_path_locked (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
 {
   g_autofree gchar *canonical = phodav_path_canonicalize (path);
-  gboolean ret = FALSE;
-  gchar *key = NULL;
-  Path *p;
-  const gchar *segment = canonical + 1;
 
-  /* canonical is "/" or "/segment[/segment...]"; visit each prefix
-   * from the first segment down to the whole path */
-  while (*segment)
-    {
-      const gchar *slash = strchr (segment, '/');
-      gsize len = slash ? (gsize) (slash - canonical) : strlen (canonical);
-      g_autofree gchar *partial = g_strndup (canonical, len);
-
-      if (g_hash_table_lookup_extended (self->paths, partial,
-                                        (gpointer *) &key, (gpointer *) &p))
-        {
-          if (!cb (key, p, data))
-            goto end;
-        }
-
-      if (!slash)
-        break;
-
-      segment = slash + 1;
-    }
-
-  ret = TRUE;
-
-end:
-  return ret;
+  return path_trie_foreach_prefix (self->paths, canonical, cb, data);
 }
 
 typedef struct _PathGetLock
@@ -201,7 +424,7 @@ typedef struct _PathGetLock
 } PathGetLock;
 
 static gboolean
-_path_get_lock (const gchar *key, Path *path, gpointer data)
+_path_get_lock (Path *path, gpointer data)
 {
   PathGetLock *d = data;
   GList *l;
@@ -245,7 +468,7 @@ lock_store_get_lock_locked (PhodavServer *self, const gchar *path, const gchar *
 }
 
 static gboolean
-other_lock_exists (const gchar *key, Path *path, gpointer data)
+other_lock_exists (Path *path, gpointer data)
 {
   GList *locks = data;
   GList *l;
@@ -274,36 +497,27 @@ lock_store_path_has_other_locks_locked (PhodavServer *self, const gchar *path, G
  * must submit the tokens of the locks held on its members too
  * (RFC 4918 sections 7.1 and 9.6.1). */
 static gboolean
+tree_other_lock_exists (Path *path, gpointer data)
+{
+  GList *locks = data;
+  GList *l;
+
+  path_expire_locks (path);
+
+  for (l = path->locks; l != NULL; l = l->next)
+    if (!locks_submitted_has (locks, l->data))
+      return FALSE;
+
+  return TRUE;
+}
+
+static gboolean
 lock_store_tree_has_other_locks_locked (PhodavServer *self, const gchar *_path, GList *locks)
 {
   g_autofree gchar *root = phodav_path_canonicalize (_path);
-  GHashTableIter iter;
-  Path *path;
-  gboolean found = FALSE;
 
-  if (g_hash_table_size (self->paths) == 0)
-    goto out;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      GList *l;
-
-      path_expire_locks (path);
-
-      if (!path_is_covered (path->path, root))
-        continue;
-
-      for (l = path->locks; l != NULL; l = l->next)
-        if (!locks_submitted_has (locks, l->data))
-          {
-            found = TRUE;
-            goto out;
-          }
-    }
-
-out:
-  return found;
+  return !path_trie_foreach_subtree (self->paths, root,
+                                     tree_other_lock_exists, locks);
 }
 
 typedef struct _TreeLockCheck
@@ -313,20 +527,18 @@ typedef struct _TreeLockCheck
   gboolean conflict;
 } TreeLockCheck;
 
-static void
-tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
+static gboolean
+tree_check_lock_cb (Path *path, gpointer user_data)
 {
   TreeLockCheck *d = user_data;
-  Path *path = value;
   GList *l;
 
   path_expire_locks (path);
 
   /* the lock root itself and its ancestors are checked by
    * lock_store_foreach_parent_path_locked() in add_lock */
-  if (g_strcmp0 (path->path, d->path) == 0 ||
-      !path_is_covered (path->path, d->path))
-    return;
+  if (g_strcmp0 (path->path, d->path) == 0)
+    return TRUE;
 
   for (l = path->locks; l != NULL; l = l->next)
     {
@@ -336,8 +548,13 @@ tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
        * other kind of lock, whether direct or indirect */
       if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE ||
           d->lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
-        d->conflict = TRUE;
+        {
+          d->conflict = TRUE;
+          return FALSE;
+        }
     }
+
+  return TRUE;
 }
 
 /* does a depth-infinity lock on @path conflict with a lock on one of
@@ -349,7 +566,7 @@ lock_store_tree_has_lock_conflict_locked (PhodavServer *self, const gchar *_path
   g_autofree gchar *path = phodav_path_canonicalize (_path);
   TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
 
-  g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
+  path_trie_foreach_subtree (self->paths, path, tree_check_lock_cb, &d);
 
   return d.conflict;
 }
@@ -393,7 +610,7 @@ phodav_lock_store_tree_has_other_locks (PhodavServer *self, const gchar *path, G
 }
 
 static gboolean
-check_exclusive_lock (const gchar *key, Path *path, gpointer data)
+check_exclusive_lock (Path *path, gpointer data)
 {
   DAVLock *lock = data;
   DAVLock *other = NULL;
@@ -508,7 +725,7 @@ phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gcha
 }
 
 static gboolean
-lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
+lockdiscovery_cb (Path *path, gpointer data)
 {
   xmlNodePtr node = data;
   GList *l;

@@ -10,6 +10,8 @@
 
 G_BEGIN_DECLS
 
+typedef struct _PhodavPathTrie PhodavPathTrie;
+
 /* the state of a PhodavServer, shared only by the server, lock store and
  * request dispatch implementations; the method files see it as opaque */
 struct _PhodavServer
@@ -21,7 +23,7 @@ struct _PhodavServer
   gchar *base_path;
   PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
   gchar *handler_path;       /* the path the handler is registered at */
-  GHashTable *paths;
+  PhodavPathTrie *paths;
   gboolean readonly;
   guint64 max_upload;
   gboolean constructing;
@@ -35,7 +37,7 @@ struct _PhodavServer
   GThreadPool *pool;
   GThreadPool *stream_pool;
 
-  /* protects the lock table during a lookup or update. It never covers
+  /* protects the path trie during a lookup or update. It never covers
    * a filesystem operation: the value-returning lock store API only
    * exposes owned decisions and XML nodes. */
   GMutex lock_store_mutex;
@@ -52,6 +54,10 @@ struct _PathHandler
   gchar *base_path;       /* immutable snapshot of the server base path */
   gint ref_count;
 };
+
+/* the path trie which owns the lock store entries */
+PhodavPathTrie *phodav_lock_store_paths_new (void);
+void phodav_lock_store_paths_free (PhodavPathTrie *paths);
 
 /* the lock store reports its next timeout so the server can arm a
  * one-shot source for it instead of polling every second */

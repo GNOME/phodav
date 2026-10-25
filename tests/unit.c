@@ -411,7 +411,7 @@ test_path_lifecycle (void)
   g_assert_null (p->locks);
   path_add_lock (p, lock);
 
-  /* the hash table reference goes away, the lock keeps the path alive */
+  /* the trie reference goes away, the lock keeps the path alive */
   path_unref (p);
   g_assert_cmpuint (p->refs, ==, 1);
 
@@ -629,6 +629,53 @@ test_server_paths (void)
 }
 
 static void
+test_server_trie_paths (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *root_token = new_token ();
+  g_autofree gchar *member_token = new_token ();
+  g_autofree gchar *deep_token = new_token ();
+  g_autofree gchar *sibling_token = new_token ();
+
+  /* a lock on the trie root covers the resources below it */
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/", root_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  g_assert_true (phodav_lock_store_has_token (server, "/a/b", root_token));
+  g_assert_true (phodav_lock_store_path_has_other_locks (server, "/a/b", NULL));
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/", root_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll/member", member_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/coll/other/deep", deep_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/collateral", sibling_token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+
+  /* removing a subtree only visits its trie branch, not a similarly
+   * named sibling */
+  phodav_lock_store_remove_locks (server, "/coll");
+  g_assert_false (phodav_lock_store_has_token (server, "/coll/member", member_token));
+  g_assert_false (phodav_lock_store_has_token (server, "/coll/other/deep", deep_token));
+  g_assert_true (phodav_lock_store_has_token (server, "/collateral", sibling_token));
+
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/collateral", sibling_token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+}
+
+static void
 test_server_lock_manager (void)
 {
   g_autoptr(PhodavServer) server = phodav_server_new (NULL);
@@ -758,7 +805,7 @@ test_server_lock_expiry (void)
   g_assert_true (phodav_lock_store_has_token (server, "/a/b", token));
 
   /* the expired lock is not honored anymore, and the sweep reclaims
-   * the empty paths from the table */
+   * the empty paths from the trie */
   g_usleep (G_USEC_PER_SEC + 100000);
   g_assert_false (phodav_lock_store_has_token (server, "/a/b", token));
   phodav_lock_store_expire_locks (server);
@@ -990,6 +1037,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/lock/submitted", test_lock_submitted);
 
   g_test_add_func ("/server/paths", test_server_paths);
+  g_test_add_func ("/server/trie-paths", test_server_trie_paths);
   g_test_add_func ("/server/lock-manager", test_server_lock_manager);
   g_test_add_func ("/server/tree-other-locks", test_server_tree_other_locks);
   g_test_add_func ("/lock/expiry", test_dav_lock_expiry);
