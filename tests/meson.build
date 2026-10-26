@@ -36,6 +36,15 @@ dav = executable('test-dav',
                  dependencies : deps)
 test('test-dav', dav)
 
+# concurrent clients, an external writer and a deliberately slow
+# filesystem backend, exercising the request driver and lock store
+concurrency = executable('test-concurrency',
+                         sources : 'concurrency.c',
+                         include_directories : [incdir, libphodav_inc],
+                         link_with : libphodav_internals,
+                         dependencies : deps)
+test('test-concurrency', concurrency, timeout : 60)
+
 chezdav_env = ['CHEZDAV=' + chezdav.full_path()]
 if conf.has('WITH_AVAHI')
   # chezdav exits when there is no avahi daemon to announce to

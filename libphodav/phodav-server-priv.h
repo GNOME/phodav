@@ -10,6 +10,56 @@
 
 G_BEGIN_DECLS
 
+/*
+ * Concurrency invariants
+ * ======================
+ *
+ * These are the rules the request, method and lock-store code rely on.
+ * Keep them in this one place when changing the model.
+ *
+ * 1. The main context owns every request. Request creation, admission,
+ *    method validate and commit, response application, completion,
+ *    cancellation and teardown all run there. Workers never touch a
+ *    SoupServerMessage.
+ *
+ * 2. The namespace is a main-context FIFO for mutating requests. A
+ *    mutating method holds it from validate through work completion and
+ *    commit; the driver releases it exactly once in finalize. GET, HEAD
+ *    and PROPFIND never acquire it. A streamed PUT stages its body
+ *    outside the namespace and acquires it only for the final lock
+ *    check and rename.
+ *
+ * 3. Blocking filesystem work runs only in one-shot jobs. Mutations use
+ *    the single-threaded namespace pool, preserving their order. Reads,
+ *    stream pulls and PUT staging use the parallel stream pool. A job
+ *    may read immutable request fields, but its completion returns to
+ *    the main context before any request state changes or response is
+ *    written.
+ *
+ * 4. Method data is owned by the request driver. Only one work job may
+ *    use it at a time; the driver waits for that job before commit or
+ *    finalize. The driver frees it exactly once, after releasing the
+ *    namespace and before completing the request.
+ *
+ * 5. The lock store is protected solely by @lock_store_mutex. Every
+ *    public lock-store operation takes the mutex, whether it runs on
+ *    the main context or in a PROPFIND worker. There is no
+ *    main-context-only lock-store rule; the namespace is for filesystem
+ *    mutations, not for protecting the lock trie.
+ *
+ * 6. Lock expiry is driven by the expiry min-heap. An operation first
+ *    pops every elapsed lock from the heap, then reads the trie. Expiry
+ *    never walks the trie to find expired locks; it only prunes a path
+ *    once that path's last lock has been removed. The timeout source
+ *    also runs on the main context and waits for the earliest heap
+ *    deadline.
+ *
+ * 7. The message owns a reference to its request until request_detach().
+ *    Streams hold their own request reference. The method driver holds
+ *    a reference across each worker job, so method_data and request
+ *    fields stay alive until the completion runs.
+ */
+
 typedef struct _PhodavPathTrie PhodavPathTrie;
 
 /* the state of a PhodavServer, shared only by the server, lock store and

@@ -85,7 +85,7 @@ struct _PhodavBackendClass
 struct _PhodavBackend
 {
   const PhodavBackendClass *klass;
-  gint ref_count;
+  gint ref_count; /* atomic: paths share it across worker threads */
   GFile *root;
 };
 
