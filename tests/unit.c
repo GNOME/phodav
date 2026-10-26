@@ -1274,7 +1274,11 @@ test_gfile_backend_resolve (void)
   /* an existing file and an existing directory */
   path = phodav_backend_gfile_resolve (backend, NULL, "/hello.txt", PHODAV_PATH_EXISTING, &status);
   g_assert_nonnull (path);
+#ifdef HAVE_DIRFD_OPERATIONS
+  /* only the descriptor backend names the final component: the
+   * generic one holds the GFile instead */
   g_assert_cmpstr (phodav_path_get_name (path), ==, "hello.txt");
+#endif
   g_clear_pointer (&path, phodav_path_unref);
 
   path = phodav_backend_gfile_resolve (backend, NULL, "dir/inner.txt", PHODAV_PATH_EXISTING, &status);
@@ -1533,6 +1537,7 @@ test_path_copy_and_delete (void)
   }
 #endif
 
+#ifdef HAVE_DIRFD_OPERATIONS
   /* a generic backend has no descriptor to enumerate a copy recursively */
   {
     g_autofree gchar *generic_source = g_build_filename (dir, "dir", NULL);
@@ -1544,6 +1549,7 @@ test_path_copy_and_delete (void)
     g_assert_nonnull (error);
     g_clear_error (&error);
   }
+#endif
 
   remove_recursively (dir);
 }
