@@ -144,10 +144,12 @@ test_proppatch (void)
       /* the per-property status is reported inside the response body */
       {
         gchar buf[4096];
-        gssize n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+        gsize n = 0;
 
+        g_assert_true (g_input_stream_read_all (in, buf, sizeof (buf) - 1, &n,
+                                                NULL, &error));
         g_assert_no_error (error);
-        g_assert_cmpint (n, >, 0);
+        g_assert_cmpuint (n, >, 0);
         buf[n] = '\0';
         g_assert_nonnull (strstr (buf, cases[i].status));
       }
@@ -177,10 +179,12 @@ test_propfind_validators (void)
 
   {
     gchar buf[4096];
-    gssize n = g_input_stream_read (in, buf, sizeof (buf) - 1, NULL, &error);
+    gsize n = 0;
 
+    g_assert_true (g_input_stream_read_all (in, buf, sizeof (buf) - 1, &n,
+                                            NULL, &error));
     g_assert_no_error (error);
-    g_assert_cmpint (n, >, 0);
+    g_assert_cmpuint (n, >, 0);
     buf[n] = '\0';
 
     /* both properties are answered, without any per-property error */

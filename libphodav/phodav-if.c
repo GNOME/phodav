@@ -16,6 +16,7 @@ typedef struct _IfState
   GUri *base;
   gchar *path;
   GList *locks;
+  GCancellable *cancellable;
   gboolean error;
 } IfState;
 
@@ -121,17 +122,17 @@ check_token (PathHandler *handler, const gchar *path, const gchar *token)
   if (g_strcmp0 (token, "DAV:no-lock") == 0)
     return FALSE;
 
-  return !!server_path_get_lock (server, path, token);
+  return phodav_lock_store_has_token (server, path, token);
 }
 
 static gboolean
-check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
+check_etag (PathHandler *handler, const gchar *path, const gchar *etag, GCancellable *cancellable)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *fetag = NULL;
+  gint status;
 
   g_debug ("check etag %s for %s", etag, path);
 
@@ -139,9 +140,12 @@ check_etag (PathHandler *handler, const gchar *path, const gchar *etag)
   if (!handler_path_is_covered (handler, path))
     return FALSE;
 
-  file = handler_get_file_for_path (handler, path);
-  info = g_file_query_info (file, "etag::*,standard::size,unix::inode",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &error);
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
+    return FALSE;
+
+  info = phodav_path_query_info (handle, "etag::*,standard::size,unix::inode",
+                                 G_FILE_QUERY_INFO_NONE, cancellable, &error);
   if (!info)
     {
       /* the resource cannot be queried: its etag cannot match the
@@ -188,7 +192,7 @@ eval_if_condition (PathHandler *handler, IfState *state)
           return FALSE;
         }
 
-      success = check_etag (handler, state->path, etag);
+      success = check_etag (handler, state->path, etag, state->cancellable);
       g_free (etag);
     }
   else
@@ -311,15 +315,19 @@ eval_if (PathHandler *handler, IfState *state)
  * and SOUP_STATUS_PRECONDITION_FAILED when the conditions are not
  * met. @has_header is set when the request carried an If header. */
 static gint
-eval_if_header (PathHandler *handler,
-                SoupServerMessage *msg,
-                const gchar *path,
+eval_if_header (PhodavRequest *req,
                 GList **locks,
                 gboolean *has_header)
 {
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
+  PathHandler *handler = phodav_request_get_handler (req);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   g_autofree gchar *str = g_strdup (soup_message_headers_get_one (request_headers, "If"));
-  IfState state = { .cur = str, .base = soup_server_message_get_uri (msg), .path = g_strdup (path) };
+  IfState state = {
+    .cur = str,
+    .base = phodav_request_get_uri (req),
+    .path = g_strdup (phodav_request_get_path (req)),
+    .cancellable = phodav_request_get_cancellable (req),
+  };
   gint status = SOUP_STATUS_OK;
 
   *has_header = str != NULL;
@@ -345,19 +353,21 @@ eval_if_header (PathHandler *handler,
 }
 
 gint
-phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks)
+phodav_check_if (PhodavRequest *req, GList **locks)
 {
+  PathHandler *handler = phodav_request_get_handler (req);
   PhodavServer *server = handler_get_server (handler);
+  const gchar *path = phodav_request_get_path (req);
   gboolean has_header;
   gint status;
 
-  status = eval_if_header (handler, msg, path, locks, &has_header);
+  status = eval_if_header (req, locks, &has_header);
   if (status != SOUP_STATUS_OK)
     return status;
 
   /* COPY does not modify the source, its locks do not apply */
-  if (soup_server_message_get_method (msg) != SOUP_METHOD_COPY &&
-      server_path_has_other_locks (server, path, *locks))
+  if (g_strcmp0 (phodav_request_get_method (req), "COPY") != 0 &&
+      phodav_lock_store_path_has_other_locks (server, path, *locks))
     return SOUP_STATUS_LOCKED;
 
   return SOUP_STATUS_OK;
@@ -368,12 +378,12 @@ phodav_check_if (PathHandler *handler, SoupServerMessage *msg, const gchar *path
  * lock is mandatory, and the other locks held on the path are not an
  * obstacle to refreshing a lock the client owns. */
 gint
-phodav_check_if_refresh (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GList **locks)
+phodav_check_if_refresh (PhodavRequest *req, GList **locks)
 {
   gboolean has_header;
   gint status;
 
-  status = eval_if_header (handler, msg, path, locks, &has_header);
+  status = eval_if_header (req, locks, &has_header);
   if (status != SOUP_STATUS_OK)
     return status;
 

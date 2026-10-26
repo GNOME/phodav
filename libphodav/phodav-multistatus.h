@@ -22,6 +22,7 @@ typedef struct _ResponseProp
 ResponseProp *response_prop_new (xmlNodePtr node,
                                  gint status);
 void response_prop_free (ResponseProp *prop);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (ResponseProp, response_prop_free)
 
 /* the properties of a response, in the order they were collected */
 typedef struct _Response
@@ -34,6 +35,9 @@ Response *response_new (GList *props,
                         gint status);
 void response_free (Response *h);
 
-gint set_response_multistatus (SoupServerMessage *msg,
-                               GHashTable *mstatus);
+/* @ns is the namespace the response property nodes were built with;
+ * it is owned by the streaming response from now on */
+gint set_response_multistatus (PhodavRequest *req,
+                               GHashTable *mstatus,
+                               xmlNsPtr ns);
 G_END_DECLS

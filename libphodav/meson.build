@@ -7,8 +7,13 @@ headers = [
 install_headers(headers, subdir : 'libphodav-3.0/libphodav')
 
 sources = [
+  'phodav-backend.c',
+  'phodav-backend-gfile.c',
+  'phodav-backend-native.c',
+  'phodav-backend-virtual.c',
   'phodav-if.c',
   'phodav-lock.c',
+  'phodav-lock-store.c',
   'phodav-method-delete.c',
   'phodav-method-get.c',
   'phodav-method-lock.c',
@@ -20,9 +25,11 @@ sources = [
   'phodav-method-unlock.c',
   'phodav-multistatus.c',
   'phodav-path.c',
+  'phodav-request.c',
   'phodav-server.c',
   'phodav-utils.c',
-  'phodav-virtual-dir.c'
+  'phodav-virtual-dir.c',
+  'phodav-xattr.c'
 ]
 
 # the same list, as file objects usable from the other

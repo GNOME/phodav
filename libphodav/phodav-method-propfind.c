@@ -6,17 +6,12 @@
 
 #include "config.h"
 
-#include <sys/types.h>
-
-#ifdef HAVE_SYS_XATTR_H
-#include <sys/xattr.h>
-#endif
-
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
 #include "phodav-priv.h"
 #include "phodav-utils.h"
+#include "phodav-xattr.h"
 
 typedef struct _PropFind
 {
@@ -30,6 +25,7 @@ typedef struct _PropFindContext
   PropFind *pf;
   const gchar *path;
   GFileInfo *info;
+  GCancellable *cancellable;
 } PropFindContext;
 
 typedef ResponseProp *(*PropFunc) (const PropFindContext *ctx, xmlNsPtr ns);
@@ -130,35 +126,15 @@ end:
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 
-static gboolean
-lockdiscovery_cb (const gchar *key, Path *path, gpointer data)
-{
-  xmlNodePtr node = data;
-  GList *l;
-
-  g_return_val_if_fail (key, FALSE);
-  g_return_val_if_fail (path, FALSE);
-
-  path_expire_locks (path);
-
-  for (l = path->locks; l != NULL; l = l->next)
-    xmlAddChild (node, dav_lock_get_activelock_node (l->data, NULL));
-
-  return TRUE;
-}
-
 static ResponseProp *
 prop_lockdiscovery (const PropFindContext *ctx, xmlNsPtr ns)
 {
   PhodavServer *server = handler_get_server (ctx->handler);
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "lockdiscovery");
 
-  if (ctx->pf->type == PROPFIND_PROPNAME)
-    goto end;
+  if (ctx->pf->type != PROPFIND_PROPNAME)
+    phodav_lock_store_lockdiscovery (server, ctx->path, node);
 
-  server_foreach_parent_path (server, ctx->path, lockdiscovery_cb, node);
-
-end:
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 
@@ -346,11 +322,12 @@ end:
 static ResponseProp *
 prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
 {
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   g_autoptr(GFileInfo) info = NULL;
   gint status = SOUP_STATUS_OK;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-available-bytes");
-  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
+  GCancellable *cancellable = ctx->cancellable;
   g_autoptr(GError) error = NULL;
   g_autofree gchar *tmp = NULL;
   guint64 size;
@@ -358,7 +335,12 @@ prop_quota_available (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (ctx->handler, ctx->path);
+  handle = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                                &status);
+  if (!handle)
+    goto end;
+  file = phodav_path_get_named_file (handle);
+
   info = g_file_query_filesystem_info (file, "filesystem::*",
                                        cancellable, &error);
 
@@ -381,9 +363,10 @@ end:
 static ResponseProp *
 prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
 {
-  GFile *file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   gint status = SOUP_STATUS_OK;
-  GCancellable *cancellable = handler_get_cancellable (ctx->handler);
+  GCancellable *cancellable = ctx->cancellable;
   xmlNodePtr node = xmlNewNode (ns, BAD_CAST "quota-used-bytes");
   guint64 disk_usage = 0;
   g_autoptr(GError) error = NULL;
@@ -392,7 +375,12 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
   if (ctx->pf->type == PROPFIND_PROPNAME)
     goto end;
 
-  file = handler_get_file_for_path (ctx->handler, ctx->path);
+  handle = phodav_path_resolve (ctx->handler, ctx->path, PHODAV_PATH_EXISTING,
+                                &status);
+  if (!handle)
+    goto end;
+  file = phodav_path_get_named_file (handle);
+
   if (!g_file_measure_disk_usage (file,
                                   G_FILE_MEASURE_NONE,
                                   cancellable,
@@ -409,7 +397,6 @@ prop_quota_used (const PropFindContext *ctx, xmlNsPtr ns)
   xmlAddChild (node, xmlNewText (BAD_CAST tmp));
 
 end:
-  g_clear_object (&file);
   return response_prop_new (node, status);
 }
 
@@ -474,18 +461,6 @@ prop_xattr (const gchar *xattr)
   return response_prop_new (node, SOUP_STATUS_OK);
 }
 
-#ifdef HAVE_SYS_XATTR_H
-static gssize
-xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
-{
-#ifdef __APPLE__
-  return getxattr (path, name, value, size, 0, 0);
-#else
-  return getxattr (path, name, value, size);
-#endif
-}
-#endif /* HAVE_SYS_XATTR_H */
-
 /* GIO escapes non-ASCII bytes in extended attribute values, which breaks
  * UTF-8 property values. Read the raw value when possible and fall back
  * to the escaped GIO value otherwise. */
@@ -499,13 +474,13 @@ xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
     {
       /* the "xattr::" namespace lists user attributes only */
       g_autofree gchar *name = g_strdup_printf ("user.%s", xattr + strlen ("xattr::"));
-      gssize len = xattr_get (path, name, NULL, 0);
+      gssize len = phodav_xattr_get (path, name, NULL, 0);
 
       if (len > 0)
         {
           g_autofree gchar *value = g_malloc (len + 1);
 
-          if (xattr_get (path, name, value, len) == len)
+          if (phodav_xattr_get (path, name, value, len) == len)
             {
               value[len] = '\0';
 
@@ -521,7 +496,7 @@ xattr_get_value (GFile *file, GFileInfo *info, const gchar *xattr)
 
 #define FILE_QUERY "standard::*,time::*,access::*,etag::*,unix::inode,xattr::*"
 static GList *
-propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns)
+propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFind *pf, GFileInfo *info, xmlNsPtr ns, GCancellable *cancellable)
 {
   GHashTableIter iter;
   xmlNodePtr requested;
@@ -532,6 +507,7 @@ propfind_populate (PathHandler *handler, GFile *file, const gchar *path, PropFin
     .pf = pf,
     .path = path,
     .info = info,
+    .cancellable = cancellable,
   };
 
   if (pf->type == PROPFIND_ALLPROP || pf->type == PROPFIND_PROPNAME)
@@ -606,18 +582,25 @@ end:
 }
 
 static gint
-propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHashTable *path_resp, xmlNsPtr ns)
+propfind_query_zero (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xmlNsPtr ns)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(GError) err = NULL;
   g_autoptr(GFileInfo) info = NULL;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
   GList *stat = NULL;
   gint status = SOUP_STATUS_OK;
 
-  file = handler_get_file_for_path (handler, path);
-  info = g_file_query_info (file, FILE_QUERY,
-                            G_FILE_QUERY_INFO_NONE, cancellable, &err);
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
+    return status;
+  file = phodav_path_get_file (handle);
+
+  info = phodav_path_query_info (handle, FILE_QUERY,
+                                 G_FILE_QUERY_INFO_NONE, cancellable, &err);
   if (err)
     {
       if (!g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
@@ -625,7 +608,7 @@ propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHas
       return SOUP_STATUS_NOT_FOUND;
     }
 
-  stat = propfind_populate (handler, file, path, pf, info, ns);
+  stat = propfind_populate (handler, file, path, pf, info, ns, cancellable);
   g_hash_table_insert (path_resp, g_strdup (path),
                        response_new (stat, 0));
 
@@ -633,21 +616,33 @@ propfind_query_zero (PathHandler *handler, PropFind *pf, const gchar *path, GHas
 }
 
 static gint
-propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHashTable *path_resp, xmlNsPtr ns)
+propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xmlNsPtr ns)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  PathHandler *handler = phodav_request_get_handler (req);
+  const gchar *path = phodav_request_get_path (req);
+  GCancellable *cancellable = phodav_request_get_cancellable (req);
   g_autoptr(GError) err = NULL;
-  g_autoptr(GFile) file = NULL;
+  g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GFileEnumerator) e = NULL;
+  guint count;
   gint status;
 
-  status = propfind_query_zero (handler, pf, path, path_resp, ns);
+  status = propfind_query_zero (req, pf, path_resp, ns);
   if (status != SOUP_STATUS_OK)
     return status;
 
-  file = handler_get_file_for_path (handler, path);
-  e = g_file_enumerate_children (file, FILE_QUERY, G_FILE_QUERY_INFO_NONE,
-                                 cancellable, &err);
+  /* the depth-1 response is assembled in memory before it is
+   * streamed: cap its size, so a huge collection cannot exhaust the
+   * server. The root response is already in the table. */
+  count = g_hash_table_size (path_resp);
+
+  handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
+  if (!handle)
+    return status;
+
+  e = phodav_path_enumerate (handle, FILE_QUERY,
+                             G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                             cancellable, &err);
   if (!e)
     goto end;
 
@@ -659,15 +654,37 @@ propfind_query_one (PathHandler *handler, PropFind *pf, const gchar *path, GHash
         break;
 
       g_autofree gchar *child_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
-      g_autoptr(GFile) child = g_file_get_child (file, g_file_info_get_name (info));
+      g_autoptr(PhodavPath) child_handle = NULL;
+      GFile *child;
+      gint child_status;
+
+      if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
+        continue;
+
+      if (count >= PHODAV_MAX_PROPFIND_ENTRIES)
+        {
+          g_debug ("PROPFIND: %s has more than %u members", path,
+                   PHODAV_MAX_PROPFIND_ENTRIES);
+          status = SOUP_STATUS_INSUFFICIENT_STORAGE;
+          goto end;
+        }
+
+      child_handle = phodav_path_resolve_child (handle,
+                                                g_file_info_get_name (info),
+                                                PHODAV_PATH_EXISTING,
+                                                &child_status);
+      if (!child_handle)
+        continue;
+      child = phodav_path_get_file (child_handle);
 
       /* the properties of a member are queried on the member, not
        * on the collection it was listed from */
-      stat = propfind_populate (handler, child, child_path, pf, info, ns);
+      stat = propfind_populate (handler, child, child_path, pf, info, ns, cancellable);
       /* the multistatus keys are the decoded resource paths, the
        * hrefs are escaped when the response is built */
       g_hash_table_insert (path_resp, g_steal_pointer (&child_path),
                            response_new (stat, 0));
+      count++;
     }
 
   g_file_enumerator_close (e, cancellable, NULL);
@@ -739,19 +756,44 @@ end:
   return pf;
 }
 
-gint
-phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+typedef struct _PropFindJob
 {
+  PhodavRequest *req;
+  PathHandler *handler;
+  GCancellable *cancellable;
+  gint status;
+  GHashTable *mstatus;
+  xmlNsPtr ns;
+} PropFindJob;
+
+static void
+propfind_job_free (PropFindJob *job)
+{
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_clear_object (&job->cancellable);
+  g_clear_pointer (&job->mstatus, g_hash_table_unref);
+  if (job->ns)
+    xmlFreeNs (job->ns);
+  g_free (job);
+}
+
+static gint
+propfind_work (PhodavRequest *req, GError **err)
+{
+  PropFindJob *job = phodav_request_get_method_data (req);
   g_autoptr(PropFind) pf = NULL;
   DepthType depth;
-  g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
   g_auto(DavDoc) doc = {
     0,
   };
   gint status = SOUP_STATUS_NOT_FOUND;
   xmlNsPtr ns = NULL;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
+  const gchar *path = phodav_request_get_path (req);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  SoupMessageBody *request_body = phodav_request_get_request_body (req);
+
+  (void) err;
 
   if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth))
     {
@@ -791,23 +833,58 @@ phodav_method_propfind (PathHandler *handler, SoupServerMessage *msg, const gcha
     }
 
   ns = xmlNewNs (NULL, BAD_CAST "DAV:", BAD_CAST "D");
-  mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
-                                   (GDestroyNotify) response_free);
+  job->mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                                        (GDestroyNotify) response_free);
   /* parse_propfind() only returns a PropFind with one of the three
    * request types: only the depth decides how it is answered, and the
    * depth-infinity request was refused above */
   if (depth == DEPTH_ZERO)
-    status = propfind_query_zero (handler, pf, path, mstatus, ns);
+    status = propfind_query_zero (req, pf, job->mstatus, ns);
   else
-    status = propfind_query_one (handler, pf, path, mstatus, ns);
+    status = propfind_query_one (req, pf, job->mstatus, ns);
 
-  if (status != SOUP_STATUS_OK)
-    goto end;
-
-  status = set_response_multistatus (msg, mstatus);
+  if (status == SOUP_STATUS_OK)
+    job->ns = g_steal_pointer (&ns);
 
 end:
   if (ns)
     xmlFreeNs (ns);
+  job->status = status;
+  return SOUP_STATUS_OK;
+}
+
+static gint
+propfind_commit (PhodavRequest *req, GError **err)
+{
+  PropFindJob *job = phodav_request_get_method_data (req);
+  gint status = job->status;
+
+  (void) err;
+
+  if (status == SOUP_STATUS_OK)
+    status = set_response_multistatus (job->req, job->mstatus,
+                                       g_steal_pointer (&job->ns));
+
   return status;
 }
+
+static gint
+propfind_validate (PhodavRequest *req, GError **err)
+{
+  PropFindJob *job = g_new0 (PropFindJob, 1);
+
+  (void) err;
+
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) propfind_job_free);
+
+  return SOUP_STATUS_OK;
+}
+
+const PhodavMethodOps phodav_method_propfind_ops = {
+  .validate = propfind_validate,
+  .work = propfind_work,
+  .commit = propfind_commit,
+};

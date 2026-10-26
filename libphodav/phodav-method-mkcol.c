@@ -9,51 +9,100 @@
 #include "phodav-lock.h"
 #include "phodav-priv.h"
 
-static gint
-do_mkcol_file (GFile *file, GCancellable *cancellable, GError **err)
+typedef struct _MkcolJob
 {
-  g_autoptr(GError) error = NULL;
-  gint status = SOUP_STATUS_CREATED;
+  PhodavRequest *req;
+  PathHandler *handler;
+  gchar *path;
+  GCancellable *cancellable;
+  GList *submitted;
+  gint status;
+  GError *error;
+} MkcolJob;
 
-  if (!g_file_make_directory (file, cancellable, &error))
-    {
-      if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        status = SOUP_STATUS_CONFLICT;
-      else if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-        status = SOUP_STATUS_METHOD_NOT_ALLOWED;
-      else
-        {
-          status = SOUP_STATUS_FORBIDDEN;
-          g_propagate_error (err, g_steal_pointer (&error));
-        }
-    }
-
-  return status;
+static void
+mkcol_job_free (MkcolJob *job)
+{
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_free (job->path);
+  g_clear_object (&job->cancellable);
+  g_list_free_full (job->submitted, (GDestroyNotify) lock_submitted_free);
+  g_clear_error (&job->error);
+  g_free (job);
 }
 
-gint
-phodav_method_mkcol (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+static gint
+mkcol_work (PhodavRequest *req, GError **err)
 {
-  GFile *file = NULL;
-  GCancellable *cancellable = handler_get_cancellable (handler);
+  MkcolJob *job = phodav_request_get_method_data (req);
+  g_autoptr(PhodavPath) handle = NULL;
+  g_autoptr(GError) error = NULL;
+
+  (void) err;
+
+  job->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  handle = phodav_path_resolve (job->handler, job->path,
+                                PHODAV_PATH_CREATE, &job->status);
+  if (!handle)
+    return SOUP_STATUS_OK;
+
+  if (!phodav_path_mkdir (handle, job->cancellable, &error))
+    {
+      job->error = g_steal_pointer (&error);
+      job->status = phodav_status_from_error (job->error);
+    }
+  else
+    job->status = SOUP_STATUS_CREATED;
+
+  return SOUP_STATUS_OK;
+}
+
+static gint
+mkcol_commit (PhodavRequest *req, GError **err)
+{
+  MkcolJob *job = phodav_request_get_method_data (req);
+
+  if (job->error && err)
+    *err = g_steal_pointer (&job->error);
+
+  return job->status;
+}
+
+static gint
+mkcol_validate (PhodavRequest *req, GError **err)
+{
+  MkcolJob *job;
+  PhodavServer *server = handler_get_server (phodav_request_get_handler (req));
+  SoupMessageBody *request_body = phodav_request_get_request_body (req);
   gint status;
-  g_autolist(LockSubmitted) submitted = NULL;
-  SoupMessageBody *request_body = soup_server_message_get_request_body (msg);
+
+  (void) err;
 
   if (request_body && request_body->length)
-    {
-      status = SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE;
-      goto end;
-    }
+    return SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE;
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  job = g_new0 (MkcolJob, 1);
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->path = g_strdup (phodav_request_get_path (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) mkcol_job_free);
+
+  status = phodav_check_if (req, &job->submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    return status;
 
-  file = handler_get_file_for_path (handler, path);
-  status = do_mkcol_file (file, cancellable, err);
+  if (phodav_lock_store_path_has_other_locks (server, job->path,
+                                              job->submitted))
+    return SOUP_STATUS_LOCKED;
 
-end:
-  g_clear_object (&file);
-  return status;
+  job->status = SOUP_STATUS_CREATED;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_mkcol_ops = {
+  .validate = mkcol_validate,
+  .work = mkcol_work,
+  .commit = mkcol_commit,
+};

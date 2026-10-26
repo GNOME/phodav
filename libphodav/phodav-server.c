@@ -11,6 +11,7 @@
 #include "phodav-lock.h"
 #include "phodav-multistatus.h"
 #include "phodav-path.h"
+#include "phodav-server-priv.h"
 #include "phodav-utils.h"
 
 /**
@@ -23,28 +24,22 @@
  *
  * PhodavServer implements a simple WebDAV server.
  *
- * The DAV methods are handled synchronously from the #SoupServer
- * callbacks: a #PhodavServer must be used from a single thread, the
- * one running the main context the #SoupServer is listened from,
- * and a slow request delays the other requests.
+ * The DAV methods are driven from the main context of the #SoupServer.
+ * Every method is a validate, work and commit triple, run by one request
+ * driver which owns the namespace, the method state and the completion.
+ * The namespace is serialised there: one mutating request at a time
+ * validates its path, evaluates its locks and commits its result. Only
+ * the blocking filesystem work is handed to a one-shot job on a private
+ * worker, and the job completion is delivered back to the main
+ * context. Reads (GET, HEAD and PROPFIND) do not take the namespace:
+ * their filesystem work and streaming responses run on a separate
+ * worker pool, beside the serialised mutations. A reader-writer lock is
+ * therefore unnecessary, and so are the atomics which guarded the
+ * shared request state.
+ *
+ * A #PhodavServer must still be created and disposed on the thread
+ * running the main context of its #SoupServer.
  */
-
-struct _PhodavServer
-{
-  GObject parent;
-  SoupServer *server;
-  GCancellable *cancellable;
-  GFile *root_file;
-  gchar *base_path;
-  PathHandler *root_handler; /* borrowed, owned by the soup handler registration */
-  gchar *handler_path;       /* the path the handler is registered at */
-  GHashTable *paths;
-  gboolean readonly;
-  guint64 max_upload;
-  gboolean constructing;
-  GMainContext *expire_locks_context;
-  GSource *expire_locks_source;
-};
 
 G_DEFINE_FINAL_TYPE (PhodavServer, phodav_server, G_TYPE_OBJECT)
 
@@ -61,76 +56,146 @@ typedef enum
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
 
-static void server_callback (SoupServer *server,
-                             SoupServerMessage *msg,
-                             const gchar *path,
-                             GHashTable *query,
-                             gpointer user_data);
-
-static void request_started (SoupServer *server,
-                             SoupServerMessage *message,
-                             gpointer user_data);
-
-/* how often to look for expired locks; they are also expired lazily
- * when they are used, this only reclaims the memory */
-#define LOCK_EXPIRY_INTERVAL 1
+/* the mutations are serialised: one filesystem job at a time is enough.
+ * Reads and stream pulls get a small pool of their own, so a slow
+ * download or a large PROPFIND does not wait for a mutation job, nor
+ * prevent the next request from making progress. */
+#define PHODAV_STREAM_THREADS MAX (2, MIN (g_get_num_processors (), 8))
 
 static gboolean expire_locks_timeout (gpointer user_data);
 
-/* The lock table is keyed on the canonical resource path, so that the
- * locks are found again under whatever spelling of the path the client
- * used in its request. server_foreach_parent_path() walks the same
- * canonical keys, so the two cannot disagree on the canonical form. */
-Path *
-server_get_path (PhodavServer *self, const gchar *_path)
-{
-  Path *p;
-  g_autofree gchar *path = phodav_path_canonicalize (_path);
-
-  p = g_hash_table_lookup (self->paths, path);
-  if (!p)
-    {
-      p = g_new0 (Path, 1);
-      p->path = g_steal_pointer (&path);
-      g_hash_table_insert (self->paths, p->path, path_ref (p));
-    }
-
-  return p;
-}
-
-/* drop the path from the lock table when it holds no lock anymore;
- * called when a LOCK request is rolled back, so that a failed request
- * does not leave an empty entry behind */
-void
-server_remove_path_if_empty (PhodavServer *self, const gchar *_path)
-{
-  g_autofree gchar *path = phodav_path_canonicalize (_path);
-  Path *p = g_hash_table_lookup (self->paths, path);
-
-  if (!p)
-    return;
-
-  path_expire_locks (p);
-  if (!p->locks)
-    g_hash_table_remove (self->paths, path);
-}
-
-struct _PathHandler
+typedef struct _PhodavJob
 {
   PhodavServer *self;
-  GFile *file;
-};
+  PhodavTaskFunc run;
+  PhodavTaskFunc done;
+  gpointer data;
+} PhodavJob;
+
+static gboolean
+phodav_job_done (gpointer data)
+{
+  PhodavJob *job = data;
+
+  job->done (job->data);
+  g_object_unref (job->self);
+  g_free (job);
+
+  return G_SOURCE_REMOVE;
+}
+
+static void
+phodav_job_run (gpointer data, gpointer user_data)
+{
+  PhodavJob *job = data;
+
+  job->run (job->data);
+
+  g_main_context_invoke_full (job->self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              phodav_job_done, job, NULL);
+}
+
+static void
+phodav_server_dispatch_to (PhodavServer *self,
+                           GThreadPool *pool,
+                           PhodavTaskFunc run,
+                           PhodavTaskFunc done,
+                           gpointer data)
+{
+  PhodavJob *job = g_new0 (PhodavJob, 1);
+  g_autoptr(GError) error = NULL;
+
+  job->self = g_object_ref (self);
+  job->run = run;
+  job->done = done;
+  job->data = data;
+
+  if (pool && g_thread_pool_push (pool, job, &error))
+    return;
+
+  if (error)
+    g_debug ("cannot queue the worker task: %s", error->message);
+
+  /* the server was stopped: still run the completion on the main
+   * context, so that the caller releases what it handed over */
+  g_main_context_invoke_full (self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              phodav_job_done, job, NULL);
+}
+
+void
+phodav_server_dispatch (PhodavServer *self,
+                        PhodavTaskFunc run,
+                        PhodavTaskFunc done,
+                        gpointer data)
+{
+  phodav_server_dispatch_to (self, self->namespace_pool, run, done, data);
+}
+
+void
+phodav_server_dispatch_stream (PhodavServer *self,
+                               PhodavTaskFunc run,
+                               PhodavTaskFunc done,
+                               gpointer data)
+{
+  phodav_server_dispatch_to (self, self->stream_pool, run, done, data);
+}
+
+typedef struct _NamespaceWaiter
+{
+  PhodavNamespaceFunc func;
+  gpointer data;
+} NamespaceWaiter;
+
+/* the namespace belongs to the main context. A mutating request takes
+ * it before it looks at the filesystem and releases it once its
+ * decision has been committed, so no lock is needed around the lock
+ * store or a rename/unlink sequence. Read-only methods never take it. */
+void
+phodav_server_namespace_acquire (PhodavServer *self,
+                                 PhodavNamespaceFunc func,
+                                 gpointer data)
+{
+  NamespaceWaiter *waiter;
+
+  if (!self->namespace_busy && self->namespace_waiters->length == 0)
+    {
+      self->namespace_busy = TRUE;
+      func (data);
+      return;
+    }
+
+  waiter = g_new0 (NamespaceWaiter, 1);
+  waiter->func = func;
+  waiter->data = data;
+  g_queue_push_tail (self->namespace_waiters, waiter);
+}
+
+void
+phodav_server_namespace_release (PhodavServer *self)
+{
+  NamespaceWaiter *waiter;
+
+  g_return_if_fail (self->namespace_busy);
+
+  waiter = g_queue_pop_head (self->namespace_waiters);
+  if (!waiter)
+    {
+      self->namespace_busy = FALSE;
+      return;
+    }
+
+  /* keep the namespace held across the hand-over, so a caller which
+   * acquires recursively cannot jump the queue */
+  waiter->func (waiter->data);
+  g_free (waiter);
+}
 
 PhodavServer *
 handler_get_server (PathHandler *handler)
 {
   return handler->self;
-}
-
-const gchar *
-handler_get_base_path (PathHandler *handler)
-{
-  return handler->self->base_path;
 }
 
 /* does @path belong to the share mounted at the base path? This is
@@ -140,15 +205,14 @@ handler_get_base_path (PathHandler *handler)
 gboolean
 handler_path_is_covered (PathHandler *handler, const gchar *path)
 {
-  return path && path_is_covered (path, handler->self->base_path);
+  return path && path_is_covered (path, handler->base_path);
 }
 
-/* the request paths begin with a "/" and are relative to the share
- * root, so that the file is looked up under the root, not the
- * filesystem root. The base path is stripped first, so that a share
- * mounted at "/dav" serves "/dav/hello.txt" as "hello.txt". */
-GFile *
-handler_get_file_for_path (PathHandler *handler, const gchar *path)
+/* the share-relative path of @path, borrowed: the base path is
+ * stripped, so that a share mounted at "/dav" maps "/dav/hello.txt"
+ * to "/hello.txt". Returns NULL when @path is not part of the share. */
+const gchar *
+handler_get_relative_path (PathHandler *handler, const gchar *path)
 {
   const gchar *relative = path;
   gsize base_len;
@@ -158,7 +222,7 @@ handler_get_file_for_path (PathHandler *handler, const gchar *path)
   if (!handler_path_is_covered (handler, path))
     return NULL;
 
-  base_len = strlen (handler->self->base_path);
+  base_len = strlen (handler->base_path);
   if (base_len > 1)
     {
       relative = path + base_len;
@@ -166,7 +230,7 @@ handler_get_file_for_path (PathHandler *handler, const gchar *path)
         relative = "/";
     }
 
-  return g_file_get_child (handler->file, relative + 1);
+  return relative;
 }
 
 GFile *
@@ -175,22 +239,10 @@ handler_get_root_file (PathHandler *handler)
   return handler->file;
 }
 
-GCancellable *
-handler_get_cancellable (PathHandler *handler)
+PhodavBackend *
+handler_get_backend (PathHandler *handler)
 {
-  return handler->self->cancellable;
-}
-
-gboolean
-handler_get_readonly (PathHandler *handler)
-{
-  return handler->self->readonly;
-}
-
-guint64
-handler_get_max_upload (PathHandler *handler)
-{
-  return handler->self->max_upload;
+  return handler->backend;
 }
 
 static PathHandler *
@@ -200,94 +252,118 @@ path_handler_new (PhodavServer *self, GFile *file)
 
   h->self = self;
   h->file = g_object_ref (file);
+  h->backend = phodav_backend_new (file);
+  /* the base path may change on the main thread, but this handler is
+   * replaced with its registration at the same time: keep an
+   * immutable snapshot for the requests already routed to it */
+  h->base_path = g_strdup (self->base_path);
+  h->ref_count = 1;
   return h;
 }
 
-static void
-path_handler_free (PathHandler *h)
+PathHandler *
+path_handler_ref (PathHandler *h)
 {
+  h->ref_count++;
+
+  return h;
+}
+
+void
+path_handler_unref (PathHandler *h)
+{
+  if (--h->ref_count > 0)
+    return;
+
   g_object_unref (h->file);
+  phodav_backend_unref (h->backend);
+  g_free (h->base_path);
   g_free (h);
 }
 
 static void
 phodav_server_init (PhodavServer *self)
 {
+  /* the DAV methods build and parse XML on the main context */
+  xmlInitParser ();
+
   self->constructing = TRUE;
   self->base_path = g_strdup ("/");
 
   self->cancellable = g_cancellable_new ();
+  g_mutex_init (&self->lock_store_mutex);
+  self->namespace_waiters = g_queue_new ();
 
-  self->paths = g_hash_table_new_full (g_str_hash, g_str_equal,
-                                       NULL, (GDestroyNotify) path_unref);
+  self->paths = phodav_lock_store_paths_new ();
 
   /* the context this server is created on; the lock expiry sweep
    * runs there, like the rest of the server */
   self->expire_locks_context = g_main_context_ref (g_main_context_get_thread_default () ?: g_main_context_default ());
 }
 
-/* free the locks whose timeout has elapsed, and drop the empty paths
- * so the lock table does not grow without bound with the locks taken
- * over the lifetime of the server */
-void
-server_expire_locks (PhodavServer *self)
-{
-  GHashTableIter iter;
-  Path *path;
-
-  if (g_hash_table_size (self->paths) == 0)
-    return;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      path_expire_locks (path);
-
-      /* the path is only kept alive by the table when it has no locks */
-      if (!path->locks)
-        g_hash_table_iter_remove (&iter);
-    }
-}
-
-/* destroy the locks rooted on a deleted resource and its members, and
- * drop the paths which are no longer needed */
-void
-server_remove_locks (PhodavServer *self, const gchar *_path)
-{
-  GHashTableIter iter;
-  Path *path;
-  g_autofree gchar *root = phodav_path_canonicalize (_path);
-
-  if (g_hash_table_size (self->paths) == 0)
-    return;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      if (!path_is_covered (path->path, root))
-        continue;
-
-      /* the locks remove themselves from the list when freed */
-      while (path->locks)
-        dav_lock_free (path->locks->data);
-
-      /* the path is only kept alive by the table when it has no locks */
-      g_hash_table_iter_remove (&iter);
-    }
-}
-
 static gboolean
 expire_locks_timeout (gpointer user_data)
 {
-  server_expire_locks (PHODAV_SERVER (user_data));
+  PhodavServer *self = PHODAV_SERVER (user_data);
 
-  return G_SOURCE_CONTINUE;
+  /* this source is being removed when the callback returns */
+  self->expire_locks_source = NULL;
+  phodav_lock_store_expire_locks (self);
+
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean
+schedule_lock_expiry_cb (gpointer user_data)
+{
+  PhodavServer *self = user_data;
+  g_autoptr(GSource) source = NULL;
+  gint64 next, now;
+  guint delay;
+
+  if (self->stopped)
+    return G_SOURCE_REMOVE;
+
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+
+  next = phodav_lock_store_next_expiry (self);
+  if (!next)
+    return G_SOURCE_REMOVE;
+
+  now = g_get_monotonic_time () / G_USEC_PER_SEC;
+  delay = next > now ? (guint) MIN ((guint64) (next - now), G_MAXUINT) : 0;
+
+  source = g_timeout_source_new_seconds (delay);
+  g_source_set_callback (source, expire_locks_timeout, self, NULL);
+  g_source_attach (source, self->expire_locks_context);
+  self->expire_locks_source = source;
+
+  return G_SOURCE_REMOVE;
+}
+
+void
+phodav_server_schedule_lock_expiry (PhodavServer *self)
+{
+  if (self->stopped)
+    return;
+
+  /* the source belongs to the server context: reschedule there when a
+   * lock was added, refreshed or removed */
+  g_main_context_invoke_full (self->expire_locks_context,
+                              G_PRIORITY_DEFAULT,
+                              schedule_lock_expiry_cb,
+                              g_object_ref (self), g_object_unref);
 }
 
 static void
 update_root_handler (PhodavServer *self)
 {
   PathHandler *handler;
+
+  /* stop() unregistered the handler for good: property changes must
+   * not bring it back */
+  if (self->stopped)
+    return;
 
   /* the handler is registered at the base path, which may have
    * changed since the last registration */
@@ -306,9 +382,9 @@ update_root_handler (PhodavServer *self)
   handler = path_handler_new (self, self->root_file);
 
   soup_server_add_handler (self->server, self->base_path,
-                           server_callback,
+                           phodav_server_callback,
                            handler,
-                           (GDestroyNotify) path_handler_free);
+                           (GDestroyNotify) path_handler_unref);
 
   self->root_handler = handler;
   self->handler_path = g_strdup (self->base_path);
@@ -334,20 +410,13 @@ phodav_server_constructed (GObject *gobject)
    * have happened already, registering again only replaces them */
   update_root_handler (self);
 
-  g_signal_connect (self->server, "request-started", G_CALLBACK (request_started), self);
+  self->namespace_pool = g_thread_pool_new (phodav_job_run, NULL,
+                                            1, TRUE, NULL);
+  self->stream_pool = g_thread_pool_new (phodav_job_run, NULL,
+                                         PHODAV_STREAM_THREADS,
+                                         TRUE, NULL);
 
-  {
-    g_autoptr(GSource) source = g_timeout_source_new_seconds (LOCK_EXPIRY_INTERVAL);
-
-    /* g_timeout_add_seconds() cannot be used here: it would attach
-     * the sweep to the global default context instead of the one
-     * this server runs on */
-    g_source_set_callback (source, expire_locks_timeout, self, NULL);
-    g_source_attach (source, self->expire_locks_context);
-    /* the context owns the source while it is attached and dispose()
-     * detaches it, keep only a borrowed pointer */
-    self->expire_locks_source = source;
-  }
+  g_signal_connect (self->server, "request-started", G_CALLBACK (phodav_server_request_started), self);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->constructed)
@@ -355,13 +424,33 @@ phodav_server_constructed (GObject *gobject)
 }
 
 static void
-free_path_locks (gpointer key, gpointer value, gpointer user_data)
+server_stop (PhodavServer *self)
 {
-  Path *path = value;
+  if (self->stopped)
+    return;
 
-  /* the locks remove themselves from the list when freed */
-  while (path->locks)
-    dav_lock_free (path->locks->data);
+  self->stopped = TRUE;
+
+  /* first stop accepting new requests, then cancel the ones which are
+   * already running; they keep their references until they complete */
+  if (self->server)
+    {
+      if (self->handler_path)
+        soup_server_remove_handler (self->server, self->handler_path);
+      g_signal_handlers_disconnect_by_func (self->server, phodav_server_request_started, self);
+    }
+  self->root_handler = NULL;
+  g_clear_pointer (&self->handler_path, g_free);
+
+  if (self->cancellable)
+    g_cancellable_cancel (self->cancellable);
+
+  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+
+  /* the pools stay alive: the requests already admitted still need
+   * their one-shot jobs and stream pulls to complete, and they keep
+   * the server alive until they do. dispose() releases the pools once
+   * no request references the server anymore. */
 }
 
 static void
@@ -369,34 +458,53 @@ phodav_server_dispose (GObject *gobject)
 {
   PhodavServer *self = PHODAV_SERVER (gobject);
 
-  g_clear_pointer (&self->expire_locks_source, g_source_destroy);
+  server_stop (self);
+
+  /* no request holds the server anymore, so no namespace or stream
+   * job can still reference the pools */
+  if (self->namespace_pool)
+    {
+      g_thread_pool_free (self->namespace_pool, FALSE, FALSE);
+      self->namespace_pool = NULL;
+    }
+  if (self->stream_pool)
+    {
+      g_thread_pool_free (self->stream_pool, FALSE, FALSE);
+      self->stream_pool = NULL;
+    }
   g_clear_pointer (&self->expire_locks_context, g_main_context_unref);
 
   /* SoupServer could live longer than PhodavServer,
    * this frees the PhodavHandler passed as user_data;
    * dispose may run again, the server is already gone then */
-  if (self->server)
-    {
-      if (self->handler_path)
-        soup_server_remove_handler (self->server, self->handler_path);
-      g_signal_handlers_disconnect_by_func (self->server, request_started, self);
-    }
-  self->root_handler = NULL;
-  g_clear_pointer (&self->handler_path, g_free);
   g_clear_pointer (&self->base_path, g_free);
   g_clear_object (&self->server);
   g_clear_object (&self->cancellable);
   g_clear_object (&self->root_file);
 
-  /* remaining locks hold references on the paths, free them first
-   * so the paths are released with the table */
-  if (self->paths)
-    g_hash_table_foreach (self->paths, free_path_locks, NULL);
-  g_clear_pointer (&self->paths, g_hash_table_unref);
+  /* the trie owns the paths: releasing it also drops the remaining
+   * locks, which hold references on them */
+  g_clear_pointer (&self->paths, phodav_lock_store_paths_free);
+
+  /* the namespace waiters own requests, which hold a server reference:
+   * they must all have run before dispose can get here */
+  g_clear_pointer (&self->namespace_waiters, g_queue_free);
 
   /* Chain up to the parent class */
   if (G_OBJECT_CLASS (phodav_server_parent_class)->dispose)
     G_OBJECT_CLASS (phodav_server_parent_class)->dispose (gobject);
+}
+
+static void
+phodav_server_finalize (GObject *gobject)
+{
+  PhodavServer *self = PHODAV_SERVER (gobject);
+
+  g_mutex_clear (&self->lock_store_mutex);
+
+  /* Chain up to the parent class */
+  if (G_OBJECT_CLASS (phodav_server_parent_class)->finalize)
+    G_OBJECT_CLASS (phodav_server_parent_class)->finalize (gobject);
 }
 
 static void
@@ -514,6 +622,7 @@ phodav_server_class_init (PhodavServerClass *klass)
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
 
   gobject_class->dispose = phodav_server_dispose;
+  gobject_class->finalize = phodav_server_finalize;
   gobject_class->constructed = phodav_server_constructed;
   gobject_class->get_property = phodav_server_get_property;
   gobject_class->set_property = phodav_server_set_property;
@@ -628,492 +737,6 @@ phodav_server_class_init (PhodavServerClass *klass)
   g_object_class_install_properties (gobject_class, G_N_ELEMENTS (properties), properties);
 }
 
-gboolean
-server_foreach_parent_path (PhodavServer *self, const gchar *path, PathCb cb, gpointer data)
-{
-  g_autofree gchar *canonical = phodav_path_canonicalize (path);
-  gboolean ret = FALSE;
-  gchar *key = NULL;
-  Path *p;
-  const gchar *segment = canonical + 1;
-
-  /* canonical is "/" or "/segment[/segment...]"; visit each prefix
-   * from the first segment down to the whole path */
-  while (*segment)
-    {
-      const gchar *slash = strchr (segment, '/');
-      gsize len = slash ? (gsize) (slash - canonical) : strlen (canonical);
-      g_autofree gchar *partial = g_strndup (canonical, len);
-
-      if (g_hash_table_lookup_extended (self->paths, partial,
-                                        (gpointer *) &key, (gpointer *) &p))
-        {
-          if (!cb (key, p, data))
-            goto end;
-        }
-
-      if (!slash)
-        break;
-
-      segment = slash + 1;
-    }
-
-  ret = TRUE;
-
-end:
-  return ret;
-}
-
-typedef struct _PathGetLock
-{
-  const gchar *token;
-  DAVLock *lock;
-} PathGetLock;
-
-static gboolean
-_path_get_lock (const gchar *key, Path *path, gpointer data)
-{
-  PathGetLock *d = data;
-  GList *l;
-
-  path_expire_locks (path);
-
-  for (l = path->locks; l != NULL; l = l->next)
-    {
-      DAVLock *lock = l->data;
-
-      if (g_strcmp0 (lock->token, d->token) == 0)
-        {
-          d->lock = lock;
-          return FALSE;
-        }
-    }
-
-  return TRUE;
-}
-
-/* look for the lock with @token on @path or any of its parents */
-DAVLock *
-server_path_lookup_lock (PhodavServer *self, const gchar *path, const gchar *token)
-{
-  PathGetLock p = { .token = token };
-
-  server_foreach_parent_path (self, path, _path_get_lock, &p);
-
-  return p.lock;
-}
-
-DAVLock *
-server_path_get_lock (PhodavServer *self, const gchar *path, const gchar *token)
-{
-  DAVLock *lock = server_path_lookup_lock (self, path, token);
-
-  if (!lock)
-    g_debug ("Invalid lock token %s for %s", token, path);
-
-  return lock;
-}
-
-static gboolean
-other_lock_exists (const gchar *key, Path *path, gpointer data)
-{
-  GList *locks = data;
-  GList *l;
-
-  path_expire_locks (path);
-
-  for (l = path->locks; l != NULL; l = l->next)
-    {
-      DAVLock *lock = l->data;
-      if (!locks_submitted_has (locks, lock))
-        return FALSE;
-    }
-
-  return TRUE;
-}
-
-gboolean
-server_path_has_other_locks (PhodavServer *self, const gchar *path, GList *locks)
-{
-  return !server_foreach_parent_path (self, path, other_lock_exists, locks);
-}
-
-/* does the tree rooted at @_path contain a lock which is not among
- * the submitted @locks? Operations which modify or replace a whole
- * collection (DELETE, MOVE, or a COPY/MOVE overwriting a collection)
- * must submit the tokens of the locks held on its members too
- * (RFC 4918 sections 7.1 and 9.6.1). */
-gboolean
-server_tree_has_other_locks (PhodavServer *self, const gchar *_path, GList *locks)
-{
-  g_autofree gchar *root = phodav_path_canonicalize (_path);
-  GHashTableIter iter;
-  Path *path;
-
-  if (g_hash_table_size (self->paths) == 0)
-    return FALSE;
-
-  g_hash_table_iter_init (&iter, self->paths);
-  while (g_hash_table_iter_next (&iter, NULL, (gpointer *) &path))
-    {
-      GList *l;
-
-      path_expire_locks (path);
-
-      if (!path_is_covered (path->path, root))
-        continue;
-
-      for (l = path->locks; l != NULL; l = l->next)
-        if (!locks_submitted_has (locks, l->data))
-          return TRUE;
-    }
-
-  return FALSE;
-}
-
-typedef struct _TreeLockCheck
-{
-  const gchar *path; /* canonical path of the new lock root */
-  DAVLock *lock;     /* the lock about to be taken */
-  gboolean conflict;
-} TreeLockCheck;
-
-static void
-tree_check_lock_cb (gpointer key, gpointer value, gpointer user_data)
-{
-  TreeLockCheck *d = user_data;
-  Path *path = value;
-  GList *l;
-
-  path_expire_locks (path);
-
-  /* the lock root itself and its ancestors are checked by
-   * server_foreach_parent_path() in try_add_lock() */
-  if (g_strcmp0 (path->path, d->path) == 0 ||
-      !path_is_covered (path->path, d->path))
-    return;
-
-  for (l = path->locks; l != NULL; l = l->next)
-    {
-      DAVLock *other = l->data;
-
-      /* RFC 4918 section 6.1: an exclusive lock conflicts with any
-       * other kind of lock, whether direct or indirect */
-      if (other->scope == DAV_LOCK_SCOPE_EXCLUSIVE ||
-          d->lock->scope == DAV_LOCK_SCOPE_EXCLUSIVE)
-        d->conflict = TRUE;
-    }
-}
-
-/* does a depth-infinity lock on @path conflict with a lock on one of
- * its members? (RFC 4918 section 7.4: such a LOCK request must fail
- * with 423 when the members are locked in a conflicting manner) */
-gboolean
-server_tree_has_lock_conflict (PhodavServer *self, const gchar *_path, DAVLock *lock)
-{
-  g_autofree gchar *path = phodav_path_canonicalize (_path);
-  TreeLockCheck d = { .path = path, .lock = lock, .conflict = FALSE };
-
-  g_hash_table_foreach (self->paths, tree_check_lock_cb, &d);
-
-  return d.conflict;
-}
-
-typedef struct _DavMethod DavMethod;
-
-/* the DAV methods handled by the server, in the order of the Allow
- * header of the OPTIONS answer.
- *
- * The mutating methods, which modify the shared files, are answered
- * with FORBIDDEN when the server is read-only. UNLOCK is not one of
- * them: it only releases a lock, and does not modify the files.
- *
- * A method with a headers_handler streams its request body out
- * while it is received: it is started from got_headers(), before
- * its body arrives, and it is answered from its got-body callback,
- * once the file it writes is committed (PUT answers its success
- * status only then). It has no handler: server_callback() runs
- * none for it either. It is listed like the other methods, so that
- * the Allow header covers it. */
-struct _DavMethod
-{
-  const gchar *name;
-  gboolean mutating;
-  gint (*handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-  void (*headers_handler) (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err);
-};
-
-static const DavMethod dav_methods[] = {
-  { "GET", FALSE, phodav_method_get, NULL },
-  { "HEAD", FALSE, phodav_method_get, NULL },
-  { "PUT", TRUE, NULL, phodav_method_put },
-  { "PROPFIND", FALSE, phodav_method_propfind, NULL },
-  { "PROPPATCH", TRUE, phodav_method_proppatch, NULL },
-  { "MKCOL", TRUE, phodav_method_mkcol, NULL },
-  { "DELETE", TRUE, phodav_method_delete, NULL },
-  { "MOVE", TRUE, phodav_method_movecopy, NULL },
-  { "COPY", TRUE, phodav_method_movecopy, NULL },
-  { "LOCK", TRUE, phodav_method_lock, NULL },
-  { "UNLOCK", FALSE, phodav_method_unlock, NULL },
-};
-
-static const DavMethod *
-dav_method_lookup (const gchar *method)
-{
-  gsize i;
-
-  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
-    if (g_strcmp0 (method, dav_methods[i].name) == 0)
-      return &dav_methods[i];
-
-  return NULL;
-}
-
-/* the comma separated names of the methods, for the Allow header */
-static gchar *
-dav_methods_allow (void)
-{
-  g_autoptr(GString) allow = g_string_sized_new (128);
-  gsize i;
-
-  for (i = 0; i < G_N_ELEMENTS (dav_methods); i++)
-    {
-      if (i > 0)
-        g_string_append (allow, ", ");
-      g_string_append (allow, dav_methods[i].name);
-    }
-
-  return g_string_free_and_steal (g_steal_pointer (&allow));
-}
-
-/* the DAV requests operate on the resources under the share root:
- * their path must be absolute (it begins with a "/"), but relative
- * to the root (no second "/" may follow the first one, or the path
- * would read as absolute on Windows too), carry no dot-dot segment,
- * and their URI must carry no fragment. The dot segments are
- * removed when the request URI is parsed, and the ones surviving
- * the path decoding are refused by libsoup: checking them here too
- * guards the traversal on its own, should the URI handling change.
- * A request which does not qualify is answered with 400 BAD
- * REQUEST. */
-static gboolean
-request_path_is_valid (SoupServerMessage *msg, const gchar *path)
-{
-  GUri *uri = soup_server_message_get_uri (msg);
-
-  if (!phodav_path_is_safe (path))
-    g_debug ("invalid request path: %s", path ?: "");
-  else if (!(uri && g_uri_get_fragment (uri) == NULL))
-    g_debug ("using fragments in query is not supported");
-  else
-    return TRUE;
-
-  soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
-  return FALSE;
-}
-
-/* a body which is not delimited by a Content-Length cannot be
- * checked before it is received: refuse it as soon as it grows over
- * the parse limit, so that a client cannot make the server
- * accumulate an unbounded request body in memory */
-static void
-got_chunk (SoupServerMessage *msg,
-           GBytes *chunk,
-           gpointer user_data)
-{
-  SoupMessageBody *body = soup_server_message_get_request_body (msg);
-
-  /* the accumulated length includes the chunk being signaled, the
-   * body is appended before the signal is emitted */
-  if (body->length <= PHODAV_MAX_REQUEST_BODY)
-    return;
-
-  g_debug ("refusing the oversized request body");
-
-  g_signal_handlers_disconnect_by_func (msg, got_chunk, user_data);
-
-  /* stop accumulating the rest of the body: it is drained, and the
-   * request is answered with 413 rather than parsed */
-  soup_message_body_set_accumulate (body, FALSE);
-  soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
-}
-
-static void
-got_headers (SoupServerMessage *msg,
-             gpointer user_data)
-{
-  PhodavServer *self = user_data;
-  GUri *uri = soup_server_message_get_uri (msg);
-  const gchar *path = g_uri_get_path (uri);
-  const gchar *method = soup_server_message_get_method (msg);
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  const DavMethod *m = dav_method_lookup (method);
-
-  /* the requests already answered (an authentication challenge, an
-   * invalid path...) are not phodav's to handle */
-  if (soup_server_message_get_status (msg) != 0)
-    return;
-
-  /* without a shared root, no handler is registered: the requests
-   * are answered by libsoup, phodav has nothing to do with them */
-  if (!self->root_handler)
-    return;
-
-  /* only the requests under the base path are phodav's. This is
-   * decided by the configured prefix, not by the routing libsoup
-   * performed: an auth domain makes libsoup return from its headers
-   * processing before the early handlers, so the routing cannot be
-   * observed here. When the SoupServer is shared with other
-   * handlers, the base path must be a prefix no other handler
-   * covers. */
-  if (!path || !path_is_covered (path, self->base_path))
-    return;
-
-  /* a method which streams its request body out while it is
-   * received (PUT) is started from here, before the body arrives:
-   * it is answered from its got-body callback, not by
-   * server_callback() */
-  if (m && m->headers_handler)
-    {
-      g_autoptr(GError) err = NULL;
-
-      /* the request is validated like server_callback() validates
-       * the ones of the other methods; a refused client may still
-       * be sending its body: have it drained, not accumulated */
-      if (!request_path_is_valid (msg, path))
-        {
-          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-          return;
-        }
-
-      /* a read-only server refuses the mutating methods before
-       * their upload is started, like server_callback() does for
-       * the other ones */
-      if (self->readonly && m->mutating)
-        {
-          soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-          soup_server_message_set_status (msg, SOUP_STATUS_FORBIDDEN, NULL);
-          return;
-        }
-
-      m->headers_handler (self->root_handler, msg, path, &err);
-
-      if (err)
-        g_debug ("%s %s: %s", method, path, err->message);
-
-      return;
-    }
-
-  /* the other methods have their whole request body parsed in
-   * memory: refuse an unreasonable Content-Length before the body
-   * is received (RFC 9110 section 15.5.15), and drain it without
-   * accumulating it */
-  if (soup_message_headers_get_content_length (request_headers) > PHODAV_MAX_REQUEST_BODY)
-    {
-      g_debug ("refusing the oversized request body");
-      soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-      soup_server_message_set_status (msg, SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE, NULL);
-      return;
-    }
-
-  /* a chunked body has no Content-Length to check in advance: watch
-   * it while it is received */
-  if (soup_message_headers_get_encoding (request_headers) == SOUP_ENCODING_CHUNKED)
-    g_signal_connect (msg, "got-chunk", G_CALLBACK (got_chunk), self);
-}
-
-static void
-request_started (SoupServer *server,
-                 SoupServerMessage *message,
-                 gpointer user_data)
-{
-  PhodavServer *self = user_data;
-
-  g_signal_connect (message, "got-headers", G_CALLBACK (got_headers), self);
-}
-
-static void
-server_callback (SoupServer *server, SoupServerMessage *msg, const gchar *path, GHashTable *query, gpointer user_data)
-{
-  g_autoptr(GError) err = NULL;
-  PathHandler *handler = user_data;
-  gint status = SOUP_STATUS_NOT_IMPLEMENTED;
-
-  const gchar *method = soup_server_message_get_method (msg);
-  const DavMethod *m = dav_method_lookup (method);
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  SoupMessageHeaders *response_headers;
-  g_autoptr(GHashTable) params = NULL;
-
-  g_debug ("%s %s HTTP/1.%d %s %s", method, path, soup_server_message_get_http_version (msg),
-           soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
-           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
-
-  /* got_headers() may have already rejected the request (oversized
-   * body, or a streamed method refused before its upload was
-   * started); do not overwrite its status with the result of the
-   * method handler */
-  if (soup_server_message_get_status (msg) != 0)
-    return;
-
-  /* libsoup matches handlers by a plain string prefix, so it can
-   * also route a path which merely starts with the base path here
-   * ("/davos" for "/dav"): it is not part of the share */
-  if (!handler_path_is_covered (handler, path))
-    {
-      soup_server_message_set_status (msg, SOUP_STATUS_NOT_FOUND, NULL);
-      return;
-    }
-
-  /* a streamed method was started from got_headers(), before its
-   * request body was received, and is answered from its got-body
-   * callback, once the file it writes is committed: there is no
-   * handler to run for it here, and its answer must not be
-   * overwritten */
-  if (m && m->headers_handler)
-    return;
-
-  if (!request_path_is_valid (msg, path))
-    return;
-
-  params = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
-  g_hash_table_insert (params, g_strdup ("charset"), g_strdup ("utf-8"));
-  response_headers = soup_server_message_get_response_headers (msg);
-  soup_message_headers_set_content_type (response_headers,
-                                         "text/xml", params);
-
-  if (method == SOUP_METHOD_OPTIONS)
-    {
-      g_autofree gchar *allow = dav_methods_allow ();
-
-      soup_message_headers_append (response_headers, "DAV", "1,2");
-
-      /* according to http://code.google.com/p/sabredav/wiki/Windows */
-      soup_message_headers_append (response_headers, "MS-Author-Via", "DAV");
-
-      soup_message_headers_append (response_headers, "Allow", allow);
-      status = SOUP_STATUS_OK;
-    }
-  else
-    {
-      if (m == NULL)
-        {
-          /* rather than warning, answer that the method is not implemented */
-          g_debug ("unsupported method %s", method);
-        }
-      else if (handler_get_readonly (handler) && m->mutating)
-        status = SOUP_STATUS_FORBIDDEN;
-      else
-        status = m->handler (handler, msg, path, &err);
-    }
-
-  soup_server_message_set_status (msg, status, NULL);
-
-  g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
-  if (err)
-    g_debug ("%s %s: %s", method, path, err->message);
-}
-
 /**
  * phodav_server_get_soup_server:
  * @server: a %PhodavServer
@@ -1128,6 +751,32 @@ phodav_server_get_soup_server (PhodavServer *self)
   g_return_val_if_fail (PHODAV_IS_SERVER (self), NULL);
 
   return self->server;
+}
+
+/**
+ * phodav_server_stop:
+ * @server: a #PhodavServer
+ *
+ * Stops serving DAV requests.
+ *
+ * The DAV handler is unregistered from the #SoupServer, the requests
+ * already in progress are cancelled, and the lock expiry sweep is
+ * stopped. The references held by the cancelled requests keep the
+ * server alive until they complete, but no new request is accepted.
+ *
+ * Unlike disposing the server, this does not wait for the outstanding
+ * requests, so it can be called from the main context while the server
+ * is busy. It must be called on the thread running the main context of
+ * the #SoupServer. A stopped server cannot be restarted.
+ *
+ * Since: 3.1
+ **/
+void
+phodav_server_stop (PhodavServer *self)
+{
+  g_return_if_fail (PHODAV_IS_SERVER (self));
+
+  server_stop (self);
 }
 
 /**

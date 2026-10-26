@@ -11,108 +11,128 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
-static gint
-error_to_status (GError *err)
+typedef struct _DeleteJob
 {
-  if (g_error_matches (err, G_FILE_ERROR, G_FILE_ERROR_NOENT))
-    return SOUP_STATUS_NOT_FOUND;
-  if (g_error_matches (err, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-    return SOUP_STATUS_NOT_FOUND;
+  PhodavRequest *req;
+  PathHandler *handler;
+  gchar *path;
+  GCancellable *cancellable;
+  GList *submitted;
+  GHashTable *mstatus;
+  GPtrArray *removed;
+  gint status;
+} DeleteJob;
 
-  return SOUP_STATUS_FORBIDDEN;
+static void
+delete_notify (const gchar *path, gint status, gpointer data)
+{
+  GHashTable *mstatus = data;
+
+  if (mstatus)
+    g_hash_table_insert (mstatus, g_strdup (path),
+                         response_new (NULL, status));
 }
 
-gint
-phodav_delete_file (PhodavServer *server, const gchar *path, GFile *file, GHashTable *mstatus, GCancellable *cancellable)
+static void
+delete_job_free (DeleteJob *job)
 {
-  g_autoptr(GFileEnumerator) e = NULL;
-  g_autoptr(GError) error = NULL;
-  gint status = SOUP_STATUS_NO_CONTENT;
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_free (job->path);
+  g_clear_object (&job->cancellable);
+  g_list_free_full (job->submitted, (GDestroyNotify) lock_submitted_free);
+  g_clear_pointer (&job->mstatus, g_hash_table_unref);
+  g_clear_pointer (&job->removed, g_ptr_array_unref);
+  g_free (job);
+}
 
-  e = g_file_enumerate_children (file, "standard::*", G_FILE_QUERY_INFO_NONE,
-                                 cancellable, NULL);
-  if (e)
+static gint
+delete_work (PhodavRequest *req, GError **err)
+{
+  DeleteJob *job = phodav_request_get_method_data (req);
+  g_autoptr(PhodavPath) handle = NULL;
+
+  (void) err;
+
+  handle = phodav_path_resolve (job->handler, job->path,
+                                PHODAV_PATH_EXISTING, &job->status);
+  if (!handle)
+    return job->status;
+
+  job->status = phodav_path_delete_tree (handle, job->path,
+                                         delete_notify, job->mstatus,
+                                         job->removed, job->cancellable);
+  return SOUP_STATUS_OK;
+}
+
+static gint
+delete_commit (PhodavRequest *req, GError **err)
+{
+  DeleteJob *job = phodav_request_get_method_data (req);
+  PhodavServer *server = handler_get_server (job->handler);
+  gint status = job->status;
+
+  (void) err;
+
+  if (job->removed)
     {
-      while (1)
-        {
-          g_autoptr(GFileInfo) info = g_file_enumerator_next_file (e, cancellable, &error);
-          if (!info)
-            break;
-          g_autoptr(GFile) del = g_file_get_child (file, g_file_info_get_name (info));
-          /* the multistatus keys are the decoded resource paths, the
-           * hrefs are escaped when the response is built */
-          g_autofree gchar *del_path = g_build_path ("/", path, g_file_info_get_name (info), NULL);
-          phodav_delete_file (server, del_path, del, mstatus, cancellable);
-        }
+      guint i;
 
-      g_file_enumerator_close (e, cancellable, NULL);
+      for (i = 0; i < job->removed->len; i++)
+        phodav_lock_store_remove_locks (server,
+                                        g_ptr_array_index (job->removed, i));
     }
 
-  if (error)
-    g_debug ("DELETE: enumeration error: %s", error->message);
-
-  g_autoptr(GError) del_error = NULL;
-  if (!g_file_delete (file, cancellable, &del_error))
-    {
-      if (mstatus)
-        {
-          status = error_to_status (del_error);
-
-          g_hash_table_insert (mstatus, g_strdup (path),
-                               response_new (NULL, status));
-        }
-    }
-  else
-    server_remove_locks (server, path);
-
-  if (del_error)
-    g_debug ("ignored del error: %s", del_error->message);
+  if (status == SOUP_STATUS_NO_CONTENT && job->mstatus &&
+      g_hash_table_size (job->mstatus) > 0)
+    status = set_response_multistatus (job->req, job->mstatus, NULL);
 
   return status;
 }
 
-gint
-phodav_method_delete (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+static gint
+delete_validate (PhodavRequest *req, GError **err)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
-  GFile *file = NULL;
-  g_autoptr(GHashTable) mstatus = NULL;
-  gint status;
-  g_autolist(LockSubmitted) submitted = NULL;
+  DeleteJob *job;
+  PhodavServer *server = handler_get_server (phodav_request_get_handler (req));
   DepthType depth;
+  gint status;
+
+  (void) err;
 
   /* RFC 4918 section 9.6.1: DELETE acts with depth infinity, and a
    * client must not submit any other depth */
-  if (!depth_from_string (soup_message_headers_get_one (soup_server_message_get_request_headers (msg), "Depth"), &depth) ||
+  if (!depth_from_string (soup_message_headers_get_one (phodav_request_get_request_headers (req), "Depth"), &depth) ||
       depth != DEPTH_INFINITY)
-    {
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto end;
-    }
+    return SOUP_STATUS_BAD_REQUEST;
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  job = g_new0 (DeleteJob, 1);
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->path = g_strdup (phodav_request_get_path (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) delete_job_free);
+
+  status = phodav_check_if (req, &job->submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    return status;
 
   /* deleting a collection also deletes its members: the tokens of
    * the locks held on them must be submitted too */
-  if (server_tree_has_other_locks (handler_get_server (handler), path, submitted))
-    {
-      status = SOUP_STATUS_LOCKED;
-      goto end;
-    }
+  if (phodav_lock_store_tree_has_other_locks (server, job->path,
+                                              job->submitted))
+    return SOUP_STATUS_LOCKED;
 
-  file = handler_get_file_for_path (handler, path);
-  mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
-                                   (GDestroyNotify) response_free);
+  job->mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                                        (GDestroyNotify) response_free);
+  job->removed = g_ptr_array_new_with_free_func (g_free);
+  job->status = SOUP_STATUS_NO_CONTENT;
 
-  status = phodav_delete_file (handler_get_server (handler), path, file, mstatus, cancellable);
-  if (status == SOUP_STATUS_NO_CONTENT)
-    if (g_hash_table_size (mstatus) > 0)
-      status = set_response_multistatus (msg, mstatus);
-
-end:
-  g_clear_object (&file);
-
-  return status;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_delete_ops = {
+  .validate = delete_validate,
+  .work = delete_work,
+  .commit = delete_commit,
+};

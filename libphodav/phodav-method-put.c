@@ -10,28 +10,47 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 
+/* the upload phases:
+ *
+ * RECEIVING -> DONE        the staged file was committed
+ * RECEIVING -> DISCARDING  the request failed; cleanup waits for writes
+ * DISCARDING -> DISCARDED  no write is in flight, the staged file is gone
+ *
+ * The phase is never left once it is decided. */
+typedef enum
+{
+  PUT_PHASE_RECEIVING,
+  PUT_PHASE_DONE,
+  PUT_PHASE_DISCARDING,
+  PUT_PHASE_DISCARDED,
+} PutPhase;
+
 typedef struct _PutContext
 {
   gint ref_count;
+  PhodavRequest *req; /* borrowed, the method data owner */
   SoupServerMessage *msg;
   GCancellable *cancellable;
+  PhodavServer *server;
+  gchar *path;
+  GList *submitted; /* the lock tokens accepted at the start */
   guint64 max_upload;
-  GFile *file;      /* the destination of the upload */
-  GFile *temp_file; /* the staged upload, renamed over the destination on success */
+  PhodavPath *handle; /* keeps the destination and its parent open */
+  GFile *temp_file;   /* the staged upload, renamed over the destination on success */
   GFileOutputStream *output;
   gchar *if_match; /* the conditional headers, rechecked before the rename */
   gchar *if_none_match;
-  GQueue *chunks;           /* the received chunks waiting for their turn on disk */
-  GBytes *chunk;            /* the chunk being written */
-  guint64 written;          /* bytes streamed to the file so far */
-  gint status;              /* the success status, answered once the file is committed */
-  gboolean closed;          /* the output stream was closed */
-  gboolean done;            /* the outcome is decided: the file is committed or discarded */
-  gboolean writing;         /* an asynchronous write is in flight */
-  gboolean body_done;       /* the whole request body was received */
-  gboolean paused;          /* the message I/O is paused while a write is in flight */
-  gboolean finished;        /* the message is done, it must not be touched anymore */
-  gboolean discard_pending; /* the staged file is cleaned up once the write ends */
+  GQueue *chunks;      /* the received chunks waiting for their turn on disk */
+  GBytes *chunk;       /* the chunk being written */
+  guint64 written;     /* bytes streamed to the file so far */
+  gint status;         /* the success status, answered once the file is committed */
+  gboolean closed;     /* the output stream was closed */
+  PutPhase phase;      /* the upload outcome, see above */
+  gboolean writing;    /* an asynchronous write is in flight */
+  gboolean body_done;  /* the whole request body was received */
+  gboolean paused;     /* the message I/O is paused while a write is in flight */
+  gboolean finished;   /* the message is done, it must not be touched anymore */
+  gboolean committing; /* the close/sync and commit are running or queued */
 } PutContext;
 
 static void put_write_next (PutContext *ctx);
@@ -40,20 +59,25 @@ static void put_chunk_written_cb (GObject *source_object,
                                   gpointer user_data);
 static void put_finish (PutContext *ctx);
 static void put_context_abort (PutContext *ctx);
+static void put_method_free (PutContext *ctx);
 static void method_put_got_chunk (SoupServerMessage *msg,
                                   GBytes *chunk,
                                   gpointer user_data);
+static void method_put_got_body (SoupServerMessage *msg,
+                                 gpointer user_data);
+static void method_put_finished (SoupServerMessage *msg,
+                                 gpointer user_data);
 static gboolean put_context_close (PutContext *ctx,
                                    GCancellable *cancellable,
                                    GError **error);
-static gint put_commit (PutContext *ctx,
-                        GCancellable *cancellable,
-                        GError **err);
+static gint put_commit_staged (PutContext *ctx,
+                               GCancellable *cancellable,
+                               GError **err);
 
 static PutContext *
 put_context_ref (PutContext *ctx)
 {
-  g_atomic_int_inc (&ctx->ref_count);
+  ctx->ref_count++;
 
   return ctx;
 }
@@ -65,7 +89,7 @@ put_context_cleanup_files (PutContext *ctx)
   g_autoptr(GError) close_error = NULL;
   g_autoptr(GError) delete_error = NULL;
 
-  if (!ctx->closed)
+  if (!ctx->closed && ctx->output)
     {
       ctx->closed = TRUE;
       if (!g_output_stream_close (G_OUTPUT_STREAM (ctx->output), NULL, &close_error))
@@ -80,6 +104,25 @@ put_context_cleanup_files (PutContext *ctx)
   g_clear_object (&ctx->temp_file);
 }
 
+static gboolean
+put_context_is_decided (const PutContext *ctx)
+{
+  return ctx->phase != PUT_PHASE_RECEIVING;
+}
+
+/* the staged file is removed once no write is in flight anymore:
+ * closing a GFileOutputStream while an asynchronous write is pending
+ * races with that write */
+static void
+put_context_discard_if_idle (PutContext *ctx)
+{
+  if (ctx->phase == PUT_PHASE_DISCARDING && !ctx->writing)
+    {
+      put_context_cleanup_files (ctx);
+      ctx->phase = PUT_PHASE_DISCARDED;
+    }
+}
+
 static void
 put_context_free (PutContext *ctx)
 {
@@ -90,7 +133,10 @@ put_context_free (PutContext *ctx)
 
   g_clear_object (&ctx->msg);
   g_clear_object (&ctx->cancellable);
-  g_clear_object (&ctx->file);
+  g_clear_object (&ctx->server);
+  g_free (ctx->path);
+  g_list_free_full (ctx->submitted, (GDestroyNotify) lock_submitted_free);
+  g_clear_pointer (&ctx->handle, phodav_path_unref);
   g_clear_object (&ctx->output);
   g_clear_pointer (&ctx->chunk, g_bytes_unref);
   if (ctx->chunks)
@@ -106,36 +152,32 @@ put_context_free (PutContext *ctx)
 static void
 put_context_unref (PutContext *ctx)
 {
-  if (g_atomic_int_dec_and_test (&ctx->ref_count))
+  if (--ctx->ref_count == 0)
     put_context_free (ctx);
 }
 
 static PutContext *
-put_context_new (PathHandler *handler,
-                 SoupServerMessage *msg,
-                 GFile *file,
-                 GFile *temp_file,
-                 GFileOutputStream *output,
-                 gint status,
+put_context_new (PhodavRequest *req,
                  const gchar *if_match,
                  const gchar *if_none_match)
 {
   PutContext *ctx = g_new0 (PutContext, 1);
+  SoupServerMessage *msg = phodav_request_get_message (req);
 
   ctx->ref_count = 1;
+  ctx->req = req;
   ctx->msg = g_object_ref (msg);
   /* the handler is owned by the SoupServer registration, and may be
    * freed before the asynchronous write completes: keep what the
    * callbacks need */
-  ctx->cancellable = g_object_ref (handler_get_cancellable (handler));
-  ctx->max_upload = handler_get_max_upload (handler);
-  ctx->file = g_object_ref (file);
-  ctx->temp_file = g_object_ref (temp_file);
-  ctx->output = g_object_ref (output);
+  ctx->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  ctx->server = g_object_ref (handler_get_server (phodav_request_get_handler (req)));
+  ctx->path = g_strdup (phodav_request_get_path (req));
+  ctx->max_upload = phodav_request_get_max_upload (req);
   ctx->chunks = g_queue_new ();
   ctx->if_match = g_strdup (if_match);
   ctx->if_none_match = g_strdup (if_none_match);
-  ctx->status = status;
+  ctx->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
   return ctx;
 }
@@ -161,27 +203,16 @@ put_preconditions_hold (const gchar *if_match, const gchar *if_none_match, const
 static void
 put_context_abort (PutContext *ctx)
 {
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     {
-      if (ctx->discard_pending && !ctx->writing)
-        {
-          ctx->discard_pending = FALSE;
-          put_context_cleanup_files (ctx);
-        }
-
+      put_context_discard_if_idle (ctx);
       return;
     }
 
-  ctx->done = TRUE;
+  ctx->phase = PUT_PHASE_DISCARDING;
   g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
 
-  if (ctx->writing)
-    {
-      ctx->discard_pending = TRUE;
-      return;
-    }
-
-  put_context_cleanup_files (ctx);
+  put_context_discard_if_idle (ctx);
 }
 
 static void
@@ -196,10 +227,15 @@ method_put_finished (SoupServerMessage *msg,
 
   /* the body was never fully received (the client hung up, or the
    * connection was interrupted): discard the partial file, rather
-   * than committing it by finalizing the stream */
-  put_context_abort (ctx);
+   * than committing it by finalizing the stream. A close/sync or
+   * commit already running decides the outcome. */
+  if (!ctx->committing)
+    {
+      if (!phodav_request_method_is_working (ctx->req))
+        put_context_abort (ctx);
 
-  put_context_unref (ctx);
+      phodav_request_method_abort (ctx->req);
+    }
 }
 
 /* resume the request I/O after a chunk was written, unless the
@@ -224,7 +260,7 @@ put_write_next (PutContext *ctx)
   gconstpointer data;
   gsize data_length;
 
-  if (ctx->done || ctx->writing)
+  if (put_context_is_decided (ctx) || ctx->writing)
     return;
 
   if (!ctx->chunk)
@@ -294,16 +330,10 @@ put_chunk_written_cb (GObject *source_object,
 
   /* the request was refused: disconnect the chunk handler already, and
    * drain what the client still sends without staging it */
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     {
       put_resume (ctx);
-
-      if (ctx->discard_pending && !ctx->writing)
-        {
-          ctx->discard_pending = FALSE;
-          put_context_cleanup_files (ctx);
-        }
-
+      put_context_discard_if_idle (ctx);
       put_context_unref (ctx);
       return;
     }
@@ -321,7 +351,6 @@ put_chunk_written_cb (GObject *source_object,
   if (ctx->body_done)
     {
       put_finish (ctx);
-      put_resume (ctx);
       put_context_unref (ctx);
       return;
     }
@@ -338,7 +367,7 @@ method_put_got_chunk (SoupServerMessage *msg,
   PutContext *ctx = user_data;
   gsize data_length;
 
-  if (ctx->done || ctx->finished)
+  if (put_context_is_decided (ctx) || ctx->finished)
     return;
 
   data_length = g_bytes_get_size (chunk);
@@ -352,47 +381,23 @@ method_put_got_chunk (SoupServerMessage *msg,
 }
 
 /* the whole body has been received and written to the staged file:
- * close it, rename it over the destination, and answer the success
- * status. This happens before the response is written, so that a
- * client which sees a success knows its upload is durable; a failure
- * to commit the file is answered with the matching error status, and
- * the staged file is discarded. */
+ * the driver runs the work step again to close and sync it, then takes
+ * the namespace for the lock recheck and the rename */
 static void
 put_finish (PutContext *ctx)
 {
-  g_autoptr(GError) error = NULL;
-  gint status;
-
-  if (ctx->done || ctx->writing || ctx->chunks->length > 0)
+  if (put_context_is_decided (ctx) || ctx->writing || ctx->chunks->length > 0 ||
+      ctx->committing)
     return;
 
+  ctx->committing = TRUE;
   g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
 
-  if (!put_context_close (ctx, ctx->cancellable, &error))
-    {
-      g_debug ("PUT: failed to close the staged file: %s", error->message);
+  /* hold the response until the close/sync and commit have decided
+   * the outcome */
+  soup_server_message_pause (ctx->msg);
 
-      put_context_abort (ctx);
-      soup_server_message_set_status (ctx->msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      goto end;
-    }
-
-  status = put_commit (ctx, ctx->cancellable, &error);
-  if (status != SOUP_STATUS_OK)
-    {
-      g_debug ("PUT: failed to commit the uploaded file: %s",
-               error ? error->message : "precondition failed");
-
-      put_context_abort (ctx);
-      soup_server_message_set_status (ctx->msg, status, NULL);
-      goto end;
-    }
-
-  ctx->done = TRUE;
-  soup_server_message_set_status (ctx->msg, ctx->status, NULL);
-
-end:
-  g_debug ("  -> %d %s\n", soup_server_message_get_status (ctx->msg), soup_server_message_get_reason_phrase (ctx->msg));
+  phodav_request_method_body_done (ctx->req);
 }
 
 static void
@@ -408,14 +413,13 @@ method_put_got_body (SoupServerMessage *msg,
 
   /* the upload was already discarded by a got-chunk handler: keep
    * the error status it set */
-  if (ctx->done)
+  if (put_context_is_decided (ctx))
     return;
 
   if (ctx->writing || ctx->chunks->length > 0)
     return;
 
   put_finish (ctx);
-  put_resume (ctx);
 }
 
 /* close the staged file, once */
@@ -432,13 +436,14 @@ put_context_close (PutContext *ctx, GCancellable *cancellable, GError **error)
 /* query the current destination; a missing destination is not an
  * error, and returns NULL with @error unset */
 static GFileInfo *
-put_query_destination (GFile *file, GCancellable *cancellable, GError **error)
+put_query_destination (PhodavPath *path, GFileQueryInfoFlags flags, GCancellable *cancellable, GError **error)
 {
   g_autoptr(GError) local_error = NULL;
   GFileInfo *info;
 
-  info = g_file_query_info (file, "standard::type,standard::size,etag::*,unix::inode",
-                            G_FILE_QUERY_INFO_NONE, cancellable, &local_error);
+  info = phodav_path_query_info (path,
+                                 "standard::type,standard::size,etag::*,unix::inode",
+                                 flags, cancellable, &local_error);
   if (info)
     return info;
 
@@ -452,14 +457,16 @@ put_query_destination (GFile *file, GCancellable *cancellable, GError **error)
  * destination as it is now, then atomically rename the staged file
  * over it. Nothing is committed when the conditions no longer hold. */
 static gint
-put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
+put_commit_staged (PutContext *ctx, GCancellable *cancellable, GError **err)
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autofree gchar *etag = NULL;
   gboolean exists = FALSE;
 
-  info = put_query_destination (ctx->file, cancellable, &error);
+  info = put_query_destination (ctx->handle,
+                                G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                cancellable, &error);
   if (error)
     {
       g_propagate_error (err, g_steal_pointer (&error));
@@ -473,19 +480,24 @@ put_commit (PutContext *ctx, GCancellable *cancellable, GError **err)
 
       if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
         return SOUP_STATUS_METHOD_NOT_ALLOWED;
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK)
+        return SOUP_STATUS_FORBIDDEN;
     }
 
   if (!put_preconditions_hold (ctx->if_match, ctx->if_none_match, etag, exists))
     return SOUP_STATUS_PRECONDITION_FAILED;
 
-  if (!g_file_move (ctx->temp_file, ctx->file, G_FILE_COPY_OVERWRITE,
-                    cancellable, NULL, NULL, &error))
+  if (!phodav_path_rename_files (ctx->temp_file,
+                                 phodav_path_get_named_file (ctx->handle),
+                                 cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         return SOUP_STATUS_CONFLICT;
 
+      gint status = phodav_status_from_error (error);
+
       g_propagate_error (err, g_steal_pointer (&error));
-      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+      return status;
     }
 
   /* the rename consumed the staged file */
@@ -540,22 +552,23 @@ put_temp_open (GFile *file, GFile **temp_file, GFileOutputStream **output, GCanc
   return FALSE;
 }
 
+/* open the staging file and remember the destination; the early lock
+ * and conditional checks are advisory, and are evaluated again under
+ * the namespace before the rename */
 static gint
-put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext **out, GCancellable *cancellable, GError **err)
+put_stage (PhodavRequest *req, PhodavPath *handle, PutContext *ctx, GCancellable *cancellable, GError **err)
 {
+  GFile *dest_file = phodav_path_get_named_file (handle);
   g_autoptr(GError) error = NULL;
   g_autoptr(GFileInfo) info = NULL;
   g_autoptr(GFile) temp_file = NULL;
   GFileOutputStream *output = NULL;
   gboolean exists = FALSE;
   g_autofree gchar *etag = NULL;
-  const gchar *if_match, *if_none_match;
-  SoupMessageHeaders *headers = soup_server_message_get_request_headers (msg);
   gint status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  *out = NULL;
-
-  info = put_query_destination (file, cancellable, &error);
+  info = put_query_destination (handle, G_FILE_QUERY_INFO_NONE,
+                                cancellable, &error);
   if (error)
     {
       g_propagate_error (err, g_steal_pointer (&error));
@@ -577,16 +590,13 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
 
   /* conditional requests, RFC 9110 section 13.1: a failing
    * precondition must be answered with 412, not by overwriting */
-  if_match = soup_message_headers_get_one (headers, "If-Match");
-  if_none_match = soup_message_headers_get_one (headers, "If-None-Match");
-
-  if (!put_preconditions_hold (if_match, if_none_match, etag, exists))
+  if (!put_preconditions_hold (ctx->if_match, ctx->if_none_match, etag, exists))
     {
       status = SOUP_STATUS_PRECONDITION_FAILED;
       goto end;
     }
 
-  if (!put_temp_open (file, &temp_file, &output, cancellable, &error))
+  if (!put_temp_open (dest_file, &temp_file, &output, cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         {
@@ -601,72 +611,144 @@ put_start (SoupServerMessage *msg, PathHandler *handler, GFile *file, PutContext
     }
 
   status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
-  *out = put_context_new (handler, msg, file, temp_file, output, status,
-                          if_match, if_none_match);
+  ctx->handle = phodav_path_ref (handle);
+  ctx->temp_file = g_steal_pointer (&temp_file);
+  ctx->output = g_steal_pointer (&output);
+  ctx->status = status;
 
 end:
   g_clear_object (&output);
   return status;
 }
 
-void
-phodav_method_put (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+static gint
+put_work (PhodavRequest *req, GError **err)
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
-  GFile *file = NULL;
-  g_autolist(LockSubmitted) submitted = NULL;
-  PutContext *ctx = NULL;
-  SoupMessageHeaders *request_headers = soup_server_message_get_request_headers (msg);
-  guint64 max_upload = handler_get_max_upload (handler);
+  PutContext *ctx = phodav_request_get_method_data (req);
+  g_autoptr(PhodavPath) handle = NULL;
+  g_autoptr(GError) error = NULL;
   gint status;
 
-  g_debug ("%s %s HTTP/1.%d %s %s", soup_server_message_get_method (msg), path, soup_server_message_get_http_version (msg),
-           soup_message_headers_get_one (request_headers, "X-Litmus") ?: "",
-           soup_message_headers_get_one (request_headers, "X-Litmus-Second") ?: "");
-
-  /* the request body is streamed to the file, or drained without
-   * being accumulated when the request is refused below and the
-   * client is still sending it */
-  soup_message_body_set_accumulate (soup_server_message_get_request_body (msg), FALSE);
-
-  /* the read-only refusal is enforced by the method dispatch, in
-   * got_headers(), before the upload is started */
-
-  /* an upload which is over the limit is refused before anything is
-   * written to disk, RFC 9110 section 15.5.15; a chunked body has
-   * no Content-Length and is cut off while it is streamed */
-  if (max_upload > 0 && (guint64) soup_message_headers_get_content_length (request_headers) > max_upload)
+  if (ctx->handle == NULL)
     {
-      status = SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE;
-      goto end;
+      /* stage the upload before the body arrives */
+      if (g_cancellable_is_cancelled (ctx->cancellable))
+        return 0;
+
+      status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+      handle = phodav_path_resolve (phodav_request_get_handler (req),
+                                    phodav_request_get_path (req),
+                                    PHODAV_PATH_CREATE, &status);
+      if (!handle)
+        return status;
+
+      status = put_stage (req, handle, ctx, ctx->cancellable, &error);
+      if (error && err)
+        *err = g_steal_pointer (&error);
+      return status == SOUP_STATUS_OK || status == SOUP_STATUS_CREATED
+               ? SOUP_STATUS_OK
+               : status;
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  /* the body has been written: close and sync the staged file, still
+   * outside the namespace */
+  if (g_cancellable_is_cancelled (ctx->cancellable))
+    return 0;
+
+  if (!put_context_close (ctx, ctx->cancellable, &error))
+    {
+      if (err)
+        *err = g_steal_pointer (&error);
+      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+    }
+
+  if (!phodav_path_sync (ctx->temp_file, ctx->cancellable, &error))
+    {
+      if (err)
+        *err = g_steal_pointer (&error);
+      return SOUP_STATUS_INTERNAL_SERVER_ERROR;
+    }
+
+  return SOUP_STATUS_OK;
+}
+
+static gint
+put_commit (PhodavRequest *req, GError **err)
+{
+  PutContext *ctx = phodav_request_get_method_data (req);
+  gint status;
+
+  if (ctx->finished || g_cancellable_is_cancelled (ctx->cancellable))
+    status = 0;
+  else if (phodav_lock_store_path_has_other_locks (ctx->server, ctx->path,
+                                                   ctx->submitted))
+    status = SOUP_STATUS_LOCKED;
+  else
+    status = put_commit_staged (ctx, ctx->cancellable, err);
+
+  if (status == SOUP_STATUS_OK)
+    {
+      ctx->phase = PUT_PHASE_DONE;
+      return ctx->status;
+    }
+
+  if (g_cancellable_is_cancelled (ctx->cancellable))
+    status = SOUP_STATUS_SERVICE_UNAVAILABLE;
+  else if (status == 0)
+    status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+  put_context_abort (ctx);
+  return status;
+}
+
+static gint
+put_validate (PhodavRequest *req, GError **err)
+{
+  SoupServerMessage *msg = phodav_request_get_message (req);
+  SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
+  guint64 max_upload = phodav_request_get_max_upload (req);
+  const gchar *if_match, *if_none_match;
+  PutContext *ctx;
+  gint status;
+
+  (void) err;
+
+  if (max_upload > 0 &&
+      (guint64) soup_message_headers_get_content_length (request_headers) > max_upload)
+    return SOUP_STATUS_REQUEST_ENTITY_TOO_LARGE;
+
+  if_match = soup_message_headers_get_one (request_headers, "If-Match");
+  if_none_match = soup_message_headers_get_one (request_headers, "If-None-Match");
+
+  ctx = put_context_new (req, if_match, if_none_match);
+  phodav_request_set_method_data (req, ctx, (GDestroyNotify) put_method_free);
+
+  status = phodav_check_if (req, &ctx->submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    return status;
 
-  file = handler_get_file_for_path (handler, path);
-  status = put_start (msg, handler, file, &ctx, cancellable, err);
-  if (!ctx)
-    goto end;
-
-  g_debug ("PUT temp %p", ctx->output);
-
-  /* the request is answered from method_put_got_body(), once its
-   * whole body has been received and the staged file committed:
-   * answering here would tell a "Expect: 100-continue" client its
-   * upload succeeded before it even sent the body */
   g_signal_connect (msg, "got-chunk", G_CALLBACK (method_put_got_chunk), ctx);
   g_signal_connect (msg, "got-body", G_CALLBACK (method_put_got_body), ctx);
   g_signal_connect (msg, "finished", G_CALLBACK (method_put_finished), ctx);
 
-  g_clear_object (&file);
-  return;
-
-end:
-  /* the request is refused: answer right away, the client may still
-   * be sending its body, which is drained without being accumulated */
-  soup_server_message_set_status (msg, status, NULL);
-  g_clear_object (&file);
-  g_debug ("  -> %d %s\n", soup_server_message_get_status (msg), soup_server_message_get_reason_phrase (msg));
+  return SOUP_STATUS_OK;
 }
+
+static void
+put_method_free (PutContext *ctx)
+{
+  if (ctx->msg)
+    {
+      g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_chunk, ctx);
+      g_signal_handlers_disconnect_by_func (ctx->msg, method_put_got_body, ctx);
+      g_signal_handlers_disconnect_by_func (ctx->msg, method_put_finished, ctx);
+    }
+
+  put_context_unref (ctx);
+}
+
+const PhodavMethodOps phodav_method_put_ops = {
+  .validate = put_validate,
+  .work = put_work,
+  .commit = put_commit,
+};

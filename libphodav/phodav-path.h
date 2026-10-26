@@ -14,6 +14,8 @@ struct _Path
   gchar *path;
   GList *locks;
   guint32 refs;
+  /* the lock store which owns this path, or NULL for a standalone one */
+  struct _PhodavPathTrie *store;
 };
 
 Path *path_ref (Path *path);

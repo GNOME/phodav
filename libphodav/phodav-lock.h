@@ -9,6 +9,11 @@
 
 G_BEGIN_DECLS
 
+/* bounds of the per-server lock store: a client cannot keep a lock
+ * forever, nor exhaust the server with an unbounded number of them */
+#define PHODAV_LOCK_TIMEOUT_MAX (60 * 60)
+#define PHODAV_LOCK_COUNT_MAX 1024
+
 typedef struct _LockSubmitted
 {
   gchar *path;
@@ -22,8 +27,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (DAVLock, dav_lock_free)
 
 void dav_lock_refresh_timeout (DAVLock *lock, guint timeout);
 
-/* a lock with a timeout which has elapsed; infinite locks never
- * expire and must be released with UNLOCK */
+/* a lock with a timeout which has elapsed; a zero timeout (not used
+ * by the server, which caps all requests) never expires */
 gboolean dav_lock_is_expired (const DAVLock *lock);
 
 xmlNodePtr dav_lock_get_activelock_node (const DAVLock *lock,

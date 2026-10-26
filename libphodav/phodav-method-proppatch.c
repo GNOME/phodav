@@ -14,9 +14,7 @@
 #include "phodav-priv.h"
 #include "phodav-utils.h"
 #include "phodav-virtual-dir.h"
-#ifdef HAVE_SYS_XATTR_H
-#include <sys/xattr.h>
-#endif
+#include "phodav-xattr.h"
 
 static xmlBufferPtr
 node_children_to_string (xmlNodePtr node)
@@ -38,63 +36,6 @@ xattr_target (GFile *file)
     return phodav_virtual_dir_root_get_real (PHODAV_VIRTUAL_DIR (file));
 
   return g_object_ref (file);
-}
-
-static gint
-xattr_no_attr_errno (void)
-{
-#if defined(ENOATTR)
-  return ENOATTR;
-#elif defined(ENODATA)
-  return ENODATA;
-#else
-  return ENOENT;
-#endif
-}
-
-#ifdef HAVE_SYS_XATTR_H
-static gssize
-xattr_get (const gchar *path, const gchar *name, gpointer value, gsize size)
-{
-#ifdef __APPLE__
-  return getxattr (path, name, value, size, 0, 0);
-#else
-  return getxattr (path, name, value, size);
-#endif
-}
-#endif /* HAVE_SYS_XATTR_H */
-
-static gint
-xattr_remove (const gchar *path, const gchar *name)
-{
-#ifdef HAVE_SYS_XATTR_H
-  if (!path)
-    return SOUP_STATUS_FORBIDDEN;
-
-#ifdef __APPLE__
-  if (removexattr (path, name, 0) == 0)
-#else
-  if (removexattr (path, name) == 0)
-#endif
-    return SOUP_STATUS_OK;
-
-  /* removing a property which is not set is not an error: PROPPATCH
-   * removals are idempotent, and litmus deletes the same property
-   * twice */
-  if (errno == xattr_no_attr_errno ())
-    return SOUP_STATUS_OK;
-
-  if (errno == EACCES || errno == EPERM)
-    return SOUP_STATUS_FORBIDDEN;
-
-  if (errno == ENOENT)
-    return SOUP_STATUS_NOT_FOUND;
-
-  return SOUP_STATUS_INTERNAL_SERVER_ERROR;
-#else
-  g_debug ("cannot remove xattr from %s, not supported", path); /* FIXME? */
-  return SOUP_STATUS_OK;
-#endif
 }
 
 static gint
@@ -143,7 +84,7 @@ prop_remove (GFile *file, xmlNodePtr attrnode)
     return SOUP_STATUS_FORBIDDEN;
 
   path = g_file_get_path (target);
-  return xattr_remove (path, attrname);
+  return phodav_xattr_remove (path, attrname);
 }
 
 typedef enum
@@ -229,13 +170,13 @@ prop_snapshot (GFile *target, const gchar *gio_name, const gchar *raw_name, gcha
 
     if (path)
       {
-        gssize size = xattr_get (path, raw_name, NULL, 0);
+        gssize size = phodav_xattr_get (path, raw_name, NULL, 0);
 
         if (size >= 0)
           {
             g_autofree gchar *buf = g_malloc (size + 1);
 
-            if (xattr_get (path, raw_name, buf, size) != size)
+            if (phodav_xattr_get (path, raw_name, buf, size) != size)
               {
                 g_debug ("PROPPATCH: failed to read the previous value of %s",
                          raw_name);
@@ -252,7 +193,7 @@ prop_snapshot (GFile *target, const gchar *gio_name, const gchar *raw_name, gcha
         {
           gint errsv = errno;
 
-          if (errsv == xattr_no_attr_errno () || errsv == ENOENT)
+          if (errsv == phodav_xattr_no_attr_errno () || errsv == ENOENT)
             return SOUP_STATUS_OK;
 
           g_debug ("PROPPATCH: failed to read the previous value of %s: %s",
@@ -326,7 +267,7 @@ prop_change_rollback (GFile *file, PropChange *change, GCancellable *cancellable
     {
       g_autofree gchar *path = g_file_get_path (target);
 
-      if (xattr_remove (path, change->raw_name) != SOUP_STATUS_OK)
+      if (phodav_xattr_remove (path, change->raw_name) != SOUP_STATUS_OK)
         g_debug ("PROPPATCH: failed to remove %s", change->raw_name);
     }
 }
@@ -434,39 +375,115 @@ prop_collect (GList **changes, xmlNodePtr instruction, PropOp op)
   return found;
 }
 
-gint
-phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gchar *path, GError **err)
+typedef struct _PropPatchJob
 {
-  GCancellable *cancellable = handler_get_cancellable (handler);
-  GFile *file = NULL;
-  g_autoptr(GHashTable) mstatus = NULL; // path -> statlist
-  g_auto(DavDoc) doc = {
-    0,
-  };
-  xmlNodePtr node;
-  GList *props = NULL;
-  g_autolist(PropChange) changes = NULL;
-  g_autolist(LockSubmitted) submitted = NULL;
+  PhodavRequest *req;
+  PathHandler *handler;
+  gchar *path;
+  GCancellable *cancellable;
+  GList *submitted;
+  DavDoc doc;
+  GList *changes;
   gint status;
+} PropPatchJob;
 
-  if (!davdoc_parse (&doc, soup_server_message_get_request_body (msg), "propertyupdate"))
+static void
+proppatch_job_free (PropPatchJob *job)
+{
+  g_clear_pointer (&job->req, phodav_request_unref);
+  g_clear_pointer (&job->handler, path_handler_unref);
+  g_free (job->path);
+  g_clear_object (&job->cancellable);
+  g_list_free_full (job->submitted, (GDestroyNotify) lock_submitted_free);
+  g_list_free_full (job->changes, (GDestroyNotify) prop_change_free);
+  davdoc_free (&job->doc);
+  g_free (job);
+}
+
+static gint
+proppatch_work (PhodavRequest *req, GError **err)
+{
+  PropPatchJob *job = phodav_request_get_method_data (req);
+  g_autoptr(PhodavPath) handle = NULL;
+  GFile *file;
+
+  (void) err;
+
+  handle = phodav_path_resolve (job->handler, job->path,
+                                PHODAV_PATH_CREATE, &job->status);
+  if (!handle)
+    return SOUP_STATUS_OK;
+
+  file = phodav_path_get_file (handle);
+  prop_changes_apply (file, job->changes, job->cancellable);
+  return SOUP_STATUS_OK;
+}
+
+static gint
+proppatch_commit (PhodavRequest *req, GError **err)
+{
+  PropPatchJob *job = phodav_request_get_method_data (req);
+  gint status = job->status;
+  g_autolist(ResponseProp) props = NULL;
+
+  (void) err;
+
+  if (status == SOUP_STATUS_OK)
     {
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto end;
+      g_autoptr(GHashTable) mstatus = NULL;
+
+      for (GList *l = job->changes; l; l = l->next)
+        {
+          PropChange *change = l->data;
+
+          props = g_list_append (props,
+                                 response_prop_new (g_steal_pointer (&change->response),
+                                                    change->status));
+        }
+
+      mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
+                                       (GDestroyNotify) response_free);
+      g_hash_table_insert (mstatus, g_strdup (job->path),
+                           response_new (g_steal_pointer (&props), 0));
+
+      status = set_response_multistatus (job->req, mstatus, NULL);
     }
 
-  status = phodav_check_if (handler, msg, path, &submitted);
+  return status;
+}
+
+static gint
+proppatch_validate (PhodavRequest *req, GError **err)
+{
+  PropPatchJob *job;
+  PhodavServer *server = handler_get_server (phodav_request_get_handler (req));
+  xmlNodePtr node;
+  gint status;
+  PropOp op;
+
+  (void) err;
+
+  job = g_new0 (PropPatchJob, 1);
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->path = g_strdup (phodav_request_get_path (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) proppatch_job_free);
+
+  if (!davdoc_parse (&job->doc, phodav_request_get_request_body (req),
+                     "propertyupdate"))
+    return SOUP_STATUS_BAD_REQUEST;
+
+  status = phodav_check_if (req, &job->submitted);
   if (status != SOUP_STATUS_OK)
-    goto end;
+    return status;
 
-  file = handler_get_file_for_path (handler, path);
-  mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
-                                   (GDestroyNotify) response_free);
+  if (phodav_lock_store_path_has_other_locks (server, job->path,
+                                              job->submitted))
+    return SOUP_STATUS_LOCKED;
 
-  for (node = doc.root->children; node; node = node->next)
+  for (node = job->doc.root->children; node; node = node->next)
     {
-      PropOp op;
-
       if (!xml_node_is_element (node))
         continue;
 
@@ -482,41 +499,23 @@ phodav_method_proppatch (PathHandler *handler, SoupServerMessage *msg, const gch
           continue;
         }
 
-      if (!prop_collect (&changes, node, op))
-        {
-          status = SOUP_STATUS_BAD_REQUEST;
-          goto end;
-        }
+      if (!prop_collect (&job->changes, node, op))
+        return SOUP_STATUS_BAD_REQUEST;
     }
 
   /* a body without any set or remove instruction (or with none in
    * the DAV namespace) names no property to report: it is a
    * malformed request (RFC 4918 section 9.9), the multistatus
    * response would be empty otherwise */
-  if (!changes)
-    {
-      status = SOUP_STATUS_BAD_REQUEST;
-      goto end;
-    }
+  if (!job->changes)
+    return SOUP_STATUS_BAD_REQUEST;
 
-  prop_changes_apply (file, changes, cancellable);
-
-  for (GList *l = changes; l; l = l->next)
-    {
-      PropChange *change = l->data;
-
-      props = g_list_append (props,
-                             response_prop_new (g_steal_pointer (&change->response),
-                                                change->status));
-    }
-
-  g_hash_table_insert (mstatus, g_strdup (path),
-                       response_new (props, 0));
-
-  status = set_response_multistatus (msg, mstatus);
-
-end:
-  g_clear_object (&file);
-
-  return status;
+  job->status = SOUP_STATUS_OK;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_proppatch_ops = {
+  .validate = proppatch_validate,
+  .work = proppatch_work,
+  .commit = proppatch_commit,
+};

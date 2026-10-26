@@ -1067,6 +1067,11 @@ test_movecopy_symlink_destination (DavFixture *f, gconstpointer user_data)
   g_assert_true (g_file_make_symbolic_link (link, outside, NULL, &error));
   g_assert_no_error (error);
 
+  /* the same policy applies to every method: a symlinked GET source
+   * is refused instead of following the link out of the share */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/link", NULL, NULL),
+                    ==, SOUP_STATUS_FORBIDDEN);
+
   dest = g_strconcat (f->base_uri, "link/copied.txt", NULL);
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
                                 "Destination", dest, NULL),
@@ -1400,11 +1405,10 @@ test_propfind_dedup (DavFixture *f, gconstpointer user_data)
 
 /* Regression test for the multistatus href escaping: the names are
  * URI-escaped in the hrefs, and a client can fetch the resources
- * they report. The markup escaping which used to be applied to the
- * names reported "amp&amp;and.txt" for a file named "amp&and.txt",
- * which cannot be fetched, and left a "?" or a "#" raw in the
- * href, where a client parses them as the query or the fragment
- * separator. */
+ * they report. Applying markup escaping to the names would report
+ * "amp&amp;and.txt" for a file named "amp&and.txt", which cannot be
+ * fetched, and would leave a "?" or a "#" raw in the href, where a
+ * client parses them as the query or the fragment separator. */
 static void
 test_propfind_escaping (DavFixture *f, gconstpointer user_data)
 {
@@ -2375,6 +2379,12 @@ test_locked_destination (DavFixture *f, gconstpointer user_data)
       g_assert_false (g_file_test (source, G_FILE_TEST_EXISTS));
       assert_file_contents (moved, "member\n");
     }
+
+    /* the source and its member locks are gone with the moved
+     * collection: the old token no longer unlocks anything */
+    g_assert_cmpuint (dav_status (f, "UNLOCK", "/moving/member.txt", NULL,
+                                  "Lock-Token", member_token, NULL),
+                      ==, SOUP_STATUS_CONFLICT);
   }
 }
 
@@ -2464,10 +2474,9 @@ test_get_listing_escaping (DavFixture *f, gconstpointer user_data)
   g_assert_nonnull (strstr (text, ">tag&lt;le&gt;.txt</a>"));
 }
 
-/* a directory with more entries than the server is willing to list
- * is refused rather than built in memory */
+/* a large directory is streamed, with no entry or size cap */
 static void
-test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
+test_get_listing_large (DavFixture *f, gconstpointer user_data)
 {
   g_autoptr(GBytes) body = NULL;
   g_autoptr(SoupMessage) msg = NULL;
@@ -2475,7 +2484,6 @@ test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
 
   make_directory (f->dir, "large");
 
-  /* one entry more than the cap of phodav-method-get.c */
   for (i = 0; i <= 4096; i++)
     {
       g_autofree gchar *name = g_strdup_printf ("file-%04u", i);
@@ -2485,7 +2493,8 @@ test_get_listing_too_large (DavFixture *f, gconstpointer user_data)
     }
 
   msg = dav_request (f, SOUP_METHOD_GET, "/large", NULL, &body, NULL);
-  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+  g_assert_nonnull (strstr (g_bytes_get_data (body, NULL), "file-4096"));
 
   /* the directory itself is still there, and so is a file in it */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/large", NULL, NULL), ==, SOUP_STATUS_OK);
@@ -3343,7 +3352,7 @@ test_shared_server (DavFixture *f, gconstpointer user_data)
   /* an authenticated PUT to the foreign handler is not streamed into
    * the share by phodav: the foreign handler answers, and nothing is
    * written. This is the path libsoup routes without running the
-   * early handlers, which the Authorization header inference used to
+   * early handlers, which the Authorization header inference must not
    * mistake for a phodav request. */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/upload/foreign.txt", "data", NULL),
                     ==, SOUP_STATUS_OK);
@@ -3364,6 +3373,382 @@ test_shared_server (DavFixture *f, gconstpointer user_data)
   }
 }
 
+/* small malformed lockinfo documents, one for each rejection path */
+#define LOCK_EMPTY_SCOPE \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope/><D:locktype><D:write/></D:locktype></D:lockinfo>"
+#define LOCK_UNKNOWN_SCOPE \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:other/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"
+#define LOCK_UNKNOWN_TYPE \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:other/></D:locktype></D:lockinfo>"
+#define LOCK_NO_SCOPE \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:locktype><D:write/></D:locktype></D:lockinfo>"
+#define LOCK_TWO_OWNERS                                                    \
+  "<D:lockinfo xmlns:D=\"DAV:\"><D:lockscope><D:exclusive/></D:lockscope>" \
+  "<D:locktype><D:write/></D:locktype><D:owner>first</D:owner>"            \
+  "<D:owner>second</D:owner></D:lockinfo>"
+
+static void
+test_method_edge_cases (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *dest = NULL;
+
+  /* MKCOL refusals: a body, an existing resource, a missing parent,
+   * and a failing If condition */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/body-col", "not empty", NULL),
+                    ==, SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_METHOD_NOT_ALLOWED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/missing/col", NULL, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/if-col", NULL,
+                                "If", "([\"not-the-etag\"])", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+
+  /* MKCOL below a locked collection */
+  {
+    g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", "/dir", LOCK_EXCLUSIVE, NULL,
+                                              "Depth", "0", NULL);
+    g_autofree gchar *token = NULL;
+
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
+    token = g_strdup (soup_message_headers_get_one (soup_message_get_response_headers (msg),
+                                                    "Lock-Token"));
+    g_assert_nonnull (token);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MKCOL, "/dir/sub", NULL, NULL),
+                      ==, SOUP_STATUS_LOCKED);
+    g_assert_cmpuint (dav_status (f, "UNLOCK", "/dir", NULL, "Lock-Token", token, NULL),
+                      ==, SOUP_STATUS_NO_CONTENT);
+  }
+
+  /* a PUT cannot replace a collection */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/dir", "data", NULL),
+                    ==, SOUP_STATUS_METHOD_NOT_ALLOWED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing/dir/f.txt", "data", NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* conditional PUT on a missing resource and on an existing one */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/missing.txt", "data",
+                                "If-Match", "\"missing\"", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "If-None-Match", "*", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_PUT, "/hello.txt", "data",
+                                "Content-Range", "bytes 0-3/4", NULL),
+                    ==, SOUP_STATUS_OK);
+
+  /* GET and HEAD range interactions */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL,
+                                "Range", "bytes=0-4", "If-Range", "\"other\"", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_HEAD, "/hello.txt", NULL,
+                                "Range", "bytes=0-4", NULL),
+                    ==, SOUP_STATUS_OK);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/empty.txt", NULL,
+                                "Range", "bytes=0-", NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+
+  /* COPY/MOVE refusals */
+  dest = g_build_path ("/", f->base_uri, "copy.txt", NULL);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/missing.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, "Depth", "1", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", "::::", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", "/%zz", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, NULL),
+                    ==, SOUP_STATUS_CREATED);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_COPY, "/hello.txt", NULL,
+                                "Destination", dest, "Overwrite", "F", NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+  {
+    g_autofree gchar *hello_dest = g_build_path ("/", f->base_uri, "hello.txt", NULL);
+
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/copy.txt", NULL,
+                                  "Destination", hello_dest, "Overwrite", "F", NULL),
+                      ==, SOUP_STATUS_PRECONDITION_FAILED);
+    g_assert_cmpuint (dav_status (f, SOUP_METHOD_MOVE, "/copy.txt", NULL,
+                                  "Destination", hello_dest, NULL),
+                      ==, SOUP_STATUS_NO_CONTENT);
+  }
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/dir", NULL,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_DELETE, "/missing.txt", NULL, NULL),
+                    ==, SOUP_STATUS_NOT_FOUND);
+
+  /* LOCK refusals: an invalid depth and malformed lock information */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/lock.txt", LOCK_EXCLUSIVE,
+                                "Depth", "1", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/lock.txt", LOCK_EMPTY_SCOPE,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/lock.txt", LOCK_UNKNOWN_SCOPE,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/lock.txt", LOCK_UNKNOWN_TYPE,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/lock.txt", LOCK_NO_SCOPE,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "LOCK", "/missing/lock.txt", LOCK_EXCLUSIVE,
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_CONFLICT);
+
+  /* an extra owner element is ignored */
+  {
+    g_autoptr(SoupMessage) msg = dav_request (f, "LOCK", "/two-owners.txt",
+                                              LOCK_TWO_OWNERS, NULL,
+                                              "Depth", "0", NULL);
+
+    g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_CREATED);
+    g_clear_object (&msg);
+  }
+
+  /* refreshing a lock with an unknown token fails */
+  g_assert_cmpuint (dav_status (f, "LOCK", "/two-owners.txt", NULL,
+                                "If", "(<urn:uuid:00000000-0000-0000-0000-000000000000>)",
+                                NULL),
+                    ==, SOUP_STATUS_PRECONDITION_FAILED);
+}
+
+static void
+test_propfind_edge_cases (DavFixture *f, gconstpointer user_data)
+{
+  /* a propfind document with comments and unknown elements */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt",
+                                "<D:propfind xmlns:D=\"DAV:\"><!-- comment -->"
+                                "<D:prop><D:getcontentlength/></D:prop></D:propfind>",
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt",
+                                "<D:propfind xmlns:D=\"DAV:\"><D:prop>"
+                                "<!-- comment --><D:getcontentlength/></D:prop></D:propfind>",
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt",
+                                "<D:propfind xmlns:D=\"DAV:\"><D:allprop/>"
+                                "<D:include><D:getetag/></D:include></D:propfind>",
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+  /* a body with only an unknown element names no property */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/hello.txt",
+                                "<D:propfind xmlns:D=\"DAV:\"><D:unknown/></D:propfind>",
+                                "Depth", "0", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* an unknown Depth is refused */
+  g_assert_cmpuint (dav_status (f, "PROPFIND", "/", PROPFIND_ALLPROP,
+                                "Depth", "2", NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+}
+
+static void
+test_proppatch_edge_cases (DavFixture *f, gconstpointer user_data)
+{
+  if (!dead_properties_supported (f))
+    {
+      g_test_skip ("user xattrs are not supported by the filesystem");
+      return;
+    }
+
+  /* a set without a prop element, and a prop without children */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:set/></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                                "<!-- comment --></D:prop></D:set></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_BAD_REQUEST);
+  /* a comment in the prop is not a property */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:set><D:prop>"
+                                "<!-- comment --><user.phodav-test>v</user.phodav-test>"
+                                "</D:prop></D:set></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+  /* removing a property which does not exist is reported per property */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/hello.txt",
+                                "<D:propertyupdate xmlns:D=\"DAV:\"><D:remove><D:prop>"
+                                "<user.phodav-missing/></D:prop></D:remove></D:propertyupdate>",
+                                NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+  /* a proppatch on a missing resource */
+  g_assert_cmpuint (dav_status (f, "PROPPATCH", "/missing.txt", PROPPATCH_SET, NULL),
+                    ==, SOUP_STATUS_MULTI_STATUS);
+}
+
+#ifdef G_OS_UNIX
+/* the streamed GET tests speak HTTP on a raw socket: they need the
+ * response headers before the body, and a way to break the connection
+ * in the middle of the stream */
+static GSocketConnection *
+raw_connect (DavFixture *f)
+{
+  g_autoptr(GUri) uri = g_uri_parse (f->base_uri, SOUP_HTTP_URI_FLAGS, NULL);
+  g_autoptr(GSocketClient) client = g_socket_client_new ();
+  g_autoptr(GError) error = NULL;
+  GSocketConnection *conn;
+
+  g_assert_nonnull (uri);
+  conn = g_socket_client_connect_to_host (client, g_uri_get_host (uri),
+                                          g_uri_get_port (uri), NULL, &error);
+  g_assert_no_error (error);
+  g_socket_set_timeout (g_socket_connection_get_socket (conn), 10);
+
+  return conn;
+}
+
+static void
+raw_send (GSocketConnection *conn, const gchar *request)
+{
+  GOutputStream *out = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+  g_autoptr(GError) error = NULL;
+
+  g_assert_true (g_output_stream_write_all (out, request, strlen (request),
+                                            NULL, NULL, &error));
+  g_assert_no_error (error);
+}
+
+static gchar *
+raw_read_headers (GSocketConnection *conn)
+{
+  GInputStream *in = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+  g_autoptr(GString) headers = g_string_new (NULL);
+
+  while (!g_str_has_suffix (headers->str, "\r\n\r\n"))
+    {
+      g_autoptr(GError) error = NULL;
+      gchar c;
+      gssize n = g_input_stream_read (in, &c, 1, NULL, &error);
+
+      g_assert_no_error (error);
+      g_assert_cmpint (n, >, 0);
+      g_string_append_c (headers, c);
+      g_assert_cmpuint (headers->len, <, 64 * 1024);
+    }
+
+  return g_string_free_and_steal (g_steal_pointer (&headers));
+}
+
+/* a connection cut by the server is closed asynchronously on its main
+ * context: let the server thread finish the pending close before the
+ * fixture quits the loop, or the task outlives the test and leaks */
+static void
+wait_server_settle (void)
+{
+  g_usleep (500 * 1000);
+}
+
+/* read until the server closes the connection, returning the byte count */
+static gsize
+raw_drain (GSocketConnection *conn)
+{
+  GInputStream *in = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+  gchar buf[8192];
+  gsize total = 0;
+
+  while (TRUE)
+    {
+      g_autoptr(GError) error = NULL;
+      gssize n = g_input_stream_read (in, buf, sizeof (buf), NULL, &error);
+
+      if (n <= 0)
+        break;
+      total += n;
+    }
+
+  return total;
+}
+
+static void
+test_get_truncated (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "big.txt", NULL);
+  g_autoptr(GString) big = g_string_sized_new (8 * 1024 * 1024);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autofree gchar *headers = NULL;
+  gsize received;
+
+  while (big->len < 8 * 1024 * 1024)
+    g_string_append (big, "0123456789abcdef");
+  g_assert_true (g_file_set_contents (path, big->str, big->len, NULL));
+
+  conn = raw_connect (f);
+  raw_send (conn, "GET /big.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+  headers = raw_read_headers (conn);
+  g_assert_nonnull (strstr (headers, "200 "));
+
+  /* the file shrinks while it is being sent: the announced length
+   * cannot be satisfied, the connection is cut instead of ending the
+   * chunked body */
+  g_assert_cmpint (truncate (path, 0), ==, 0);
+  received = raw_drain (conn);
+  g_assert_cmpuint (received, <, big->len);
+  wait_server_settle ();
+}
+
+static void
+test_get_fifo (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "fifo", NULL);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autofree gchar *headers = NULL;
+  gsize received;
+
+  g_assert_cmpint (mkfifo (path, 0600), ==, 0);
+
+  conn = raw_connect (f);
+  raw_send (conn, "GET /fifo HTTP/1.1\r\nHost: localhost\r\n\r\n");
+  headers = raw_read_headers (conn);
+  g_assert_nonnull (strstr (headers, "200 "));
+
+  /* the descriptor of a FIFO is not seekable, reading it fails */
+  received = raw_drain (conn);
+  g_assert_cmpuint (received, ==, 0);
+  wait_server_settle ();
+}
+
+static void
+test_get_client_abort (DavFixture *f, gconstpointer user_data)
+{
+  g_autofree gchar *path = g_build_filename (f->dir, "big.txt", NULL);
+  g_autoptr(GString) big = g_string_sized_new (4 * 1024 * 1024);
+  g_autoptr(GSocketConnection) conn = NULL;
+  g_autofree gchar *headers = NULL;
+
+  while (big->len < 4 * 1024 * 1024)
+    g_string_append (big, "0123456789abcdef");
+  g_assert_true (g_file_set_contents (path, big->str, big->len, NULL));
+
+  conn = raw_connect (f);
+  raw_send (conn, "GET /big.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+  headers = raw_read_headers (conn);
+  g_assert_nonnull (strstr (headers, "200 "));
+
+  /* hang up in the middle of the body */
+  g_clear_object (&conn);
+
+  /* the server notices the hang up and keeps serving the next client */
+  g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
+                    ==, SOUP_STATUS_OK);
+  wait_server_settle ();
+}
+#endif
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -3375,7 +3760,7 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/get-conditional", DavFixture, NULL, dav_fixture_setup, test_get_conditional, dav_fixture_teardown);
   g_test_add ("/dav/get-range", DavFixture, NULL, dav_fixture_setup, test_get_range, dav_fixture_teardown);
   g_test_add ("/dav/get-listing-escaping", DavFixture, NULL, dav_fixture_setup, test_get_listing_escaping, dav_fixture_teardown);
-  g_test_add ("/dav/get-listing-too-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_too_large, dav_fixture_teardown);
+  g_test_add ("/dav/get-listing-large", DavFixture, NULL, dav_fixture_setup, test_get_listing_large, dav_fixture_teardown);
   g_test_add ("/dav/unknown-method", DavFixture, NULL, dav_fixture_setup, test_unknown_method, dav_fixture_teardown);
   g_test_add ("/dav/put", DavFixture, NULL, dav_fixture_setup, test_put, dav_fixture_teardown);
   g_test_add ("/dav/put-large-chunked", DavFixture, NULL, dav_fixture_setup, test_put_large_chunked, dav_fixture_teardown);
@@ -3419,6 +3804,14 @@ main (gint argc, gchar *argv[])
   g_test_add ("/dav/lock/tree-conflict", DavFixture, NULL, dav_fixture_setup, test_lock_tree_conflict, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh", DavFixture, NULL, dav_fixture_setup, test_lock_refresh, dav_fixture_teardown);
   g_test_add ("/dav/lock/refresh-forms", DavFixture, NULL, dav_fixture_setup, test_lock_refresh_forms, dav_fixture_teardown);
+#ifdef G_OS_UNIX
+  g_test_add ("/dav/get-truncated", DavFixture, NULL, dav_fixture_setup, test_get_truncated, dav_fixture_teardown);
+  g_test_add ("/dav/get-fifo", DavFixture, NULL, dav_fixture_setup, test_get_fifo, dav_fixture_teardown);
+  g_test_add ("/dav/get-client-abort", DavFixture, NULL, dav_fixture_setup, test_get_client_abort, dav_fixture_teardown);
+#endif
+  g_test_add ("/dav/method-edge-cases", DavFixture, NULL, dav_fixture_setup, test_method_edge_cases, dav_fixture_teardown);
+  g_test_add ("/dav/propfind/edge-cases", DavFixture, NULL, dav_fixture_setup, test_propfind_edge_cases, dav_fixture_teardown);
+  g_test_add ("/dav/proppatch/edge-cases", DavFixture, NULL, dav_fixture_setup, test_proppatch_edge_cases, dav_fixture_teardown);
   g_test_add ("/dav/if-etag", DavFixture, NULL, dav_fixture_setup, test_if_etag, dav_fixture_teardown);
   g_test_add ("/dav/if-malformed", DavFixture, NULL, dav_fixture_setup, test_if_malformed, dav_fixture_teardown);
 
