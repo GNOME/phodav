@@ -1073,10 +1073,10 @@ phodav_server_callback (SoupServer *server, SoupServerMessage *msg, const gchar 
       gint status;
 
       /* the method starts on the main context: it validates the
-       * request and takes the namespace before handing only the
-       * blocking filesystem calls to a one-shot job. A zero return
-       * means the method will call phodav_request_complete() once its
-       * job has settled. */
+       * request before handing only the blocking filesystem calls to
+       * a one-shot job. Mutating methods take the namespace, reads do
+       * not. A zero return means the method will call
+       * phodav_request_complete() once its job has settled. */
       req->handler_func = m->handler;
       request_state_add (req, PHODAV_REQUEST_RUNNING);
 

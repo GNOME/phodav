@@ -381,7 +381,6 @@ static void
 get_open_done (gpointer data)
 {
   GetJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
   GetFilePull *pull;
 
   if (job->error)
@@ -399,7 +398,6 @@ get_open_done (gpointer data)
                                get_file_pull, pull, get_file_pull_free);
 
 complete:
-  phodav_server_namespace_release (server);
   phodav_request_complete (job->req, job->status,
                            g_steal_pointer (&job->error));
   get_job_free (job);
@@ -505,12 +503,11 @@ get_done (gpointer data)
     if (job->count == 0)
       goto complete;
 
-    phodav_server_dispatch (server, get_open_run, get_open_done, job);
+    phodav_server_dispatch_stream (server, get_open_run, get_open_done, job);
     return;
   }
 
 complete:
-  phodav_server_namespace_release (server);
   phodav_request_complete (job->req, job->status,
                            g_steal_pointer (&job->error));
   get_job_free (job);
@@ -524,13 +521,14 @@ get_start (gpointer data)
 
   if (phodav_request_is_finished (job->req))
     {
-      phodav_server_namespace_release (server);
       phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
       get_job_free (job);
       return;
     }
 
-  phodav_server_dispatch (server, get_run, get_done, job);
+  /* reads do not take the namespace: their filesystem work runs on
+   * the parallel worker pool, beside the serialised mutations */
+  phodav_server_dispatch_stream (server, get_run, get_done, job);
 }
 
 gint
@@ -547,8 +545,7 @@ phodav_method_get (PhodavRequest *req, GError **err)
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
   job->fd = -1;
 
-  phodav_server_namespace_acquire (handler_get_server (job->handler),
-                                   get_start, job);
+  get_start (job);
 
   return 0;
 }

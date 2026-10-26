@@ -692,8 +692,8 @@ lock_store_tree_has_lock_conflict_locked (PhodavServer *self, const gchar *_path
  * The value-returning lock service
  *
  * The queries below return decisions or owned XML, never borrowed
- * Path/DAVLock pointers. The filesystem operations are serialized by
- * the server-wide reader-writer lock, not by per-path reservations.
+ * Path/DAVLock pointers. The trie is protected by @lock_store_mutex,
+ * so a read-only PROPFIND job may walk it beside a mutation.
  */
 
 gboolean

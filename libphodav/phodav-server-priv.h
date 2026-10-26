@@ -31,18 +31,21 @@ struct _PhodavServer
   GMainContext *expire_locks_context;
   GSource *expire_locks_source;
 
-  /* The namespace is serialised on the main context: one request at a
-   * time may inspect or change it. Blocking filesystem work runs in a
-   * one-shot job on @namespace_pool, while every decision and commit
-   * stays here. The completion of a job is delivered on the main
-   * context, which then releases the namespace to the next waiter. */
+  /* The namespace is serialised on the main context: one mutating
+   * request at a time may inspect or change it. Blocking filesystem
+   * work runs in a one-shot job on @namespace_pool, while every
+   * decision and commit stays here. The completion of a job is
+   * delivered on the main context, which then releases the namespace
+   * to the next waiter. Reads run on @stream_pool beside the
+   * namespace, and do not take it. */
   GThreadPool *namespace_pool;
   GThreadPool *stream_pool;
   GQueue *namespace_waiters;
   gboolean namespace_busy;
 
   /* protects the path trie from the read-only PROPFIND job, which
-   * still walks it to report the locks of the listed resources */
+   * walks it beside the namespace to report the locks of the listed
+   * resources */
   GMutex lock_store_mutex;
 };
 

@@ -24,6 +24,11 @@ G_BEGIN_DECLS
  * the memory of the process (PUT streams to disk and is unaffected) */
 #define PHODAV_MAX_REQUEST_BODY (1024 * 1024)
 
+/* the depth-1 PROPFIND responses are assembled in memory before they
+ * are streamed: cap the number of resources they may list, so a huge
+ * collection cannot exhaust the memory of the server */
+#define PHODAV_MAX_PROPFIND_ENTRIES 4096
+
 typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
@@ -145,11 +150,12 @@ void phodav_server_callback (SoupServer *server,
                              GHashTable *query,
                              gpointer user_data);
 
-/* one-shot jobs: @run executes on the namespace worker and must only
- * perform the blocking filesystem work; @done executes on the main
- * context and owns @data. The namespace worker is single-threaded, so
- * the job results are observed in the same order as the decisions
- * which queued them. */
+/* one-shot jobs: @run executes on a worker and must only perform the
+ * blocking filesystem work; @done executes on the main context and
+ * owns @data. The namespace worker is single-threaded, so mutation
+ * job results are observed in the same order as the decisions which
+ * queued them. The stream pool runs reads and stream pulls beside the
+ * serialised mutations. */
 typedef void (*PhodavTaskFunc) (gpointer data);
 void phodav_server_dispatch (PhodavServer *self,
                              PhodavTaskFunc run,
@@ -161,7 +167,8 @@ void phodav_server_dispatch_stream (PhodavServer *self,
                                     gpointer data);
 
 /* the serialised namespace: @func runs on the main context as soon as
- * no other request owns it, and owns @data until it releases it */
+ * no other mutating request owns it, and owns @data until it releases
+ * it. Read-only methods do not take it. */
 typedef void (*PhodavNamespaceFunc) (gpointer data);
 void phodav_server_namespace_acquire (PhodavServer *self,
                                       PhodavNamespaceFunc func,

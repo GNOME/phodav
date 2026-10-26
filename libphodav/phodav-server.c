@@ -25,14 +25,15 @@
  * PhodavServer implements a simple WebDAV server.
  *
  * The DAV methods are driven from the main context of the #SoupServer.
- * The namespace is serialised there: one request at a time validates
- * its path, evaluates its locks and commits its result. Only the
- * blocking filesystem work is handed to a one-shot job on a private
+ * The namespace is serialised there: one mutating request at a time
+ * validates its path, evaluates its locks and commits its result. Only
+ * the blocking filesystem work is handed to a one-shot job on a private
  * worker, and the job completion is delivered back to the main
- * context. A reader-writer lock is therefore unnecessary, and so are
- * the atomics which guarded the shared request state. Streaming
- * responses pull their chunks on demand from a separate worker, so a
- * transfer does not hold the namespace worker for its whole duration.
+ * context. Reads (GET, HEAD and PROPFIND) do not take the namespace:
+ * their filesystem work and streaming responses run on a separate
+ * worker pool, beside the serialised mutations. A reader-writer lock is
+ * therefore unnecessary, and so are the atomics which guarded the
+ * shared request state.
  *
  * A #PhodavServer must still be created and disposed on the thread
  * running the main context of its #SoupServer.
@@ -53,9 +54,10 @@ typedef enum
 
 static GParamSpec *properties[PROP_MAX_UPLOAD + 1];
 
-/* the namespace is serialised: one filesystem job at a time is enough.
- * Stream pulls get a small pool of their own, so a slow download does
- * not prevent the next request from making progress. */
+/* the mutations are serialised: one filesystem job at a time is enough.
+ * Reads and stream pulls get a small pool of their own, so a slow
+ * download or a large PROPFIND does not wait for a mutation job, nor
+ * prevent the next request from making progress. */
 #define PHODAV_STREAM_THREADS MAX (2, MIN (g_get_num_processors (), 8))
 
 static gboolean expire_locks_timeout (gpointer user_data);
@@ -144,10 +146,10 @@ typedef struct _NamespaceWaiter
   gpointer data;
 } NamespaceWaiter;
 
-/* the namespace belongs to the main context. A request takes it before
- * it looks at the filesystem and releases it once its decision has
- * been committed, so no lock is needed around the lock store or a
- * rename/unlink sequence. */
+/* the namespace belongs to the main context. A mutating request takes
+ * it before it looks at the filesystem and releases it once its
+ * decision has been committed, so no lock is needed around the lock
+ * store or a rename/unlink sequence. Read-only methods never take it. */
 void
 phodav_server_namespace_acquire (PhodavServer *self,
                                  PhodavNamespaceFunc func,

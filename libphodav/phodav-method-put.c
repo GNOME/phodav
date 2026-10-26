@@ -59,6 +59,7 @@ static void put_chunk_written_cb (GObject *source_object,
                                   GAsyncResult *res,
                                   gpointer user_data);
 static void put_finish (PutContext *ctx);
+static void put_commit_start (gpointer data);
 static void put_context_abort (PutContext *ctx);
 static void method_put_got_chunk (SoupServerMessage *msg,
                                   GBytes *chunk,
@@ -379,16 +380,16 @@ method_put_got_chunk (SoupServerMessage *msg,
     put_write_next (ctx);
 }
 
+/* close and sync the staged file before taking the namespace: this is
+ * the long part of the commit, and it does not need to exclude any
+ * other request */
 static void
-put_commit_run (gpointer data)
+put_precommit_run (gpointer data)
 {
   PutContext *ctx = data;
   g_autoptr(GError) error = NULL;
   gint status;
 
-  /* closing and syncing the staged file is blocking work: it runs in
-   * the job, while the namespace stays reserved by the main context
-   * until the rename has settled */
   if (g_cancellable_is_cancelled (ctx->cancellable))
     status = 0;
   else if (!put_context_close (ctx, ctx->cancellable, &error))
@@ -396,10 +397,76 @@ put_commit_run (gpointer data)
   else if (!phodav_path_sync (ctx->temp_file, ctx->cancellable, &error))
     status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
   else
+    status = SOUP_STATUS_OK;
+
+  ctx->commit_status = status;
+  ctx->commit_error = g_steal_pointer (&error);
+}
+
+/* revalidate the preconditions against the destination as it is now,
+ * then atomically rename the staged file over it. The namespace is
+ * held, so no LOCK or other mutation can slip in before the rename. */
+static void
+put_commit_run (gpointer data)
+{
+  PutContext *ctx = data;
+  g_autoptr(GError) error = NULL;
+  gint status;
+
+  if (g_cancellable_is_cancelled (ctx->cancellable))
+    status = 0;
+  else
     status = put_commit (ctx, ctx->cancellable, &error);
 
   ctx->commit_status = status;
   ctx->commit_error = g_steal_pointer (&error);
+}
+
+/* report a failure which happened before the namespace was taken */
+static void
+put_precommit_failed (PutContext *ctx, gint status)
+{
+  if (ctx->commit_error)
+    g_debug ("PUT: failed to prepare the uploaded file: %s",
+             ctx->commit_error->message);
+
+  if (ctx->finished)
+    {
+      /* the client is gone: discard the upload, but do not touch its
+       * message anymore */
+      put_context_abort (ctx);
+    }
+  else
+    {
+      if (g_cancellable_is_cancelled (ctx->cancellable))
+        status = SOUP_STATUS_SERVICE_UNAVAILABLE;
+      else if (status == 0)
+        status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+
+      put_context_abort (ctx);
+      soup_server_message_set_status (ctx->msg, status, NULL);
+      soup_server_message_unpause (ctx->msg);
+      g_debug ("  -> %d %s\n", soup_server_message_get_status (ctx->msg),
+               soup_server_message_get_reason_phrase (ctx->msg));
+    }
+
+  put_context_unref (ctx);
+}
+
+static void
+put_precommit_done (gpointer data)
+{
+  PutContext *ctx = data;
+
+  if (ctx->commit_status != SOUP_STATUS_OK)
+    {
+      put_precommit_failed (ctx, ctx->commit_status);
+      return;
+    }
+
+  /* the staged file is closed and synced: take the namespace only for
+   * the lock recheck and the rename, and hand this reference over */
+  phodav_server_namespace_acquire (ctx->server, put_commit_start, ctx);
 }
 
 static void
@@ -449,9 +516,9 @@ put_commit_done (gpointer data)
   put_context_unref (ctx);
 }
 
-/* the lock check and the commit of the staged file happen while the
+/* the lock check and the rename of the staged file happen while the
  * main context owns the namespace, so no LOCK or other mutation can
- * slip between them */
+ * slip between them; the close and sync already happened before */
 static void
 put_commit_start (gpointer data)
 {
@@ -476,10 +543,11 @@ put_commit_start (gpointer data)
 }
 
 /* the whole body has been received and written to the staged file:
- * close it, revalidate the locks and rename it over the destination in
- * a one-shot job. The response is not written until the commit is
- * settled, so a client which sees a success knows its upload was
- * committed and, for a native file, synced. */
+ * close and sync it in a job outside the namespace, then take the
+ * namespace for the lock recheck and the rename. The response is not
+ * written until the commit is settled, so a client which sees a
+ * success knows its upload was committed and, for a native file,
+ * synced. */
 static void
 put_finish (PutContext *ctx)
 {
@@ -493,8 +561,8 @@ put_finish (PutContext *ctx)
   /* hold the response until the commit job has decided the outcome */
   soup_server_message_pause (ctx->msg);
 
-  phodav_server_namespace_acquire (ctx->server, put_commit_start,
-                                   put_context_ref (ctx));
+  phodav_server_dispatch_stream (ctx->server, put_precommit_run,
+                                 put_precommit_done, put_context_ref (ctx));
 }
 
 static void
@@ -721,9 +789,9 @@ end:
   return status;
 }
 
-/* the namespace is held across the start: the lock check on the main
- * context and the staged file creation in the job cannot be separated
- * by a LOCK or another mutation */
+/* the upload is staged without the namespace: the lock and
+ * conditional checks made here are advisory, and both are evaluated
+ * again under the namespace at commit time */
 typedef struct _PutStart
 {
   PhodavRequest *req;
@@ -819,7 +887,6 @@ put_start_done (gpointer data)
       soup_server_message_unpause (msg);
     }
 
-  phodav_server_namespace_release (server);
   put_start_free (start);
 }
 
@@ -850,7 +917,10 @@ put_start_main (gpointer data)
   if (start->status != SOUP_STATUS_OK)
     goto fail;
 
-  phodav_server_dispatch (server, put_start_run, put_start_done, start);
+  /* the staging file is opened outside the namespace: the lock and
+   * conditional checks above are advisory, and both are evaluated
+   * again under the namespace before the rename */
+  phodav_server_dispatch_stream (server, put_start_run, put_start_done, start);
   return;
 
 fail:
@@ -882,6 +952,5 @@ phodav_method_put (PhodavRequest *req, GError **err)
   start->req = phodav_request_ref (req);
   start->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
 
-  phodav_server_namespace_acquire (handler_get_server (phodav_request_get_handler (req)),
-                                   put_start_main, start);
+  put_start_main (start);
 }

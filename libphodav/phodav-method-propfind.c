@@ -624,11 +624,17 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
   g_autoptr(GError) err = NULL;
   g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GFileEnumerator) e = NULL;
+  guint count;
   gint status;
 
   status = propfind_query_zero (req, pf, path_resp, ns);
   if (status != SOUP_STATUS_OK)
     return status;
+
+  /* the depth-1 response is assembled in memory before it is
+   * streamed: cap its size, so a huge collection cannot exhaust the
+   * server. The root response is already in the table. */
+  count = g_hash_table_size (path_resp);
 
   handle = phodav_path_resolve (handler, path, PHODAV_PATH_EXISTING, &status);
   if (!handle)
@@ -655,6 +661,14 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
       if ((g_file_info_get_file_type (info) == G_FILE_TYPE_SYMBOLIC_LINK))
         continue;
 
+      if (count >= PHODAV_MAX_PROPFIND_ENTRIES)
+        {
+          g_debug ("PROPFIND: %s has more than %u members", path,
+                   PHODAV_MAX_PROPFIND_ENTRIES);
+          status = SOUP_STATUS_INSUFFICIENT_STORAGE;
+          goto end;
+        }
+
       child_handle = phodav_path_resolve_child (handle,
                                                 g_file_info_get_name (info),
                                                 PHODAV_PATH_EXISTING,
@@ -670,6 +684,7 @@ propfind_query_one (PhodavRequest *req, PropFind *pf, GHashTable *path_resp, xml
        * hrefs are escaped when the response is built */
       g_hash_table_insert (path_resp, g_steal_pointer (&child_path),
                            response_new (stat, 0));
+      count++;
     }
 
   g_file_enumerator_close (e, cancellable, NULL);
@@ -843,14 +858,12 @@ static void
 propfind_done (gpointer data)
 {
   PropFindJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
   gint status = job->status;
 
   if (status == SOUP_STATUS_OK)
     status = set_response_multistatus (job->req, job->mstatus,
                                        g_steal_pointer (&job->ns));
 
-  phodav_server_namespace_release (server);
   phodav_request_complete (job->req, status, NULL);
   propfind_job_free (job);
 }
@@ -863,13 +876,15 @@ propfind_start (gpointer data)
 
   if (phodav_request_is_finished (job->req))
     {
-      phodav_server_namespace_release (server);
       phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
       propfind_job_free (job);
       return;
     }
 
-  phodav_server_dispatch (server, propfind_run, propfind_done, job);
+  /* the property reads and the directory enumeration run beside the
+   * serialised mutations, not under the namespace; the lock store is
+   * read under its own mutex */
+  phodav_server_dispatch_stream (server, propfind_run, propfind_done, job);
 }
 
 gint
@@ -883,8 +898,7 @@ phodav_method_propfind (PhodavRequest *req, GError **err)
   job->handler = path_handler_ref (phodav_request_get_handler (req));
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
 
-  phodav_server_namespace_acquire (handler_get_server (job->handler),
-                                   propfind_start, job);
+  propfind_start (job);
 
   return 0;
 }
