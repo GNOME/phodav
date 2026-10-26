@@ -2,100 +2,165 @@
 # Copyright (C) 2022 phodav authors
 # This file is distributed under the same license as the phodav-3.0 package.
 # Temuri Doghonadze <temuri.doghonadze@gmail.com>, 2022.
+# Ekaterine Papava <papava.e@gtu.ge>, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav-3.0\n"
-"Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2022-10-13 17:00+0200\n"
-"PO-Revision-Date: 2022-10-13 17:05+0200\n"
-"Last-Translator: Temuri Doghonadze <temuri.doghonadze@gmail.com>\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/-/issues/\n"
+"POT-Creation-Date: 2026-10-22 10:25+0000\n"
+"PO-Revision-Date: 2026-10-26 05:57+0100\n"
+"Last-Translator: Ekaterine Papava <papava.e@gtu.ge>\n"
 "Language-Team: Georgian <(nothing)>\n"
 "Language: ka\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Poedit 3.1.1\n"
+"X-Generator: Poedit 3.10\n"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:142
+msgid "--tls-cert contains no private key, pass it with --tls-key\n"
+msgstr ""
+"--tls-cert პირად გასაღებს არ შეიცავს. საჭიროა პარამეტრი --tls-key\n"
+
+#: bin/chezdav.c:179
 msgid "Print program version"
 msgstr "პროგრამის ვერსიის დაბეჭდვა"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:180
 msgid "Be verbose"
 msgstr "დამატებითი შეტყობინებები"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:181
+msgid "Unix socket to listen on"
+msgstr "მოსასმენი Unix სოკეტი"
+
+#: bin/chezdav.c:182
 msgid "Port to listen to"
 msgstr "მოსასმენი პორტი"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:183
 msgid "Listen on loopback only"
 msgstr "მხოლოდ lo ინტერფეისზე მოსმენა"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:184
 msgid "Listen on all interfaces"
 msgstr "ყველა ინტერფეისზე მოსმენა"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:185
 msgid "Path to export"
 msgstr "გასატანილი ბილიკი"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:186
 msgid "Path to htdigest file"
 msgstr "ბილიკი htdigest failamde"
 
-#: bin/chezdav.c:127
+#: bin/chezdav.c:187
 msgid "DIGEST realm"
 msgstr "DIGEST რეალმი"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:188
 msgid "Read-only access"
 msgstr "მხოლოდ-წაკითხვის წვდომა"
 
-#: bin/chezdav.c:130
+#: bin/chezdav.c:189
+msgid "Refuse uploads over SIZE bytes (0 for no limit)"
+msgstr ""
+"მითითებულ ზომაზე დიდი ბაიტის ატვირთვის უარყოფა (0 ულიმიტო ატვირთვისთვის)"
+
+#: bin/chezdav.c:189
+msgid "SIZE"
+msgstr "ზომა"
+
+#: bin/chezdav.c:190
+msgid ""
+"Serve HTTPS, with the TLS certificate in CERT (which must include the "
+"private key, unless --tls-key is given)"
+msgstr ""
+"გამოიყენეთ HTTPS TLS სერტიფიკატით მითითებულ სერტიფიკატში (რომელიც ასევე "
+"უნდა შეიცავდეს პირად გასაღებს. თუ არა, საჭიროა --tls-key)"
+
+#: bin/chezdav.c:190
+msgid "CERT"
+msgstr "CERT"
+
+#: bin/chezdav.c:191
+msgid "Path to the TLS private key, when it is not in the certificate file"
+msgstr "ბილიკი TLS პირად გასაღებამდე, როცა ის სერტიფიკატის ფაილში არაა"
+
+#: bin/chezdav.c:191
+msgid "KEY"
+msgstr "გასაღები"
+
+#: bin/chezdav.c:193
 msgid "Skip mDNS service announcement"
 msgstr "\"mDNS\" სერვისის გამოცხადების გამოტოვება"
 
-#: bin/chezdav.c:142
+#: bin/chezdav.c:205
 msgid "- simple WebDAV server"
 msgstr "- მარტივი WebDAV სერვერი"
 
-#: bin/chezdav.c:143
+#: bin/chezdav.c:206
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "შეცდომების შესახებ მიწერეთ: <%s>"
 
-#: bin/chezdav.c:150
+#: bin/chezdav.c:212
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "პარამეტრების დამუშავების შეცდომა: %s\n"
 
-#: bin/chezdav.c:154
+#: bin/chezdav.c:219
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "მხარდაუჭერელი დამატებითი არგუმენტები: %s …\n"
 
-#: bin/chezdav.c:163
+#: bin/chezdav.c:228
+msgid "--socket and --local are mutually exclusive\n"
+msgstr "--socket და --local ურთიერთგამომრიცხავია\n"
+
+#: bin/chezdav.c:230
+#| msgid "--local and --public are mutually exclusive\n"
+msgid "--socket and --public are mutually exclusive\n"
+msgstr "--socket და --public ურთიერთგამომრიცხავია\n"
+
+#: bin/chezdav.c:232
+#| msgid "--local and --public are mutually exclusive\n"
+msgid "--socket and --port are mutually exclusive\n"
+msgstr "--socket და --port ურთიერთგამომრიცხავია\n"
+
+#: bin/chezdav.c:234
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local და --public ურთიერთგამომრიცხავია\n"
 
-#: bin/chezdav.c:189
+#: bin/chezdav.c:237
+msgid "--max-upload must not be negative\n"
+msgstr "--max-upload უარყოფითი არ უნდა იყოს\n"
+
+#: bin/chezdav.c:240
+msgid "--tls-key requires --tls-cert\n"
+msgstr "--tls-key ითხოვს პარამეტრს --tls-cert\n"
+
+#: bin/chezdav.c:280
+#, c-format
+msgid "Failed to load the certificate: %s\n"
+msgstr "სერტიფიკატის ჩატვირთვა ჩავარდა: %s\n"
+
+#: bin/chezdav.c:308
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "შეცდომა htdgest ფაილის გახსნისას: %s\n"
 
-#: bin/chezdav.c:204
+#: bin/chezdav.c:322
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS-ის შეცდომა: %s\n"
 
-#: bin/chezdav.c:215
-msgid "Internal error, should not happen\n"
-msgstr "შიდა შეცდომა. არ უნდა ხდებოდეს\n"
-
-#: bin/chezdav.c:218
+#: bin/chezdav.c:345
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "მოსმენის შეცდომა: %s\n"
+
+#~ msgid "Internal error, should not happen\n"
+#~ msgstr "შიდა შეცდომა. არ უნდა ხდებოდეს\n"
