@@ -166,18 +166,21 @@ movecopy_job_free (MoveCopyJob *job)
   g_free (job);
 }
 
-static void
-movecopy_run (gpointer data)
+static gint
+movecopy_work (PhodavRequest *req, GError **err)
 {
-  MoveCopyJob *job = data;
+  MoveCopyJob *job = phodav_request_get_method_data (req);
+
+  (void) err;
 
   job->status = do_movecopy_file (job);
+  return SOUP_STATUS_OK;
 }
 
-static void
-movecopy_done (gpointer data)
+static gint
+movecopy_commit (PhodavRequest *req, GError **err)
 {
-  MoveCopyJob *job = data;
+  MoveCopyJob *job = phodav_request_get_method_data (req);
   PhodavServer *server = handler_get_server (job->handler);
 
   if (job->removed)
@@ -191,70 +194,19 @@ movecopy_done (gpointer data)
 
   /* the source is gone: do not leave its locks behind on a path which
    * no longer names a resource */
-  if (!job->copy && job->status == SOUP_STATUS_CREATED)
-    phodav_lock_store_remove_locks (server, job->path);
-  else if (!job->copy && job->status == SOUP_STATUS_NO_CONTENT)
-    phodav_lock_store_remove_locks (server, job->path);
-
-  phodav_server_namespace_release (server);
-  phodav_request_complete (job->req, job->status,
-                           g_steal_pointer (&job->error));
-  movecopy_job_free (job);
-}
-
-static void
-movecopy_start (gpointer data)
-{
-  MoveCopyJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
-
-  if (phodav_request_is_finished (job->req))
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      movecopy_job_free (job);
-      return;
-    }
-
-  job->status = phodav_check_if (job->req, &job->submitted);
-  if (job->status != SOUP_STATUS_OK)
-    goto done;
-
-  /* moving a collection removes its members with it: the tokens of
-   * the locks held on them must be submitted too. A COPY leaves the
-   * source untouched, its locks do not apply. */
   if (!job->copy &&
-      phodav_lock_store_tree_has_other_locks (server, job->path,
-                                              job->submitted))
-    {
-      job->status = SOUP_STATUS_LOCKED;
-      goto done;
-    }
+      (job->status == SOUP_STATUS_CREATED ||
+       job->status == SOUP_STATUS_NO_CONTENT))
+    phodav_lock_store_remove_locks (server, job->path);
 
-  /* overwriting a collection removes its members: their lock tokens
-   * must be submitted too, not only the ones of the destination and
-   * its ancestors */
-  if (phodav_lock_store_path_has_other_locks (server, job->dest,
-                                              job->submitted) ||
-      phodav_lock_store_tree_has_other_locks (server, job->dest,
-                                              job->submitted))
-    {
-      job->status = SOUP_STATUS_LOCKED;
-      goto done;
-    }
+  if (job->error && err)
+    *err = g_steal_pointer (&job->error);
 
-  job->removed = g_ptr_array_new_with_free_func (g_free);
-  phodav_server_dispatch (server, movecopy_run, movecopy_done, job);
-  return;
-
-done:
-  phodav_server_namespace_release (server);
-  phodav_request_complete (job->req, job->status, NULL);
-  movecopy_job_free (job);
+  return job->status;
 }
 
-gint
-phodav_method_movecopy (PhodavRequest *req, GError **err)
+static gint
+movecopy_validate (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
@@ -266,6 +218,7 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   g_autofree gchar *udest = NULL;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   MoveCopyJob *job;
+  PhodavServer *server = handler_get_server (handler);
 
   (void) err;
 
@@ -330,17 +283,46 @@ phodav_method_movecopy (PhodavRequest *req, GError **err)
   job->copy = copy;
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
   job->status = SOUP_STATUS_OK;
+  phodav_request_set_method_data (req, job, (GDestroyNotify) movecopy_job_free);
 
-  if (dest_uri)
-    g_uri_unref (dest_uri);
+  status = phodav_check_if (req, &job->submitted);
+  if (status != SOUP_STATUS_OK)
+    goto end;
 
-  phodav_server_namespace_acquire (handler_get_server (handler),
-                                   movecopy_start, job);
+  /* moving a collection removes its members with it: the tokens of
+   * the locks held on them must be submitted too. A COPY leaves the
+   * source untouched, its locks do not apply. */
+  if (!job->copy &&
+      phodav_lock_store_tree_has_other_locks (server, job->path,
+                                              job->submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
 
-  return 0;
+  /* overwriting a collection removes its members: their lock tokens
+   * must be submitted too, not only the ones of the destination and
+   * its ancestors */
+  if (phodav_lock_store_path_has_other_locks (server, job->dest,
+                                              job->submitted) ||
+      phodav_lock_store_tree_has_other_locks (server, job->dest,
+                                              job->submitted))
+    {
+      status = SOUP_STATUS_LOCKED;
+      goto end;
+    }
+
+  job->removed = g_ptr_array_new_with_free_func (g_free);
+  status = SOUP_STATUS_OK;
 
 end:
   if (dest_uri)
     g_uri_unref (dest_uri);
   return status;
 }
+
+const PhodavMethodOps phodav_method_movecopy_ops = {
+  .validate = movecopy_validate,
+  .work = movecopy_work,
+  .commit = movecopy_commit,
+};

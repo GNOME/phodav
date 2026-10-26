@@ -400,29 +400,33 @@ proppatch_job_free (PropPatchJob *job)
   g_free (job);
 }
 
-static void
-proppatch_run (gpointer data)
+static gint
+proppatch_work (PhodavRequest *req, GError **err)
 {
-  PropPatchJob *job = data;
+  PropPatchJob *job = phodav_request_get_method_data (req);
   g_autoptr(PhodavPath) handle = NULL;
   GFile *file;
+
+  (void) err;
 
   handle = phodav_path_resolve (job->handler, job->path,
                                 PHODAV_PATH_CREATE, &job->status);
   if (!handle)
-    return;
+    return SOUP_STATUS_OK;
 
   file = phodav_path_get_file (handle);
   prop_changes_apply (file, job->changes, job->cancellable);
+  return SOUP_STATUS_OK;
 }
 
-static void
-proppatch_done (gpointer data)
+static gint
+proppatch_commit (PhodavRequest *req, GError **err)
 {
-  PropPatchJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
+  PropPatchJob *job = phodav_request_get_method_data (req);
   gint status = job->status;
   GList *props = NULL;
+
+  (void) err;
 
   if (status == SOUP_STATUS_OK)
     {
@@ -450,48 +454,41 @@ proppatch_done (gpointer data)
       g_list_free_full (props, (GDestroyNotify) response_prop_free);
     }
 
-  phodav_server_namespace_release (server);
-  phodav_request_complete (job->req, status, NULL);
-  proppatch_job_free (job);
+  return status;
 }
 
-static void
-proppatch_start (gpointer data)
+static gint
+proppatch_validate (PhodavRequest *req, GError **err)
 {
-  PropPatchJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
+  PropPatchJob *job;
+  PhodavServer *server = handler_get_server (phodav_request_get_handler (req));
   xmlNodePtr node;
+  gint status;
+  PropOp op;
 
-  if (phodav_request_is_finished (job->req))
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      proppatch_job_free (job);
-      return;
-    }
+  (void) err;
 
-  if (!davdoc_parse (&job->doc, phodav_request_get_request_body (job->req),
+  job = g_new0 (PropPatchJob, 1);
+  job->req = phodav_request_ref (req);
+  job->handler = path_handler_ref (phodav_request_get_handler (req));
+  job->path = g_strdup (phodav_request_get_path (req));
+  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) proppatch_job_free);
+
+  if (!davdoc_parse (&job->doc, phodav_request_get_request_body (req),
                      "propertyupdate"))
-    {
-      job->status = SOUP_STATUS_BAD_REQUEST;
-      goto done;
-    }
+    return SOUP_STATUS_BAD_REQUEST;
 
-  job->status = phodav_check_if (job->req, &job->submitted);
-  if (job->status != SOUP_STATUS_OK)
-    goto done;
+  status = phodav_check_if (req, &job->submitted);
+  if (status != SOUP_STATUS_OK)
+    return status;
 
   if (phodav_lock_store_path_has_other_locks (server, job->path,
                                               job->submitted))
-    {
-      job->status = SOUP_STATUS_LOCKED;
-      goto done;
-    }
+    return SOUP_STATUS_LOCKED;
 
   for (node = job->doc.root->children; node; node = node->next)
     {
-      PropOp op;
-
       if (!xml_node_is_element (node))
         continue;
 
@@ -508,10 +505,7 @@ proppatch_start (gpointer data)
         }
 
       if (!prop_collect (&job->changes, node, op))
-        {
-          job->status = SOUP_STATUS_BAD_REQUEST;
-          goto done;
-        }
+        return SOUP_STATUS_BAD_REQUEST;
     }
 
   /* a body without any set or remove instruction (or with none in
@@ -519,35 +513,14 @@ proppatch_start (gpointer data)
    * malformed request (RFC 4918 section 9.9), the multistatus
    * response would be empty otherwise */
   if (!job->changes)
-    {
-      job->status = SOUP_STATUS_BAD_REQUEST;
-      goto done;
-    }
+    return SOUP_STATUS_BAD_REQUEST;
 
   job->status = SOUP_STATUS_OK;
-  phodav_server_dispatch (server, proppatch_run, proppatch_done, job);
-  return;
-
-done:
-  phodav_server_namespace_release (server);
-  phodav_request_complete (job->req, job->status, NULL);
-  proppatch_job_free (job);
+  return SOUP_STATUS_OK;
 }
 
-gint
-phodav_method_proppatch (PhodavRequest *req, GError **err)
-{
-  PropPatchJob *job = g_new0 (PropPatchJob, 1);
-
-  (void) err;
-
-  job->req = phodav_request_ref (req);
-  job->handler = path_handler_ref (phodav_request_get_handler (req));
-  job->path = g_strdup (phodav_request_get_path (req));
-  job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
-
-  phodav_server_namespace_acquire (handler_get_server (job->handler),
-                                   proppatch_start, job);
-
-  return 0;
-}
+const PhodavMethodOps phodav_method_proppatch_ops = {
+  .validate = proppatch_validate,
+  .work = proppatch_work,
+  .commit = proppatch_commit,
+};

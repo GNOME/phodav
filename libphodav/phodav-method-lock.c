@@ -123,19 +123,24 @@ lock_job_free (LockJob *job)
   g_free (job);
 }
 
-static void
-lock_run (gpointer data)
+static gint
+lock_work (PhodavRequest *req, GError **err)
 {
-  LockJob *job = data;
+  LockJob *job = phodav_request_get_method_data (req);
   g_autoptr(PhodavPath) handle = NULL;
   g_autoptr(GFileInfo) info = NULL;
   GFile *file;
   gboolean exists;
 
+  (void) err;
+
+  if (job->refresh)
+    return SOUP_STATUS_OK;
+
   handle = phodav_path_resolve (job->handler, job->path,
                                 PHODAV_PATH_CREATE, &job->status);
   if (!handle)
-    return;
+    return SOUP_STATUS_OK;
 
   file = phodav_path_get_file (handle);
   info = phodav_path_query_info (handle, "standard::type",
@@ -147,6 +152,8 @@ lock_run (gpointer data)
     job->status = SOUP_STATUS_OK;
   else
     job->status = lock_create_resource (file, job->cancellable, &job->error);
+
+  return SOUP_STATUS_OK;
 }
 
 static void
@@ -175,13 +182,14 @@ lock_build_response (LockJob *job, const gchar *token)
                                SOUP_MEMORY_TAKE, (gchar *) mem, size);
 }
 
-static void
-lock_done (gpointer data)
+static gint
+lock_commit (PhodavRequest *req, GError **err)
 {
-  LockJob *job = data;
+  LockJob *job = phodav_request_get_method_data (req);
   PhodavServer *server = handler_get_server (job->handler);
 
-  if (job->status != SOUP_STATUS_OK &&
+  if (!job->refresh &&
+      job->status != SOUP_STATUS_OK &&
       job->status != SOUP_STATUS_CREATED)
     {
       /* the resource could not be created: do not leave the lock
@@ -190,77 +198,26 @@ lock_done (gpointer data)
     }
   else
     {
-      g_autofree gchar *ltoken = g_strdup_printf ("<%s>", job->token);
-
-      /* the lock is committed: advertise its token */
-      soup_message_headers_append (phodav_request_get_response_headers (job->req),
-                                   "Lock-Token", ltoken);
-      lock_build_response (job, job->token);
-    }
-
-  phodav_server_namespace_release (server);
-  phodav_request_complete (job->req, job->status,
-                           g_steal_pointer (&job->error));
-  lock_job_free (job);
-}
-
-static void
-lock_start (gpointer data)
-{
-  LockJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
-
-  if (phodav_request_is_finished (job->req))
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      lock_job_free (job);
-      return;
-    }
-
-  if (job->refresh)
-    {
-      job->status = phodav_check_if_refresh (job->req, &job->submitted);
-      if (job->status == SOUP_STATUS_OK)
-        job->status = phodav_lock_store_refresh_lock (server, job->path,
-                                                      job->submitted,
-                                                      job->timeout,
-                                                      &job->refreshed);
-
-      if (job->status != SOUP_STATUS_OK)
+      if (!job->refresh)
         {
-          phodav_server_namespace_release (server);
-          phodav_request_complete (job->req, job->status, NULL);
-          lock_job_free (job);
-          return;
+          g_autofree gchar *ltoken = g_strdup_printf ("<%s>", job->token);
+
+          /* the lock is committed: advertise its token */
+          soup_message_headers_append (phodav_request_get_response_headers (job->req),
+                                       "Lock-Token", ltoken);
         }
 
-      g_free (job->token);
-      job->token = g_steal_pointer (&job->refreshed);
       lock_build_response (job, job->token);
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, job->status, NULL);
-      lock_job_free (job);
-      return;
     }
 
-  job->status = phodav_lock_store_add_lock (server, job->path, job->token,
-                                            job->scope, job->type, job->depth,
-                                            job->owner, job->timeout);
-  if (job->status != SOUP_STATUS_OK)
-    {
-      g_debug ("lock failed");
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, job->status, NULL);
-      lock_job_free (job);
-      return;
-    }
+  if (job->error && err)
+    *err = g_steal_pointer (&job->error);
 
-  phodav_server_dispatch (server, lock_run, lock_done, job);
+  return job->status;
 }
 
-gint
-phodav_method_lock (PhodavRequest *req, GError **err)
+static gint
+lock_validate (PhodavRequest *req, GError **err)
 {
   PathHandler *handler = phodav_request_get_handler (req);
   const gchar *path = phodav_request_get_path (req);
@@ -277,6 +234,7 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   gint status = SOUP_STATUS_BAD_REQUEST;
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body = phodav_request_get_request_body (req);
+  PhodavServer *server = handler_get_server (handler);
   LockJob *job;
 
   (void) err;
@@ -296,22 +254,29 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
   job->depth = depth;
   job->timeout = timeout;
+  phodav_request_set_method_data (req, job, (GDestroyNotify) lock_job_free);
 
   if (!request_body->length)
     {
       /* an empty body refreshes an existing lock, which must be
        * identified with an If header (RFC 4918 section 9.10.2) */
       job->refresh = TRUE;
-      phodav_server_namespace_acquire (handler_get_server (handler),
-                                       lock_start, job);
-      return 0;
+      job->status = phodav_check_if_refresh (req, &job->submitted);
+      if (job->status == SOUP_STATUS_OK)
+        job->status = phodav_lock_store_refresh_lock (server, job->path,
+                                                      job->submitted,
+                                                      job->timeout,
+                                                      &job->refreshed);
+      if (job->status != SOUP_STATUS_OK)
+        return job->status;
+
+      g_free (job->token);
+      job->token = g_steal_pointer (&job->refreshed);
+      return SOUP_STATUS_OK;
     }
 
   if (!davdoc_parse (&doc, request_body, "lockinfo"))
-    {
-      lock_job_free (job);
-      return status;
-    }
+    return status;
 
   node = doc.root;
   for (node = node->children; node; node = node->next)
@@ -323,19 +288,13 @@ phodav_method_lock (PhodavRequest *req, GError **err)
         {
           scope = parse_lockscope (node);
           if (scope == DAV_LOCK_SCOPE_NONE)
-            {
-              lock_job_free (job);
-              return status;
-            }
+            return status;
         }
       else if (xml_node_has_name (node, "locktype"))
         {
           type = parse_locktype (node);
           if (type == DAV_LOCK_NONE)
-            {
-              lock_job_free (job);
-              return status;
-            }
+            return status;
         }
       else if (xml_node_has_name (node, "owner"))
         {
@@ -349,10 +308,7 @@ phodav_method_lock (PhodavRequest *req, GError **err)
     }
 
   if (scope == DAV_LOCK_SCOPE_NONE || type == DAV_LOCK_NONE)
-    {
-      lock_job_free (job);
-      return status;
-    }
+    return status;
 
   g_debug ("lock depth:%d scope:%d type:%d owner:%p, timeout: %u",
            depth, scope, type, owner, timeout);
@@ -366,8 +322,20 @@ phodav_method_lock (PhodavRequest *req, GError **err)
   if (owner)
     job->owner = xmlCopyNode (owner, 1);
 
-  phodav_server_namespace_acquire (handler_get_server (handler),
-                                   lock_start, job);
+  job->status = phodav_lock_store_add_lock (server, job->path, job->token,
+                                            job->scope, job->type, job->depth,
+                                            job->owner, job->timeout);
+  if (job->status != SOUP_STATUS_OK)
+    {
+      g_debug ("lock failed");
+      return job->status;
+    }
 
-  return 0;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_lock_ops = {
+  .validate = lock_validate,
+  .work = lock_work,
+  .commit = lock_commit,
+};

@@ -35,6 +35,7 @@ typedef struct _PathHandler PathHandler;
 typedef struct _PhodavPath PhodavPath;
 typedef struct _PhodavRequest PhodavRequest;
 typedef struct _PhodavStream PhodavStream;
+typedef struct _PhodavMethodOps PhodavMethodOps;
 
 typedef enum _DAVLockScopeType
 {
@@ -182,6 +183,33 @@ void phodav_lock_store_remove_locks (PhodavServer *self,
 gint phodav_check_if (PhodavRequest *req, GList **locks);
 gint phodav_check_if_refresh (PhodavRequest *req, GList **locks);
 
+/* a DAV method is a validation, a blocking work step and a commit,
+ * in that order. Validation runs on the main context before any work;
+ * work runs on a worker and performs the filesystem operation; commit
+ * runs on the main context after it, updates the lock store and
+ * publishes the response. The request driver owns the namespace, the
+ * lifecycle and the method data. */
+typedef gint (*PhodavMethodValidate) (PhodavRequest *req, GError **error);
+typedef gint (*PhodavMethodWork) (PhodavRequest *req, GError **error);
+typedef gint (*PhodavMethodCommit) (PhodavRequest *req, GError **error);
+
+struct _PhodavMethodOps
+{
+  PhodavMethodValidate validate;
+  PhodavMethodWork work;
+  PhodavMethodCommit commit;
+};
+
+extern const PhodavMethodOps phodav_method_get_ops;
+extern const PhodavMethodOps phodav_method_put_ops;
+extern const PhodavMethodOps phodav_method_propfind_ops;
+extern const PhodavMethodOps phodav_method_proppatch_ops;
+extern const PhodavMethodOps phodav_method_mkcol_ops;
+extern const PhodavMethodOps phodav_method_delete_ops;
+extern const PhodavMethodOps phodav_method_movecopy_ops;
+extern const PhodavMethodOps phodav_method_lock_ops;
+extern const PhodavMethodOps phodav_method_unlock_ops;
+
 /* per-request state: the request headers are copied and the request
  * body is referenced before the method runs. The body stays shared
  * with the message, which is safe while the message is paused. The
@@ -219,6 +247,21 @@ gboolean phodav_request_is_server_cancelled (PhodavRequest *req) G_GNUC_PURE;
  * @status means the method already published a streamed response */
 void phodav_request_complete (PhodavRequest *req, gint status, GError *error);
 
+/* the method state the driver owns and hands to the validate, work
+ * and commit steps; it is freed by the driver when the request ends */
+void phodav_request_set_method_data (PhodavRequest *req,
+                                     gpointer data,
+                                     GDestroyNotify data_free);
+gpointer phodav_request_get_method_data (PhodavRequest *req) G_GNUC_PURE;
+/* a streamed-body method has received and written its whole body: run
+ * its work step again, then commit */
+void phodav_request_method_body_done (PhodavRequest *req);
+/* the client went away or the server is stopping before the streamed
+ * body completed: stop the method without running its commit */
+void phodav_request_method_abort (PhodavRequest *req);
+/* is a worker still using the method data? */
+gboolean phodav_request_method_is_working (PhodavRequest *req) G_GNUC_PURE;
+
 /* incremental response bodies: the main context pulls one chunk at a
  * time from @pull, which runs on the stream pool. Returning NULL
  * without an error ends the body; an error aborts it. */
@@ -243,15 +286,5 @@ gint phodav_lock_store_refresh_lock (PhodavServer *self, const gchar *path, GLis
 xmlNodePtr phodav_lock_store_lock_node (PhodavServer *self, const gchar *path, const gchar *token, xmlNsPtr ns);
 gint phodav_lock_store_remove_lock (PhodavServer *self, const gchar *path, const gchar *token);
 void phodav_lock_store_lockdiscovery (PhodavServer *self, const gchar *path, xmlNodePtr node);
-
-gint phodav_method_get (PhodavRequest *req, GError **err);
-gint phodav_method_propfind (PhodavRequest *req, GError **err);
-gint phodav_method_proppatch (PhodavRequest *req, GError **err);
-gint phodav_method_mkcol (PhodavRequest *req, GError **err);
-gint phodav_method_delete (PhodavRequest *req, GError **err);
-gint phodav_method_movecopy (PhodavRequest *req, GError **err);
-gint phodav_method_lock (PhodavRequest *req, GError **err);
-gint phodav_method_unlock (PhodavRequest *req, GError **err);
-void phodav_method_put (PhodavRequest *req, GError **err);
 
 G_END_DECLS

@@ -32,94 +32,77 @@ mkcol_job_free (MkcolJob *job)
   g_free (job);
 }
 
-static void
-mkcol_run (gpointer data)
+static gint
+mkcol_work (PhodavRequest *req, GError **err)
 {
-  MkcolJob *job = data;
+  MkcolJob *job = phodav_request_get_method_data (req);
   g_autoptr(PhodavPath) handle = NULL;
-
-  handle = phodav_path_resolve (job->handler, job->path,
-                                PHODAV_PATH_CREATE, &job->status);
-  if (!handle)
-    return;
-
-  if (!phodav_path_mkdir (handle, job->cancellable, &job->error))
-    job->status = phodav_status_from_error (job->error);
-  else
-    job->status = SOUP_STATUS_CREATED;
-}
-
-static void
-mkcol_done (gpointer data)
-{
-  MkcolJob *job = data;
-
-  phodav_server_namespace_release (handler_get_server (job->handler));
-  phodav_request_complete (job->req, job->status,
-                           g_steal_pointer (&job->error));
-  mkcol_job_free (job);
-}
-
-static void
-mkcol_start (gpointer data)
-{
-  MkcolJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
-  SoupMessageBody *request_body =
-    phodav_request_get_request_body (job->req);
-
-  if (phodav_request_is_finished (job->req))
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      mkcol_job_free (job);
-      return;
-    }
-
-  if (request_body && request_body->length)
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE,
-                               NULL);
-      mkcol_job_free (job);
-      return;
-    }
-
-  job->status = phodav_check_if (job->req, &job->submitted);
-  if (job->status != SOUP_STATUS_OK)
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, job->status, NULL);
-      mkcol_job_free (job);
-      return;
-    }
-
-  if (phodav_lock_store_path_has_other_locks (server, job->path,
-                                              job->submitted))
-    {
-      phodav_server_namespace_release (server);
-      phodav_request_complete (job->req, SOUP_STATUS_LOCKED, NULL);
-      mkcol_job_free (job);
-      return;
-    }
-
-  phodav_server_dispatch (server, mkcol_run, mkcol_done, job);
-}
-
-gint
-phodav_method_mkcol (PhodavRequest *req, GError **err)
-{
-  MkcolJob *job = g_new0 (MkcolJob, 1);
+  g_autoptr(GError) error = NULL;
 
   (void) err;
 
+  job->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+  handle = phodav_path_resolve (job->handler, job->path,
+                                PHODAV_PATH_CREATE, &job->status);
+  if (!handle)
+    return SOUP_STATUS_OK;
+
+  if (!phodav_path_mkdir (handle, job->cancellable, &error))
+    {
+      job->error = g_steal_pointer (&error);
+      job->status = phodav_status_from_error (job->error);
+    }
+  else
+    job->status = SOUP_STATUS_CREATED;
+
+  return SOUP_STATUS_OK;
+}
+
+static gint
+mkcol_commit (PhodavRequest *req, GError **err)
+{
+  MkcolJob *job = phodav_request_get_method_data (req);
+
+  if (job->error && err)
+    *err = g_steal_pointer (&job->error);
+
+  return job->status;
+}
+
+static gint
+mkcol_validate (PhodavRequest *req, GError **err)
+{
+  MkcolJob *job;
+  PhodavServer *server = handler_get_server (phodav_request_get_handler (req));
+  SoupMessageBody *request_body = phodav_request_get_request_body (req);
+  gint status;
+
+  (void) err;
+
+  if (request_body && request_body->length)
+    return SOUP_STATUS_UNSUPPORTED_MEDIA_TYPE;
+
+  job = g_new0 (MkcolJob, 1);
   job->req = phodav_request_ref (req);
   job->handler = path_handler_ref (phodav_request_get_handler (req));
   job->path = g_strdup (phodav_request_get_path (req));
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) mkcol_job_free);
 
-  phodav_server_namespace_acquire (handler_get_server (job->handler),
-                                   mkcol_start, job);
+  status = phodav_check_if (req, &job->submitted);
+  if (status != SOUP_STATUS_OK)
+    return status;
 
-  return 0;
+  if (phodav_lock_store_path_has_other_locks (server, job->path,
+                                              job->submitted))
+    return SOUP_STATUS_LOCKED;
+
+  job->status = SOUP_STATUS_CREATED;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_mkcol_ops = {
+  .validate = mkcol_validate,
+  .work = mkcol_work,
+  .commit = mkcol_commit,
+};

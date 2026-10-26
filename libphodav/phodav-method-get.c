@@ -263,56 +263,8 @@ get_job_free (GetJob *job)
 }
 
 static void
-get_run (gpointer data)
+get_open_run (GetJob *job)
 {
-  GetJob *job = data;
-  g_autoptr(GError) error = NULL;
-
-  job->status = SOUP_STATUS_NOT_FOUND;
-  job->handle = phodav_path_resolve (job->handler, job->path,
-                                     PHODAV_PATH_EXISTING, &job->status);
-  if (!job->handle)
-    return;
-
-  job->info = phodav_path_query_info (job->handle,
-                                      "standard::*,etag::*,time::modified,unix::inode",
-                                      G_FILE_QUERY_INFO_NONE,
-                                      job->cancellable, &error);
-  if (!job->info)
-    {
-      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
-        job->error = g_steal_pointer (&error);
-      job->status = SOUP_STATUS_NOT_FOUND;
-      return;
-    }
-
-  if (g_file_info_get_file_type (job->info) == G_FILE_TYPE_DIRECTORY)
-    {
-      if (job->head)
-        {
-          job->status = SOUP_STATUS_OK;
-          return;
-        }
-
-      job->e = phodav_path_enumerate (job->handle, "standard::*",
-                                      G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
-                                      job->cancellable, &error);
-      if (!job->e)
-        {
-          job->status = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
-                          ? SOUP_STATUS_NOT_FOUND
-                          : SOUP_STATUS_FORBIDDEN;
-          return;
-        }
-    }
-
-  job->status = SOUP_STATUS_OK;
-}
-
-static void
-get_open_run (gpointer data)
-{
-  GetJob *job = data;
   g_autoptr(GError) error = NULL;
 
   job->file_path = g_file_get_path (phodav_path_get_file (job->handle));
@@ -374,84 +326,152 @@ get_open_run (gpointer data)
     }
 }
 
-static void
-get_done (gpointer data);
-
-static void
-get_open_done (gpointer data)
+static gint
+get_work (PhodavRequest *req, GError **err)
 {
-  GetJob *job = data;
-  GetFilePull *pull;
+  GetJob *job = phodav_request_get_method_data (req);
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *etag = NULL;
+  guint64 mtime, size, first = 0, last = 0;
+  HttpRangeType range;
 
-  if (job->error)
-    goto complete;
+  (void) err;
 
-  pull = g_new0 (GetFilePull, 1);
-  pull->stream = g_steal_pointer (&job->stream);
-  pull->path = g_steal_pointer (&job->file_path);
-  pull->fd = job->fd;
-  job->fd = -1;
-  pull->offset = job->first;
-  pull->remaining = job->count;
+  job->status = SOUP_STATUS_NOT_FOUND;
+  job->handle = phodav_path_resolve (job->handler, job->path,
+                                     PHODAV_PATH_EXISTING, &job->status);
+  if (!job->handle)
+    return SOUP_STATUS_OK;
 
-  phodav_request_stream_start (job->req, job->status, NULL,
-                               get_file_pull, pull, get_file_pull_free);
+  job->info = phodav_path_query_info (job->handle,
+                                      "standard::*,etag::*,time::modified,unix::inode",
+                                      G_FILE_QUERY_INFO_NONE,
+                                      job->cancellable, &error);
+  if (!job->info)
+    {
+      if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
+        job->error = g_steal_pointer (&error);
+      job->status = SOUP_STATUS_NOT_FOUND;
+      return SOUP_STATUS_OK;
+    }
 
-complete:
-  phodav_request_complete (job->req, job->status,
-                           g_steal_pointer (&job->error));
-  get_job_free (job);
+  if (g_file_info_get_file_type (job->info) == G_FILE_TYPE_DIRECTORY)
+    {
+      if (!job->head)
+        {
+          job->e = phodav_path_enumerate (job->handle, "standard::*",
+                                          G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                          job->cancellable, &error);
+          if (!job->e)
+            {
+              job->status = g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)
+                              ? SOUP_STATUS_NOT_FOUND
+                              : SOUP_STATUS_FORBIDDEN;
+              return SOUP_STATUS_OK;
+            }
+        }
+
+      job->status = SOUP_STATUS_OK;
+      return SOUP_STATUS_OK;
+    }
+
+  etag = phodav_etag_from_info (job->info);
+  mtime = g_file_info_get_attribute_uint64 (job->info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
+  size = (guint64) g_file_info_get_size (job->info);
+
+  if (http_request_not_modified (phodav_request_get_request_headers (req),
+                                 etag, mtime))
+    {
+      job->status = SOUP_STATUS_NOT_MODIFIED;
+      return SOUP_STATUS_OK;
+    }
+
+  if (job->head)
+    {
+      job->status = SOUP_STATUS_OK;
+      return SOUP_STATUS_OK;
+    }
+
+  range = http_request_range (phodav_request_get_request_headers (req),
+                              etag, mtime, size, &first, &last);
+  if (range == HTTP_RANGE_UNSATISFIABLE)
+    {
+      job->status = SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE;
+      return SOUP_STATUS_OK;
+    }
+
+  if (range == HTTP_RANGE_PARTIAL)
+    {
+      job->status = SOUP_STATUS_PARTIAL_CONTENT;
+      job->count = last - first + 1;
+    }
+  else
+    {
+      job->status = SOUP_STATUS_OK;
+      first = 0;
+      job->count = size;
+    }
+
+  job->first = first;
+
+  /* an empty file has no body to stream */
+  if (job->count > 0)
+    get_open_run (job);
+
+  return SOUP_STATUS_OK;
 }
 
-static void
-get_done (gpointer data)
+static gint
+get_commit (PhodavRequest *req, GError **err)
 {
-  GetJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
+  GetJob *job = phodav_request_get_method_data (req);
 
-  if (job->status != SOUP_STATUS_OK)
-    goto complete;
+  if (job->error)
+    {
+      if (err)
+        *err = g_steal_pointer (&job->error);
+      return job->status;
+    }
+
+  if (job->status != SOUP_STATUS_OK &&
+      job->status != SOUP_STATUS_PARTIAL_CONTENT &&
+      job->status != SOUP_STATUS_NOT_MODIFIED &&
+      job->status != SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE)
+    return job->status;
 
   if (g_file_info_get_file_type (job->info) == G_FILE_TYPE_DIRECTORY)
     {
       GetDirectoryPull *pull;
 
-      method_get_directory_set_headers (job->req);
+      method_get_directory_set_headers (req);
 
       if (job->head)
-        {
-          job->status = SOUP_STATUS_OK;
-          goto complete;
-        }
+        return SOUP_STATUS_OK;
 
       pull = g_new0 (GetDirectoryPull, 1);
       pull->e = g_steal_pointer (&job->e);
       pull->buffer = get_directory_header (job->path);
 
-      phodav_request_stream_start (job->req, SOUP_STATUS_OK,
+      phodav_request_stream_start (req, SOUP_STATUS_OK,
                                    "text/html; charset=utf-8",
                                    get_directory_pull, pull,
                                    get_directory_pull_free);
-      job->status = SOUP_STATUS_OK;
-      goto complete;
+      return SOUP_STATUS_OK;
     }
 
   {
-    SoupMessageHeaders *response_headers = phodav_request_get_response_headers (job->req);
+    SoupMessageHeaders *response_headers = phodav_request_get_response_headers (req);
     g_autofree gchar *etag = phodav_etag_from_info (job->info);
     guint64 mtime = g_file_info_get_attribute_uint64 (job->info, G_FILE_ATTRIBUTE_TIME_MODIFIED);
     guint64 size = (guint64) g_file_info_get_size (job->info);
-    guint64 first = 0, last = 0;
     const gchar *content_type;
-    HttpRangeType range;
 
     method_get_add_validators (response_headers, etag, mtime);
 
-    if (http_request_not_modified (phodav_request_get_request_headers (job->req), etag, mtime))
+    if (job->status == SOUP_STATUS_NOT_MODIFIED)
       {
         soup_message_headers_remove (response_headers, "Content-Type");
-        job->status = SOUP_STATUS_NOT_MODIFIED;
-        goto complete;
+        return job->status;
       }
 
     content_type = g_file_info_get_content_type (job->info);
@@ -465,74 +485,50 @@ get_done (gpointer data)
         g_autofree gchar *length = g_strdup_printf ("%" G_GUINT64_FORMAT, size);
 
         soup_message_headers_append (response_headers, "Content-Length", length);
-        job->status = SOUP_STATUS_OK;
-        goto complete;
+        return job->status;
       }
 
-    range = http_request_range (phodav_request_get_request_headers (job->req),
-                                etag, mtime, size, &first, &last);
-    if (range == HTTP_RANGE_UNSATISFIABLE)
+    if (job->status == SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE)
       {
         g_autofree gchar *content_range = g_strdup_printf ("bytes */%" G_GUINT64_FORMAT, size);
 
         soup_message_headers_append (response_headers, "Content-Range", content_range);
-        job->status = SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE;
-        goto complete;
+        return job->status;
       }
 
-    if (range == HTTP_RANGE_PARTIAL)
+    if (job->status == SOUP_STATUS_PARTIAL_CONTENT)
       {
         g_autofree gchar *content_range =
           g_strdup_printf ("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/%" G_GUINT64_FORMAT,
-                           first, last, size);
+                           job->first, job->first + job->count - 1, size);
 
         soup_message_headers_append (response_headers, "Content-Range", content_range);
-        job->status = SOUP_STATUS_PARTIAL_CONTENT;
-        job->count = last - first + 1;
       }
-    else
-      {
-        job->status = SOUP_STATUS_OK;
-        first = 0;
-        job->count = size;
-      }
-
-    job->first = first;
 
     /* an empty file has no body to stream */
     if (job->count == 0)
-      goto complete;
+      return job->status;
 
-    phodav_server_dispatch_stream (server, get_open_run, get_open_done, job);
-    return;
-  }
-
-complete:
-  phodav_request_complete (job->req, job->status,
-                           g_steal_pointer (&job->error));
-  get_job_free (job);
-}
-
-static void
-get_start (gpointer data)
-{
-  GetJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
-
-  if (phodav_request_is_finished (job->req))
     {
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      get_job_free (job);
-      return;
+      GetFilePull *pull = g_new0 (GetFilePull, 1);
+
+      pull->stream = g_steal_pointer (&job->stream);
+      pull->path = g_steal_pointer (&job->file_path);
+      pull->fd = job->fd;
+      job->fd = -1;
+      pull->offset = job->first;
+      pull->remaining = job->count;
+
+      phodav_request_stream_start (req, job->status, NULL,
+                                   get_file_pull, pull, get_file_pull_free);
     }
 
-  /* reads do not take the namespace: their filesystem work runs on
-   * the parallel worker pool, beside the serialised mutations */
-  phodav_server_dispatch_stream (server, get_run, get_done, job);
+    return job->status;
+  }
 }
 
-gint
-phodav_method_get (PhodavRequest *req, GError **err)
+static gint
+get_validate (PhodavRequest *req, GError **err)
 {
   GetJob *job = g_new0 (GetJob, 1);
 
@@ -544,8 +540,13 @@ phodav_method_get (PhodavRequest *req, GError **err)
   job->head = g_strcmp0 (phodav_request_get_method (req), "HEAD") == 0;
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
   job->fd = -1;
+  phodav_request_set_method_data (req, job, (GDestroyNotify) get_job_free);
 
-  get_start (job);
-
-  return 0;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_get_ops = {
+  .validate = get_validate,
+  .work = get_work,
+  .commit = get_commit,
+};

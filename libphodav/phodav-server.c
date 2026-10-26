@@ -25,6 +25,8 @@
  * PhodavServer implements a simple WebDAV server.
  *
  * The DAV methods are driven from the main context of the #SoupServer.
+ * Every method is a validate, work and commit triple, run by one request
+ * driver which owns the namespace, the method state and the completion.
  * The namespace is serialised there: one mutating request at a time
  * validates its path, evaluates its locks and commits its result. Only
  * the blocking filesystem work is handed to a one-shot job on a private

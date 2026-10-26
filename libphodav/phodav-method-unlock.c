@@ -15,6 +15,7 @@ typedef struct _Unlock
   PhodavServer *server;
   gchar *path;
   gchar *token;
+  gint status;
 } Unlock;
 
 static void
@@ -41,30 +42,18 @@ remove_brackets (const gchar *str)
   return g_strndup (str + 1, len - 2);
 }
 
-static void
-unlock_start (gpointer data)
+static gint
+unlock_commit (PhodavRequest *req, GError **err)
 {
-  Unlock *unlock = data;
-  gint status;
+  Unlock *unlock = phodav_request_get_method_data (req);
 
-  if (phodav_request_is_finished (unlock->req))
-    {
-      phodav_server_namespace_release (unlock->server);
-      phodav_request_complete (unlock->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      unlock_free (unlock);
-      return;
-    }
+  (void) err;
 
-  status = phodav_lock_store_remove_lock (unlock->server, unlock->path,
-                                          unlock->token);
-
-  phodav_server_namespace_release (unlock->server);
-  phodav_request_complete (unlock->req, status, NULL);
-  unlock_free (unlock);
+  return unlock->status;
 }
 
-gint
-phodav_method_unlock (PhodavRequest *req, GError **err)
+static gint
+unlock_validate (PhodavRequest *req, GError **err)
 {
   Unlock *unlock = g_new0 (Unlock, 1);
 
@@ -81,8 +70,15 @@ phodav_method_unlock (PhodavRequest *req, GError **err)
   unlock->req = phodav_request_ref (req);
   unlock->server = g_object_ref (handler_get_server (phodav_request_get_handler (req)));
   unlock->path = g_strdup (phodav_request_get_path (req));
+  phodav_request_set_method_data (req, unlock, (GDestroyNotify) unlock_free);
 
-  phodav_server_namespace_acquire (unlock->server, unlock_start, unlock);
+  unlock->status = phodav_lock_store_remove_lock (unlock->server, unlock->path,
+                                                  unlock->token);
 
-  return 0;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_unlock_ops = {
+  .validate = unlock_validate,
+  .commit = unlock_commit,
+};

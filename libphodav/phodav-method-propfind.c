@@ -778,11 +778,10 @@ propfind_job_free (PropFindJob *job)
   g_free (job);
 }
 
-static void
-propfind_run (gpointer data)
+static gint
+propfind_work (PhodavRequest *req, GError **err)
 {
-  PropFindJob *job = data;
-  PhodavRequest *req = job->req;
+  PropFindJob *job = phodav_request_get_method_data (req);
   g_autoptr(PropFind) pf = NULL;
   DepthType depth;
   g_auto(DavDoc) doc = {
@@ -793,6 +792,8 @@ propfind_run (gpointer data)
   const gchar *path = phodav_request_get_path (req);
   SoupMessageHeaders *request_headers = phodav_request_get_request_headers (req);
   SoupMessageBody *request_body = phodav_request_get_request_body (req);
+
+  (void) err;
 
   if (!depth_from_string (soup_message_headers_get_one (request_headers, "Depth"), &depth))
     {
@@ -852,43 +853,26 @@ end:
   if (ns)
     xmlFreeNs (ns);
   job->status = status;
+  return SOUP_STATUS_OK;
 }
 
-static void
-propfind_done (gpointer data)
+static gint
+propfind_commit (PhodavRequest *req, GError **err)
 {
-  PropFindJob *job = data;
+  PropFindJob *job = phodav_request_get_method_data (req);
   gint status = job->status;
+
+  (void) err;
 
   if (status == SOUP_STATUS_OK)
     status = set_response_multistatus (job->req, job->mstatus,
                                        g_steal_pointer (&job->ns));
 
-  phodav_request_complete (job->req, status, NULL);
-  propfind_job_free (job);
+  return status;
 }
 
-static void
-propfind_start (gpointer data)
-{
-  PropFindJob *job = data;
-  PhodavServer *server = handler_get_server (job->handler);
-
-  if (phodav_request_is_finished (job->req))
-    {
-      phodav_request_complete (job->req, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-      propfind_job_free (job);
-      return;
-    }
-
-  /* the property reads and the directory enumeration run beside the
-   * serialised mutations, not under the namespace; the lock store is
-   * read under its own mutex */
-  phodav_server_dispatch_stream (server, propfind_run, propfind_done, job);
-}
-
-gint
-phodav_method_propfind (PhodavRequest *req, GError **err)
+static gint
+propfind_validate (PhodavRequest *req, GError **err)
 {
   PropFindJob *job = g_new0 (PropFindJob, 1);
 
@@ -897,8 +881,13 @@ phodav_method_propfind (PhodavRequest *req, GError **err)
   job->req = phodav_request_ref (req);
   job->handler = path_handler_ref (phodav_request_get_handler (req));
   job->cancellable = g_object_ref (phodav_request_get_cancellable (req));
+  phodav_request_set_method_data (req, job, (GDestroyNotify) propfind_job_free);
 
-  propfind_start (job);
-
-  return 0;
+  return SOUP_STATUS_OK;
 }
+
+const PhodavMethodOps phodav_method_propfind_ops = {
+  .validate = propfind_validate,
+  .work = propfind_work,
+  .commit = propfind_commit,
+};
