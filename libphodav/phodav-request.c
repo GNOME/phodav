@@ -529,7 +529,14 @@ stream_cut_connection (SoupServerMessage *msg)
    * representation is to cut the connection, rather than to send
    * the terminating zero-length chunk. Stealing the connection
    * makes libsoup flush and terminate the body being written, so
-   * shut the socket down first to make that flush fail. */
+   * shut the socket down first to make that flush fail.
+   *
+   * Stealing also caches the local and remote addresses: query them
+   * while the socket is still connected, or libsoup warns that the
+   * shut down socket has no remote address anymore. */
+  soup_server_message_get_local_address (msg);
+  soup_server_message_get_remote_address (msg);
+
   socket = soup_server_message_get_socket (msg);
   if (socket)
     g_socket_shutdown (socket, TRUE, TRUE, NULL);
