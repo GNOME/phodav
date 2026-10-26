@@ -168,6 +168,9 @@ phodav_path_new (PhodavBackend *backend,
   path->file = file ? g_object_ref (file) : NULL;
   path->fd = fd;
   path->parent_fd = parent_fd;
+  /* @name is only meaningful together with @parent_fd: the
+   * descriptor-relative operations look the entry up below the held
+   * directory instead of rebuilding its path */
   path->name = g_strdup (name);
 
 #ifdef HAVE_DIRFD_OPERATIONS
@@ -214,7 +217,10 @@ phodav_path_new_from_gfile (PhodavBackend *backend,
   (void) status;
 #ifdef HAVE_DIRFD_OPERATIONS
   /* the generic backend may still resolve to a native object (a real
-   * child of a virtual directory): keep its descriptor too */
+   * child of a virtual directory): keep its descriptor too. The parent
+   * descriptor and the final component are only opened together, as the
+   * descriptor-relative operations need both; without them the handle
+   * works on its GFiles alone. */
   if (proc_fd_available () &&
       g_file_is_native (file) && !PHODAV_IS_VIRTUAL_DIR (file))
     {

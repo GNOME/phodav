@@ -101,6 +101,11 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavPath, phodav_path_unref)
 GFile *phodav_path_get_file (PhodavPath *path) G_GNUC_PURE;
 /* the object to modify by name: its parent directory is held open too */
 GFile *phodav_path_get_named_file (PhodavPath *path) G_GNUC_PURE;
+/* the final component below the held parent descriptor, for the
+ * descriptor-relative operations; NULL when the handle has no
+ * (@parent_fd, @name) pair: the native backend's share root, and the
+ * handles which operate on the GFiles alone on platforms without those
+ * operations */
 const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
 gint phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);

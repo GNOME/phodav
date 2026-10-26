@@ -20,9 +20,14 @@ struct _PhodavPath
   GFile *file;       /* the resource as it was named */
   GFile *read_file;  /* the held object, or @file without a descriptor */
   GFile *named_file; /* the entry below the held parent, or @read_file */
-  gchar *name;       /* the final component, NULL for the root */
-  gint fd;           /* descriptor of the resolved object, or -1 */
-  gint parent_fd;    /* descriptor of its parent directory, or -1 */
+  /* the final component below @parent_fd, used by the descriptor-relative
+   * operations; set together with @parent_fd, and NULL when the handle has
+   * no parent descriptor: the native backend's share root, and the handles
+   * on platforms without descriptor-relative operations, which work on the
+   * GFiles alone */
+  gchar *name;
+  gint fd;        /* descriptor of the resolved object, or -1 */
+  gint parent_fd; /* descriptor of its parent directory, or -1 */
 };
 
 /* The filesystem backend contract. Implementations only look resources
