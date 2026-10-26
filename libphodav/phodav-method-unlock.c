@@ -55,25 +55,23 @@ unlock_commit (PhodavRequest *req, GError **err)
 static gint
 unlock_validate (PhodavRequest *req, GError **err)
 {
-  Unlock *unlock = g_new0 (Unlock, 1);
+  g_autofree gchar *token = remove_brackets (
+    soup_message_headers_get_one (phodav_request_get_request_headers (req), "Lock-Token"));
+  Unlock *unlock;
 
   (void) err;
 
-  unlock->token = remove_brackets (
-    soup_message_headers_get_one (phodav_request_get_request_headers (req), "Lock-Token"));
-  if (!unlock->token)
-    {
-      g_free (unlock);
-      return SOUP_STATUS_BAD_REQUEST;
-    }
+  if (!token)
+    return SOUP_STATUS_BAD_REQUEST;
 
+  unlock = g_new0 (Unlock, 1);
+  unlock->token = g_steal_pointer (&token);
   unlock->req = phodav_request_ref (req);
   unlock->server = g_object_ref (handler_get_server (phodav_request_get_handler (req)));
   unlock->path = g_strdup (phodav_request_get_path (req));
-  phodav_request_set_method_data (req, unlock, (GDestroyNotify) unlock_free);
-
   unlock->status = phodav_lock_store_remove_lock (unlock->server, unlock->path,
                                                   unlock->token);
+  phodav_request_set_method_data (req, unlock, (GDestroyNotify) unlock_free);
 
   return SOUP_STATUS_OK;
 }

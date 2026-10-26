@@ -9,7 +9,6 @@
 
 G_BEGIN_DECLS
 
-typedef struct _PhodavBackend PhodavBackend;
 typedef struct _PhodavBackendClass PhodavBackendClass;
 
 /* A resolved resource. The backend owns the implementation details of
@@ -22,8 +21,8 @@ struct _PhodavPath
   GFile *read_file;  /* the held object, or @file without a descriptor */
   GFile *named_file; /* the entry below the held parent, or @read_file */
   gchar *name;       /* the final component, NULL for the root */
-  int fd;            /* descriptor of the resolved object, or -1 */
-  int parent_fd;     /* descriptor of its parent directory, or -1 */
+  gint fd;           /* descriptor of the resolved object, or -1 */
+  gint parent_fd;    /* descriptor of its parent directory, or -1 */
 };
 
 /* The filesystem backend contract. Implementations only look resources
@@ -101,8 +100,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC (PhodavBackend, phodav_backend_unref)
 /* shared by the implementations */
 PhodavPath *phodav_path_new (PhodavBackend *backend,
                              GFile *file,
-                             int fd,
-                             int parent_fd,
+                             gint fd,
+                             gint parent_fd,
                              const gchar *name);
 PhodavPath *phodav_path_new_from_gfile (PhodavBackend *backend,
                                         GFile *file,
@@ -115,7 +114,7 @@ void phodav_path_set_error_from_errno (GError **error,
                                        gint errsv,
                                        const gchar *what);
 GFile *phodav_path_query_file (PhodavPath *path);
-int phodav_path_dir_fd (PhodavPath *path);
+gint phodav_path_dir_fd (PhodavPath *path);
 gboolean phodav_backend_mkdir_at (PhodavPath *path,
                                   GCancellable *cancellable,
                                   GError **error);

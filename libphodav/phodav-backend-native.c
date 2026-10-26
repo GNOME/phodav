@@ -9,11 +9,12 @@
 
 #include "config.h"
 
-#include "phodav-backend.h"
-
 #include <errno.h>
 #include <fcntl.h>
+
 #include <glib/gstdio.h>
+
+#include "phodav-backend.h"
 
 #ifdef HAVE_DIRFD_OPERATIONS
 
@@ -33,15 +34,15 @@
 typedef struct _PhodavBackendNative
 {
   PhodavBackend parent;
-  int root_fd;
+  gint root_fd;
 } PhodavBackendNative;
 
 #ifdef PHODAV_HAVE_OPENAT2
 /* Resolve a path relative to @dirfd without ever following a symbolic
  * link or escaping the directory: the kernel applies the policy to the
  * whole walk atomically. */
-static int
-openat2_beneath (int dirfd, const gchar *path, int flags)
+static gint
+openat2_beneath (gint dirfd, const gchar *path, gint flags)
 {
   struct open_how how = {
     .flags = flags,
@@ -53,17 +54,17 @@ openat2_beneath (int dirfd, const gchar *path, int flags)
 }
 
 static gboolean
-openat2_unsupported (int errsv)
+openat2_unsupported (gint errsv)
 {
   return errsv == ENOSYS || errsv == EINVAL || errsv == E2BIG;
 }
 #endif
 
-static int
-open_dir_fallback (int root_fd, const gchar *relative)
+static gint
+open_dir_fallback (gint root_fd, const gchar *relative)
 {
   g_auto(GStrv) parts = g_strsplit (relative, "/", -1);
-  int dirfd = fcntl (root_fd, F_DUPFD_CLOEXEC, 0);
+  gint dirfd = fcntl (root_fd, F_DUPFD_CLOEXEC, 0);
   gint i;
 
   if (dirfd < 0)
@@ -103,14 +104,14 @@ open_dir_fallback (int root_fd, const gchar *relative)
 }
 
 /* open the directory containing the final component of @relative */
-static int
+static gint
 open_parent_dir (PhodavBackendNative *self, const gchar *relative)
 {
   g_auto(GStrv) parts = g_strsplit (relative, "/", -1);
   g_autoptr(GString) parent = g_string_new (NULL);
   gint last = -1;
   gint i;
-  int dirfd;
+  gint dirfd;
 
   for (i = 0; parts[i]; i++)
     if (*parts[i])
@@ -154,9 +155,9 @@ resolve_native (PhodavBackend *backend,
 {
   PhodavBackendNative *self = (PhodavBackendNative *) backend;
   g_auto(GStrv) parts = g_strsplit (relative, "/", -1);
-  gchar *name = NULL;
-  int parent_fd = -1;
-  int fd = -1;
+  g_autofree gchar *name = NULL;
+  gint parent_fd = -1;
+  gint fd = -1;
   gint last = -1;
   gint i;
 
@@ -204,25 +205,15 @@ resolve_native (PhodavBackend *backend,
 
       if (errsv == ENOENT && mode == PHODAV_PATH_CREATE)
         {
-          PhodavPath *path = phodav_path_new (backend, NULL, -1,
-                                              parent_fd, name);
-
-          g_free (name);
-          return path;
+          return phodav_path_new (backend, NULL, -1, parent_fd, name);
         }
 
       close (parent_fd);
-      g_free (name);
       *status = phodav_path_status_from_errno (errsv, mode, TRUE);
       return NULL;
     }
 
-  {
-    PhodavPath *path = phodav_path_new (backend, NULL, fd, parent_fd, name);
-
-    g_free (name);
-    return path;
-  }
+  return phodav_path_new (backend, NULL, fd, parent_fd, name);
 }
 
 static PhodavPath *
@@ -232,10 +223,10 @@ resolve_native_child (PhodavBackend *backend,
                       PhodavPathMode mode,
                       gint *status)
 {
-  int dirfd = phodav_path_dir_fd (parent);
-  int fd;
-  int parent_fd;
-  int errsv;
+  gint dirfd = phodav_path_dir_fd (parent);
+  gint fd;
+  gint parent_fd;
+  gint errsv;
 
   if (dirfd < 0)
     {

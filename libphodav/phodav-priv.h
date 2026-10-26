@@ -32,6 +32,7 @@ G_BEGIN_DECLS
 typedef struct _DAVLock DAVLock;
 typedef struct _Path Path;
 typedef struct _PathHandler PathHandler;
+typedef struct _PhodavBackend PhodavBackend;
 typedef struct _PhodavPath PhodavPath;
 typedef struct _PhodavRequest PhodavRequest;
 typedef struct _PhodavStream PhodavStream;
@@ -101,7 +102,7 @@ GFile *phodav_path_get_file (PhodavPath *path) G_GNUC_PURE;
 /* the object to modify by name: its parent directory is held open too */
 GFile *phodav_path_get_named_file (PhodavPath *path) G_GNUC_PURE;
 const gchar *phodav_path_get_name (PhodavPath *path) G_GNUC_PURE;
-int phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
+gint phodav_path_get_fd (PhodavPath *path) G_GNUC_PURE;
 gint phodav_status_from_error (const GError *error);
 gboolean phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error);
 /* rename a staged GFile without syncing: callers sync it first */
@@ -134,7 +135,7 @@ gboolean handler_path_is_covered (PathHandler *handler, const gchar *path) G_GNU
 /* the shared root, borrowed */
 GFile *handler_get_root_file (PathHandler *handler) G_GNUC_PURE;
 /* the filesystem backend selected for the shared root, borrowed */
-struct _PhodavBackend *handler_get_backend (PathHandler *handler) G_GNUC_PURE;
+PhodavBackend *handler_get_backend (PathHandler *handler) G_GNUC_PURE;
 PhodavServer *handler_get_server (PathHandler *handler) G_GNUC_PURE;
 PathHandler *path_handler_ref (PathHandler *handler);
 void path_handler_unref (PathHandler *handler);

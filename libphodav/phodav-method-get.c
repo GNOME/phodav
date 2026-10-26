@@ -6,11 +6,12 @@
 
 #include "config.h"
 
+#include <errno.h>
+
+#include <glib/gstdio.h>
+
 #include "phodav-priv.h"
 #include "phodav-utils.h"
-
-#include <errno.h>
-#include <glib/gstdio.h>
 
 #ifdef G_OS_UNIX
 #include <fcntl.h>
@@ -103,7 +104,7 @@ get_directory_pull (gpointer data, GCancellable *cancellable, GError **error)
 
   {
     gsize len = pull->buffer->len;
-    gchar *data = g_string_free (g_steal_pointer (&pull->buffer), FALSE);
+    gchar *data = g_string_free_and_steal (pull->buffer);
 
     pull->buffer = g_string_sized_new (STREAM_CHUNK_SIZE);
     return g_bytes_new_take (data, len);
@@ -153,7 +154,7 @@ typedef struct _GetFilePull
 {
   GFileInputStream *stream;
   gchar *path;
-  int fd;
+  gint fd;
   guint64 offset;
   guint64 remaining;
 } GetFilePull;
@@ -178,12 +179,17 @@ static GBytes *
 get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
 {
   GetFilePull *pull = data;
-  g_autofree guint8 *buffer = g_malloc (STREAM_CHUNK_SIZE);
   gsize want = MIN ((guint64) STREAM_CHUNK_SIZE, pull->remaining);
+  /* the clang static analyzer does not model the g_autofree cleanup:
+   * keep the allocation explicitly owned and freed here */
+  // gobject-linter-ignore-next-line: use_auto_cleanup
+  guint8 *buffer;
   gssize n;
 
   if (pull->remaining == 0)
     return NULL;
+
+  buffer = g_malloc (STREAM_CHUNK_SIZE);
 
 #ifdef G_OS_UNIX
   if (pull->fd >= 0)
@@ -196,6 +202,7 @@ get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
         {
           g_set_error (error, G_IO_ERROR, g_io_error_from_errno (errno),
                        "Cannot read %s: %s", pull->path, g_strerror (errno));
+          g_free (buffer);
           return NULL;
         }
     }
@@ -205,7 +212,10 @@ get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
       n = g_input_stream_read (G_INPUT_STREAM (pull->stream), buffer, want,
                                cancellable, error);
       if (n < 0)
-        return NULL;
+        {
+          g_free (buffer);
+          return NULL;
+        }
     }
 
   if (n == 0)
@@ -214,13 +224,14 @@ get_file_pull (gpointer data, GCancellable *cancellable, GError **error)
        * announced representation must not look complete */
       g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
                    "Unexpected end of %s", pull->path ?: "file");
+      g_free (buffer);
       return NULL;
     }
 
   pull->offset += n;
   pull->remaining -= n;
 
-  return g_bytes_new_take (g_steal_pointer (&buffer), n);
+  return g_bytes_new_take (buffer, n);
 }
 
 typedef struct _GetJob
@@ -235,7 +246,7 @@ typedef struct _GetJob
   GFileEnumerator *e;
   GFileInputStream *stream;
   gchar *file_path;
-  int fd;
+  gint fd;
   guint64 first;
   guint64 count;
   gint status;

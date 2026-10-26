@@ -844,10 +844,7 @@ propfind_work (PhodavRequest *req, GError **err)
     status = propfind_query_one (req, pf, job->mstatus, ns);
 
   if (status == SOUP_STATUS_OK)
-    {
-      job->ns = ns;
-      ns = NULL;
-    }
+    job->ns = g_steal_pointer (&ns);
 
 end:
   if (ns)

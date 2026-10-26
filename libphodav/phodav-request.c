@@ -59,7 +59,7 @@ typedef enum
   PHODAV_REQUEST_DONE = 1 << 3,
   PHODAV_REQUEST_CLIENT_GONE = 1 << 4,
   PHODAV_REQUEST_SERVER_STOPPING = 1 << 5,
-} PhodavRequestState;
+} G_GNUC_FLAG_ENUM PhodavRequestState;
 
 struct _PhodavRequest
 {
@@ -104,7 +104,7 @@ typedef enum
   PHODAV_STREAM_STARTED = 1 << 0,
   PHODAV_STREAM_ENDED = 1 << 1,
   PHODAV_STREAM_PULLING = 1 << 2,
-} PhodavStreamState;
+} G_GNUC_FLAG_ENUM PhodavStreamState;
 
 typedef enum
 {
@@ -407,8 +407,7 @@ phodav_request_set_status (PhodavRequest *req,
                            const gchar *reason)
 {
   req->status = status;
-  g_free (req->reason);
-  req->reason = g_strdup (reason);
+  g_set_str (&req->reason, reason);
 }
 
 guint
@@ -554,16 +553,8 @@ stream_stop (PhodavStream *stream, gboolean complete, gboolean cut)
 
   stream->state |= PHODAV_STREAM_ENDED;
 
-  if (stream->wrote_id)
-    {
-      g_signal_handler_disconnect (msg, stream->wrote_id);
-      stream->wrote_id = 0;
-    }
-  if (stream->finished_id)
-    {
-      g_signal_handler_disconnect (msg, stream->finished_id);
-      stream->finished_id = 0;
-    }
+  g_clear_signal_handler (&stream->wrote_id, msg);
+  g_clear_signal_handler (&stream->finished_id, msg);
 
   if (cut)
     stream_cut_connection (msg);
@@ -919,21 +910,21 @@ request_method_commit_ready (gpointer data)
 static void
 request_method_commit (PhodavRequest *req)
 {
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gint status = SOUP_STATUS_OK;
 
   if (req->method_finish_pending)
     {
       status = req->pending_status;
       error = g_steal_pointer (&req->pending_error);
-      request_method_finalize (req, status, error);
+      request_method_finalize (req, status, g_steal_pointer (&error));
       return;
     }
 
   if (req->method->ops->commit)
     status = req->method->ops->commit (req, &error);
 
-  request_method_finalize (req, status, error);
+  request_method_finalize (req, status, g_steal_pointer (&error));
 }
 
 static void
@@ -1036,7 +1027,7 @@ request_method_dispatch_work (PhodavRequest *req)
 static void
 request_method_validate (PhodavRequest *req)
 {
-  GError *error = NULL;
+  g_autoptr(GError) error = NULL;
   gint status;
 
   if (phodav_request_is_finished (req) ||
@@ -1049,7 +1040,7 @@ request_method_validate (PhodavRequest *req)
   status = req->method->ops->validate (req, &error);
   if (status != SOUP_STATUS_OK)
     {
-      request_method_finish (req, status, error);
+      request_method_finish (req, status, g_steal_pointer (&error));
       return;
     }
 
@@ -1164,11 +1155,9 @@ request_update_target (PhodavRequest *req)
   SoupMessageBody *body = soup_server_message_get_request_body (req->msg);
   GUri *uri = soup_server_message_get_uri (req->msg);
 
-  g_free (req->method_name);
-  req->method_name = g_strdup (soup_server_message_get_method (req->msg));
+  g_set_str (&req->method_name, soup_server_message_get_method (req->msg));
 
-  g_free (req->path);
-  req->path = g_strdup (uri ? g_uri_get_path (uri) : NULL);
+  g_set_str (&req->path, uri ? g_uri_get_path (uri) : NULL);
 
   g_clear_pointer (&req->uri, g_uri_unref);
   req->uri = uri ? g_uri_ref (uri) : NULL;
@@ -1203,8 +1192,8 @@ request_admit (PhodavRequest *req)
   if (request_state_has (req, PHODAV_REQUEST_ADMITTED))
     {
       if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
-                                  PHODAV_REQUEST_SERVER_STOPPING |
-                                  PHODAV_REQUEST_DONE))
+                                    PHODAV_REQUEST_SERVER_STOPPING |
+                                    PHODAV_REQUEST_DONE))
         return REQUEST_ADMISSION_REFUSED;
 
       return req->method && req->method->streamed
@@ -1222,7 +1211,7 @@ request_admit (PhodavRequest *req)
     return REQUEST_ADMISSION_IGNORED;
 
   if (request_state_has (req, PHODAV_REQUEST_CLIENT_GONE |
-                              PHODAV_REQUEST_SERVER_STOPPING))
+                                PHODAV_REQUEST_SERVER_STOPPING))
     return REQUEST_ADMISSION_IGNORED;
 
   /* without a handler the request is not under the share mounted by

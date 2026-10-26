@@ -36,7 +36,7 @@ typedef struct _PutContext
   GList *submitted; /* the lock tokens accepted at the start */
   guint64 max_upload;
   PhodavPath *handle; /* keeps the destination and its parent open */
-  GFile *temp_file; /* the staged upload, renamed over the destination on success */
+  GFile *temp_file;   /* the staged upload, renamed over the destination on success */
   GFileOutputStream *output;
   gchar *if_match; /* the conditional headers, rechecked before the rename */
   gchar *if_none_match;
@@ -488,8 +488,8 @@ put_commit_staged (PutContext *ctx, GCancellable *cancellable, GError **err)
     return SOUP_STATUS_PRECONDITION_FAILED;
 
   if (!phodav_path_rename_files (ctx->temp_file,
-                           phodav_path_get_named_file (ctx->handle),
-                           cancellable, &error))
+                                 phodav_path_get_named_file (ctx->handle),
+                                 cancellable, &error))
     {
       if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND))
         return SOUP_STATUS_CONFLICT;
@@ -556,8 +556,7 @@ put_temp_open (GFile *file, GFile **temp_file, GFileOutputStream **output, GCanc
  * and conditional checks are advisory, and are evaluated again under
  * the namespace before the rename */
 static gint
-put_stage (PhodavRequest *req, PhodavPath *handle, PutContext *ctx,
-           GCancellable *cancellable, GError **err)
+put_stage (PhodavRequest *req, PhodavPath *handle, PutContext *ctx, GCancellable *cancellable, GError **err)
 {
   GFile *dest_file = phodav_path_get_named_file (handle);
   g_autoptr(GError) error = NULL;
@@ -614,8 +613,7 @@ put_stage (PhodavRequest *req, PhodavPath *handle, PutContext *ctx,
   status = exists ? SOUP_STATUS_OK : SOUP_STATUS_CREATED;
   ctx->handle = phodav_path_ref (handle);
   ctx->temp_file = g_steal_pointer (&temp_file);
-  ctx->output = output;
-  output = NULL;
+  ctx->output = g_steal_pointer (&output);
   ctx->status = status;
 
 end:

@@ -6,10 +6,11 @@
 
 #include "config.h"
 
-#include "phodav-backend.h"
-
 #include <errno.h>
+
 #include <glib/gstdio.h>
+
+#include "phodav-backend.h"
 
 #ifdef HAVE_DIRFD_OPERATIONS
 #include <fcntl.h>

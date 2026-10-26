@@ -302,8 +302,7 @@ path_trie_remove_subtree (PhodavPathTrie *trie, const gchar *path)
           while (node->path->locks)
             lock_store_free_lock_locked (node->trie, node->path->locks->data);
 
-          path_unref (node->path);
-          node->path = NULL;
+          g_clear_pointer (&node->path, path_unref);
         }
     }
 }
@@ -344,8 +343,7 @@ lock_store_remove_path_if_empty_locked (PhodavServer *self, const gchar *_path)
   if (node->path->locks)
     return;
 
-  path_unref (node->path);
-  node->path = NULL;
+  g_clear_pointer (&node->path, path_unref);
   path_trie_prune_node (node);
 }
 
@@ -714,7 +712,7 @@ gint
 phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *token, DAVLockScopeType scope, DAVLockType type, DepthType depth, const xmlNodePtr owner, guint timeout)
 {
   Path *p;
-  DAVLock *lock;
+  g_autoptr(DAVLock) lock = NULL;
   gint status = SOUP_STATUS_LOCKED;
 
   g_mutex_lock (&self->lock_store_mutex);
@@ -733,13 +731,12 @@ phodav_lock_store_add_lock (PhodavServer *self, const gchar *path, const gchar *
       (depth == DEPTH_INFINITY &&
        lock_store_tree_has_lock_conflict_locked (self, path, lock)))
     {
-      dav_lock_free (lock);
       lock_store_remove_path_if_empty_locked (self, path);
       goto out;
     }
 
-  path_add_lock (p, lock);
   lock_store_heap_insert (self->paths, lock);
+  path_add_lock (p, g_steal_pointer (&lock));
   self->paths->lock_count++;
   status = SOUP_STATUS_OK;
 

@@ -319,7 +319,7 @@ stress_status (SoupSession *session,
                const gchar *value)
 {
   g_autoptr(SoupMessage) msg =
-    stress_request (session, base_uri, method, path, body, NULL, header, value);
+              stress_request (session, base_uri, method, path, body, NULL, header, value);
 
   return soup_message_get_status (msg);
 }
@@ -526,8 +526,8 @@ test_concurrency_stress (void)
     g_autoptr(SoupSession) session = soup_session_new_with_options ("timeout", 20, NULL);
     g_autoptr(GBytes) body = NULL;
     g_autoptr(SoupMessage) msg =
-      stress_request (session, f.base_uri, SOUP_METHOD_GET, "/hello.txt",
-                      NULL, &body, NULL, NULL);
+                stress_request (session, f.base_uri, SOUP_METHOD_GET, "/hello.txt",
+                                NULL, &body, NULL, NULL);
 
     g_assert_cmpuint (soup_message_get_status (msg), ==, SOUP_STATUS_OK);
     g_assert_cmpuint (g_bytes_get_size (body), ==, strlen (HELLO_CONTENT));

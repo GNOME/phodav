@@ -13,12 +13,13 @@
 
 #include "phodav-path.h"
 
-#include "phodav-backend.h"
-#include "phodav-lock.h"
-
 #include <errno.h>
 #include <fcntl.h>
+
 #include <glib/gstdio.h>
+
+#include "phodav-backend.h"
+#include "phodav-lock.h"
 
 #ifdef G_OS_WIN32
 #include <io.h>
@@ -134,7 +135,7 @@ phodav_path_get_name (PhodavPath *path)
   return path->name;
 }
 
-int
+gint
 phodav_path_get_fd (PhodavPath *path)
 {
   return path->fd;
@@ -265,11 +266,7 @@ static void
 path_invalidate (PhodavPath *path)
 {
 #ifdef HAVE_DIRFD_OPERATIONS
-  if (path->fd >= 0)
-    {
-      close (path->fd);
-      path->fd = -1;
-    }
+  g_clear_fd (&path->fd, NULL);
 #endif
   g_clear_object (&path->read_file);
   if (path->named_file)
@@ -359,9 +356,7 @@ delete_tree (DeleteTree *ctx, PhodavPath *path, const gchar *rel_path)
 }
 
 gint
-phodav_path_delete_tree (PhodavPath *path, const gchar *rel_path,
-                         PhodavPathDeleteNotify notify, gpointer data,
-                         GPtrArray *removed, GCancellable *cancellable)
+phodav_path_delete_tree (PhodavPath *path, const gchar *rel_path, PhodavPathDeleteNotify notify, gpointer data, GPtrArray *removed, GCancellable *cancellable)
 {
   DeleteTree ctx = {
     .notify = notify,
@@ -503,7 +498,7 @@ gboolean
 phodav_path_sync (GFile *file, GCancellable *cancellable, GError **error)
 {
   g_autofree gchar *path = g_file_get_path (file);
-  int fd;
+  gint fd;
 
   /* a generic backend has no descriptor to sync: closing its output
    * stream already flushed the upload to the backend */

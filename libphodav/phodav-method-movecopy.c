@@ -52,8 +52,7 @@ path_is_directory (PhodavPath *path, GCancellable *cancellable)
 }
 
 static gint
-delete_destination (PhodavPath *dest, const gchar *dest_path,
-                    GPtrArray *removed, GCancellable *cancellable)
+delete_destination (PhodavPath *dest, const gchar *dest_path, GPtrArray *removed, GCancellable *cancellable)
 {
   return phodav_path_delete_tree (dest, dest_path, NULL, NULL,
                                   removed, cancellable);

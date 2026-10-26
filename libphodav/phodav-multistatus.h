@@ -22,6 +22,7 @@ typedef struct _ResponseProp
 ResponseProp *response_prop_new (xmlNodePtr node,
                                  gint status);
 void response_prop_free (ResponseProp *prop);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (ResponseProp, response_prop_free)
 
 /* the properties of a response, in the order they were collected */
 typedef struct _Response

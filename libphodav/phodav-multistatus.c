@@ -93,8 +93,8 @@ typedef struct _MultistatusPull
   xmlNsPtr ns;
 } MultistatusPull;
 
-static int
-multistatus_write (void *context, const char *buffer, int len)
+static gint
+multistatus_write (void *context, const gchar *buffer, gint len)
 {
   MultistatusPull *pull = context;
 
@@ -128,8 +128,7 @@ writer_status (xmlTextWriterPtr writer, gint status)
 static void
 multistatus_free_buffers (MultistatusPull *pull)
 {
-  g_list_free_full (pull->pending_buffers, (GDestroyNotify) xmlBufferFree);
-  pull->pending_buffers = NULL;
+  g_clear_list (&pull->pending_buffers, (GDestroyNotify) xmlBufferFree);
 }
 
 /* xmlTextWriterWriteRaw() keeps a reference to the raw buffer until the
@@ -245,8 +244,7 @@ multistatus_pull (gpointer data, GCancellable *cancellable, GError **error)
           xmlTextWriterEndDocument (pull->writer);
           xmlOutputBufferFlush (pull->output);
           multistatus_free_buffers (pull);
-          xmlFreeTextWriter (pull->writer);
-          pull->writer = NULL;
+          g_clear_pointer (&pull->writer, xmlFreeTextWriter);
           pull->output = NULL;
           pull->doc_done = TRUE;
         }

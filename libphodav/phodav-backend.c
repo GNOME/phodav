@@ -11,11 +11,12 @@
 
 #include "phodav-backend.h"
 
-#include "phodav-virtual-dir.h"
-
 #include <errno.h>
 #include <fcntl.h>
+
 #include <glib/gstdio.h>
+
+#include "phodav-virtual-dir.h"
 
 #ifdef G_OS_WIN32
 #include <io.h>
@@ -111,7 +112,7 @@ phodav_path_set_error_from_errno (GError **error, gint errsv, const gchar *what)
 static void
 close_fd_data (gpointer data)
 {
-  int fd = GPOINTER_TO_INT (data) - 1;
+  gint fd = GPOINTER_TO_INT (data) - 1;
 
   if (fd >= 0)
     close (fd);
@@ -120,9 +121,9 @@ close_fd_data (gpointer data)
 /* the /proc path is only meaningful while its descriptor is open: let
  * the GFile own a descriptor, so it stays valid after the handle is gone */
 static GFile *
-proc_fd_file (int fd, const gchar *name)
+proc_fd_file (gint fd, const gchar *name)
 {
-  int copy = fcntl (fd, F_DUPFD_CLOEXEC, 0);
+  gint copy = fcntl (fd, F_DUPFD_CLOEXEC, 0);
   g_autofree gchar *proc = NULL;
   g_autoptr(GFile) parent = NULL;
   GFile *file;
@@ -156,8 +157,8 @@ proc_fd_file (int fd, const gchar *name)
 PhodavPath *
 phodav_path_new (PhodavBackend *backend,
                  GFile *file,
-                 int fd,
-                 int parent_fd,
+                 gint fd,
+                 gint parent_fd,
                  const gchar *name)
 {
   PhodavPath *path = g_new0 (PhodavPath, 1);
@@ -206,8 +207,8 @@ phodav_path_new_from_gfile (PhodavBackend *backend,
                             gint *status)
 {
   g_autoptr(GFile) parent = NULL;
-  int fd = -1;
-  int parent_fd = -1;
+  gint fd = -1;
+  gint parent_fd = -1;
   gchar *name = NULL;
 
   (void) status;
@@ -261,10 +262,10 @@ phodav_path_query_file (PhodavPath *path)
 
 #ifdef HAVE_DIRFD_OPERATIONS
 static gboolean
-unlink_entry (int parent_fd, const gchar *name, GError **error)
+unlink_entry (gint parent_fd, const gchar *name, GError **error)
 {
   struct stat st;
-  int flags = 0;
+  gint flags = 0;
 
   if (fstatat (parent_fd, name, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
       S_ISDIR (st.st_mode))
@@ -323,7 +324,7 @@ phodav_backend_unlink_child_at (PhodavPath *parent,
                                 GError **error)
 {
 #ifdef HAVE_DIRFD_OPERATIONS
-  int dirfd = phodav_path_dir_fd (parent);
+  gint dirfd = phodav_path_dir_fd (parent);
 
   if (dirfd >= 0)
     return unlink_entry (dirfd, name, error);
@@ -373,11 +374,11 @@ phodav_backend_move_at (PhodavPath *from,
   return phodav_backend_gfile_move (from, to, flags, cancellable, error);
 }
 
-int
+gint
 phodav_path_dir_fd (PhodavPath *path)
 {
 #ifdef HAVE_DIRFD_OPERATIONS
-  int fd;
+  gint fd;
 
   if (path->fd >= 0)
     return path->fd;

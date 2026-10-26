@@ -424,7 +424,7 @@ proppatch_commit (PhodavRequest *req, GError **err)
 {
   PropPatchJob *job = phodav_request_get_method_data (req);
   gint status = job->status;
-  GList *props = NULL;
+  g_autolist(ResponseProp) props = NULL;
 
   (void) err;
 
@@ -444,14 +444,9 @@ proppatch_commit (PhodavRequest *req, GError **err)
       mstatus = g_hash_table_new_full (g_str_hash, g_str_equal, g_free,
                                        (GDestroyNotify) response_free);
       g_hash_table_insert (mstatus, g_strdup (job->path),
-                           response_new (props, 0));
-      props = NULL;
+                           response_new (g_steal_pointer (&props), 0));
 
       status = set_response_multistatus (job->req, mstatus, NULL);
-    }
-  else
-    {
-      g_list_free_full (props, (GDestroyNotify) response_prop_free);
     }
 
   return status;
