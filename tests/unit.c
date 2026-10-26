@@ -8,6 +8,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
+#include "phodav-backend.h"
 #include "phodav-lock.h"
 #include "phodav-path.h"
 #include "phodav-priv.h"
@@ -1108,6 +1109,531 @@ test_server_injected_soup_server (void)
   g_rmdir (dir);
 }
 
+static void
+remove_recursively (const gchar *path)
+{
+  g_autoptr(GFile) file = g_file_new_for_path (path);
+  g_autoptr(GFileEnumerator) e = NULL;
+  GFileInfo *info;
+
+  e = g_file_enumerate_children (file, "standard::name,standard::type",
+                                 G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS,
+                                 NULL, NULL);
+  while (e && (info = g_file_enumerator_next_file (e, NULL, NULL)))
+    {
+      g_autofree gchar *child = g_build_filename (path,
+                                                  g_file_info_get_name (info),
+                                                  NULL);
+
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY)
+        remove_recursively (child);
+      else
+        g_unlink (child);
+
+      g_object_unref (info);
+    }
+
+  g_rmdir (path);
+}
+
+static gchar *
+make_test_tree (void)
+{
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *dir = g_dir_make_tmp ("phodav-backend-XXXXXX", &error);
+  g_autofree gchar *file = NULL;
+  g_autofree gchar *subdir = NULL;
+  g_autofree gchar *nested = NULL;
+
+  g_assert_no_error (error);
+  g_assert_nonnull (dir);
+
+  file = g_build_filename (dir, "hello.txt", NULL);
+  g_assert_true (g_file_set_contents (file, "hello", -1, &error));
+  g_assert_no_error (error);
+
+  subdir = g_build_filename (dir, "dir", NULL);
+  g_assert_cmpint (g_mkdir (subdir, 0700), ==, 0);
+
+  nested = g_build_filename (subdir, "inner.txt", NULL);
+  g_assert_true (g_file_set_contents (nested, "inner", -1, &error));
+  g_assert_no_error (error);
+
+  g_clear_pointer (&nested, g_free);
+  nested = g_build_filename (subdir, "subdir", NULL);
+  g_assert_cmpint (g_mkdir (nested, 0700), ==, 0);
+
+#ifdef G_OS_UNIX
+  {
+    g_autofree gchar *link = g_build_filename (dir, "link", NULL);
+    g_autofree gchar *dangling = g_build_filename (dir, "dangling", NULL);
+
+    g_assert_cmpint (symlink ("hello.txt", link), ==, 0);
+    g_assert_cmpint (symlink ("missing", dangling), ==, 0);
+  }
+#endif
+
+  return g_steal_pointer (&dir);
+}
+
+static PhodavPath *
+gfile_path_new (PhodavBackend *backend, const gchar *path, const gchar *name)
+{
+  g_autoptr(GFile) file = g_file_new_for_path (path);
+
+  return phodav_path_new (backend, file, -1, -1, name);
+}
+
+static void
+test_status_from_errno (void)
+{
+  g_assert_cmpint (phodav_path_status_from_errno (ENOENT, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_NOT_FOUND);
+  g_assert_cmpint (phodav_path_status_from_errno (ENOENT, PHODAV_PATH_CREATE, TRUE),
+                   ==, SOUP_STATUS_NOT_FOUND);
+  g_assert_cmpint (phodav_path_status_from_errno (ENOENT, PHODAV_PATH_CREATE, FALSE),
+                   ==, SOUP_STATUS_CONFLICT);
+  g_assert_cmpint (phodav_path_status_from_errno (EACCES, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpint (phodav_path_status_from_errno (EPERM, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_FORBIDDEN);
+#ifdef G_OS_UNIX
+  g_assert_cmpint (phodav_path_status_from_errno (ELOOP, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_FORBIDDEN);
+  g_assert_cmpint (phodav_path_status_from_errno (ENOTDIR, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_CONFLICT);
+#endif
+  g_assert_cmpint (phodav_path_status_from_errno (EIO, PHODAV_PATH_EXISTING, TRUE),
+                   ==, SOUP_STATUS_INTERNAL_SERVER_ERROR);
+}
+
+static void
+test_status_from_error (void)
+{
+  struct
+  {
+    GQuark domain;
+    gint code;
+    gint status;
+  } cases[] = {
+    { G_IO_ERROR, G_IO_ERROR_NOT_FOUND, SOUP_STATUS_NOT_FOUND },
+    { G_FILE_ERROR, G_FILE_ERROR_NOENT, SOUP_STATUS_NOT_FOUND },
+    { G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, SOUP_STATUS_FORBIDDEN },
+    { G_IO_ERROR, G_IO_ERROR_READ_ONLY, SOUP_STATUS_FORBIDDEN },
+    { G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, SOUP_STATUS_FORBIDDEN },
+    { G_IO_ERROR, G_IO_ERROR_EXISTS, SOUP_STATUS_METHOD_NOT_ALLOWED },
+    { G_IO_ERROR, G_IO_ERROR_IS_DIRECTORY, SOUP_STATUS_CONFLICT },
+    { G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY, SOUP_STATUS_CONFLICT },
+    { G_IO_ERROR, G_IO_ERROR_NOT_EMPTY, SOUP_STATUS_CONFLICT },
+    { G_IO_ERROR, G_IO_ERROR_WOULD_RECURSE, SOUP_STATUS_CONFLICT },
+    { G_IO_ERROR, G_IO_ERROR_NO_SPACE, SOUP_STATUS_INSUFFICIENT_STORAGE },
+    { G_IO_ERROR, G_IO_ERROR_CANCELLED, SOUP_STATUS_SERVICE_UNAVAILABLE },
+    { G_IO_ERROR, G_IO_ERROR_FAILED, SOUP_STATUS_INTERNAL_SERVER_ERROR },
+  };
+
+  for (guint i = 0; i < G_N_ELEMENTS (cases); i++)
+    {
+      g_autoptr(GError) error = g_error_new_literal (cases[i].domain,
+                                                     cases[i].code, "test");
+
+      g_assert_cmpint (phodav_status_from_error (error), ==, cases[i].status);
+    }
+}
+
+static void
+test_backend_selection (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(GFile) remote = g_file_new_for_uri ("smb://example.invalid/share");
+  g_autoptr(PhodavBackend) local = phodav_backend_new (root);
+  g_autoptr(PhodavBackend) generic = phodav_backend_new (remote);
+
+  g_assert_true (g_strcmp0 (local->klass->name, "native-dirfd") == 0 ||
+                 g_strcmp0 (local->klass->name, "gfile") == 0);
+  g_assert_cmpstr (generic->klass->name, ==, "gfile");
+
+  remove_recursively (dir);
+}
+
+static void
+test_gfile_backend_resolve (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(PhodavBackend) backend = phodav_backend_gfile_new (root);
+  g_autoptr(PhodavPath) path = NULL;
+  gint status = 0;
+
+  /* the root itself */
+  path = phodav_backend_gfile_resolve (backend, NULL, "", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (path);
+  g_assert_nonnull (phodav_path_get_file (path));
+  g_clear_pointer (&path, phodav_path_unref);
+
+  /* an existing file and an existing directory */
+  path = phodav_backend_gfile_resolve (backend, NULL, "/hello.txt", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (path);
+  g_assert_cmpstr (phodav_path_get_name (path), ==, "hello.txt");
+  g_clear_pointer (&path, phodav_path_unref);
+
+  path = phodav_backend_gfile_resolve (backend, NULL, "dir/inner.txt", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (path);
+  g_clear_pointer (&path, phodav_path_unref);
+
+  /* a missing resource, existing or as the last component to create */
+  path = phodav_backend_gfile_resolve (backend, NULL, "missing", PHODAV_PATH_EXISTING, &status);
+  g_assert_null (path);
+  g_assert_cmpint (status, ==, SOUP_STATUS_NOT_FOUND);
+
+  path = phodav_backend_gfile_resolve (backend, NULL, "missing", PHODAV_PATH_CREATE, &status);
+  g_assert_nonnull (path);
+  g_clear_pointer (&path, phodav_path_unref);
+
+  /* a missing intermediate component cannot be created */
+  path = phodav_backend_gfile_resolve (backend, NULL, "missing/sub", PHODAV_PATH_CREATE, &status);
+  g_assert_null (path);
+  g_assert_cmpint (status, ==, SOUP_STATUS_CONFLICT);
+
+  /* a non-directory used as an intermediate component */
+  path = phodav_backend_gfile_resolve (backend, NULL, "hello.txt/sub", PHODAV_PATH_EXISTING, &status);
+  g_assert_null (path);
+  g_assert_cmpint (status, ==, SOUP_STATUS_CONFLICT);
+
+#ifdef G_OS_UNIX
+  /* symlinks are never followed */
+  path = phodav_backend_gfile_resolve (backend, NULL, "link", PHODAV_PATH_EXISTING, &status);
+  g_assert_null (path);
+  g_assert_cmpint (status, ==, SOUP_STATUS_FORBIDDEN);
+
+  path = phodav_backend_gfile_resolve (backend, NULL, "dangling", PHODAV_PATH_CREATE, &status);
+  g_assert_null (path);
+  g_assert_cmpint (status, ==, SOUP_STATUS_FORBIDDEN);
+#endif
+
+  /* resolve the same entries one by one below a handle */
+  path = phodav_backend_gfile_resolve (backend, NULL, "dir", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (path);
+  {
+    g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, "inner.txt", PHODAV_PATH_EXISTING, &status);
+    g_assert_nonnull (child);
+  }
+  {
+    g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, "missing", PHODAV_PATH_CREATE, &status);
+    g_assert_nonnull (child);
+  }
+  {
+    g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, "missing", PHODAV_PATH_EXISTING, &status);
+    g_assert_null (child);
+    g_assert_cmpint (status, ==, SOUP_STATUS_NOT_FOUND);
+  }
+#ifdef G_OS_UNIX
+  {
+    g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, "symlink", PHODAV_PATH_EXISTING, &status);
+    g_assert_null (child);
+  }
+#endif
+  g_clear_pointer (&path, phodav_path_unref);
+
+  /* invalid child names are rejected before the backend is called */
+  path = phodav_backend_gfile_resolve (backend, NULL, "dir", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (path);
+  {
+    const gchar *invalid[] = { NULL, "", ".", "..", "a/b" };
+
+    for (guint i = 0; i < G_N_ELEMENTS (invalid); i++)
+      {
+        g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, invalid[i], PHODAV_PATH_EXISTING, &status);
+        g_assert_null (child);
+        g_assert_cmpint (status, ==, SOUP_STATUS_FORBIDDEN);
+      }
+  }
+  g_clear_pointer (&path, phodav_path_unref);
+
+  /* a handle without any filesystem object */
+  path = phodav_path_new (backend, NULL, -1, -1, NULL);
+  {
+    g_autoptr(PhodavPath) child = phodav_path_resolve_child (path, "x", PHODAV_PATH_EXISTING, &status);
+    g_assert_null (child);
+    g_assert_cmpint (status, ==, SOUP_STATUS_NOT_FOUND);
+  }
+  g_clear_pointer (&path, phodav_path_unref);
+
+  remove_recursively (dir);
+}
+
+static void
+test_gfile_backend_operations (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(PhodavBackend) backend = phodav_backend_gfile_new (root);
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *file = g_build_filename (dir, "hello.txt", NULL);
+  g_autofree gchar *subdir = g_build_filename (dir, "dir", NULL);
+  g_autofree gchar *nested = g_build_filename (subdir, "inner.txt", NULL);
+  g_autofree gchar *fresh = g_build_filename (dir, "fresh", NULL);
+  g_autofree gchar *copy = g_build_filename (dir, "copy.txt", NULL);
+  g_autofree gchar *moved = g_build_filename (dir, "moved.txt", NULL);
+  g_autoptr(PhodavPath) no_file = phodav_path_new (backend, NULL, -1, -1, NULL);
+  g_autoptr(PhodavPath) file_path = gfile_path_new (backend, file, "hello.txt");
+  g_autoptr(PhodavPath) subdir_path = gfile_path_new (backend, subdir, NULL);
+  g_autoptr(PhodavPath) fresh_path = gfile_path_new (backend, fresh, "fresh");
+  g_autoptr(PhodavPath) copy_path = gfile_path_new (backend, copy, "copy.txt");
+  g_autoptr(PhodavPath) moved_path = gfile_path_new (backend, moved, "moved.txt");
+  g_autoptr(GFileInfo) info = NULL;
+  g_autoptr(GFileInputStream) stream = NULL;
+  g_autoptr(GFileEnumerator) enumerator = NULL;
+
+  /* query, open and enumerate a regular file and a directory */
+  info = phodav_path_query_info (file_path, "standard::type", 0, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (info);
+  g_clear_object (&info);
+
+  stream = phodav_path_open (file_path, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (stream);
+  g_clear_object (&stream);
+
+  enumerator = phodav_path_enumerate (subdir_path, "standard::name", 0, NULL, &error);
+  g_assert_no_error (error);
+  g_assert_nonnull (enumerator);
+  g_clear_object (&enumerator);
+
+  /* all the operations fail cleanly without a filesystem object */
+  g_assert_null (phodav_path_query_info (no_file, "standard::type", 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_null (phodav_path_open (no_file, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_null (phodav_path_enumerate (no_file, "standard::name", 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_false (phodav_backend_gfile_unlink_child (no_file, "x", NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_false (phodav_backend_gfile_copy_file (no_file, file_path, 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_false (phodav_backend_gfile_copy_file (file_path, no_file, 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_false (phodav_backend_gfile_move (no_file, file_path, 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  g_assert_false (phodav_backend_gfile_move (file_path, no_file, 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND);
+  g_clear_error (&error);
+
+  /* create, copy, rename and delete */
+  g_assert_true (phodav_backend_gfile_mkdir (fresh_path, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_test (fresh, G_FILE_TEST_IS_DIR));
+  g_assert_true (phodav_backend_gfile_unlink (fresh_path, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_file_test (fresh, G_FILE_TEST_EXISTS));
+
+  g_assert_true (phodav_backend_gfile_copy_file (file_path, copy_path, 0, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_test (copy, G_FILE_TEST_EXISTS));
+  g_assert_true (phodav_backend_gfile_unlink (copy_path, NULL, &error));
+  g_assert_no_error (error);
+
+  g_assert_true (phodav_backend_gfile_copy_file (file_path, copy_path, 0, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (phodav_backend_gfile_move (copy_path, moved_path, 0, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_file_test (copy, G_FILE_TEST_EXISTS));
+  g_assert_true (g_file_test (moved, G_FILE_TEST_EXISTS));
+  g_assert_true (phodav_backend_gfile_unlink (moved_path, NULL, &error));
+  g_assert_no_error (error);
+
+  /* remove an entry relative to a directory handle */
+  g_assert_true (phodav_path_unlink_child (subdir_path, "inner.txt", NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_file_test (nested, G_FILE_TEST_EXISTS));
+
+  remove_recursively (dir);
+}
+
+static void
+test_path_copy_and_delete (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(PhodavBackend) backend = phodav_backend_gfile_new (root);
+  g_autoptr(GError) error = NULL;
+  g_autoptr(PhodavPath) source = NULL;
+  g_autoptr(PhodavPath) dest = NULL;
+  g_autofree gchar *copied = g_build_filename (dir, "copied", NULL);
+  g_autofree gchar *copied_inner = g_build_filename (copied, "inner.txt", NULL);
+  g_autofree gchar *copied_sub = g_build_filename (copied, "subdir", NULL);
+  g_autoptr(GPtrArray) removed = g_ptr_array_new_with_free_func (g_free);
+  gint status = 0;
+
+  /* copy a whole directory tree */
+  source = phodav_backend_gfile_resolve (backend, NULL, "dir", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (source);
+  dest = phodav_backend_gfile_resolve (backend, NULL, "copied", PHODAV_PATH_CREATE, &status);
+  g_assert_nonnull (dest);
+
+  g_assert_true (phodav_path_copy (source, dest, 0, TRUE, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (g_file_test (copied_inner, G_FILE_TEST_EXISTS));
+  g_assert_true (g_file_test (copied_sub, G_FILE_TEST_IS_DIR));
+
+  /* copying again onto the existing destination fails */
+  g_assert_false (phodav_path_copy (source, dest, 0, TRUE, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+  g_clear_error (&error);
+
+  /* a non-recursive copy only creates the directory */
+  g_clear_pointer (&dest, phodav_path_unref);
+  {
+    g_autofree gchar *shallow = g_build_filename (dir, "shallow", NULL);
+    g_autofree gchar *shallow_inner = g_build_filename (shallow, "inner.txt", NULL);
+
+    dest = phodav_backend_gfile_resolve (backend, NULL, "shallow", PHODAV_PATH_CREATE, &status);
+    g_assert_nonnull (dest);
+    g_assert_true (phodav_path_copy (source, dest, 0, FALSE, NULL, &error));
+    g_assert_no_error (error);
+    g_assert_true (g_file_test (shallow, G_FILE_TEST_IS_DIR));
+    g_assert_false (g_file_test (shallow_inner, G_FILE_TEST_EXISTS));
+  }
+
+  /* the tree removal collects the removed entries and visits every child */
+  g_clear_pointer (&dest, phodav_path_unref);
+  dest = phodav_backend_gfile_resolve (backend, NULL, "copied", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (dest);
+  g_assert_cmpint (phodav_path_delete_tree (dest, "/copied", NULL, NULL, removed, NULL),
+                   ==, SOUP_STATUS_NO_CONTENT);
+  g_assert_cmpuint (removed->len, >=, 2);
+  g_assert_false (g_file_test (copied, G_FILE_TEST_EXISTS));
+
+#ifdef G_OS_UNIX
+  /* symlinked sources are refused, with either backend */
+  {
+    g_autofree gchar *link = g_build_filename (dir, "link", NULL);
+    g_autofree gchar *link_copy = g_build_filename (dir, "link-copy", NULL);
+    g_autoptr(PhodavPath) link_path = gfile_path_new (backend, link, "link");
+    g_autoptr(PhodavPath) link_dest = gfile_path_new (backend, link_copy, "link-copy");
+
+    g_assert_false (phodav_path_copy (link_path, link_dest, 0, TRUE, NULL, &error));
+    g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED);
+    g_clear_error (&error);
+  }
+#endif
+
+  /* a generic backend has no descriptor to enumerate a copy recursively */
+  {
+    g_autofree gchar *generic_source = g_build_filename (dir, "dir", NULL);
+    g_autofree gchar *generic_dest = g_build_filename (dir, "generic-copy", NULL);
+    g_autoptr(PhodavPath) from = gfile_path_new (backend, generic_source, NULL);
+    g_autoptr(PhodavPath) to = gfile_path_new (backend, generic_dest, "generic-copy");
+
+    g_assert_false (phodav_path_copy (from, to, 0, TRUE, NULL, &error));
+    g_assert_nonnull (error);
+    g_clear_error (&error);
+  }
+
+  remove_recursively (dir);
+}
+
+static void
+test_path_operations (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(PhodavBackend) backend = phodav_backend_gfile_new (root);
+  g_autoptr(GError) error = NULL;
+  g_autofree gchar *file = g_build_filename (dir, "hello.txt", NULL);
+  g_autofree gchar *renamed = g_build_filename (dir, "renamed.txt", NULL);
+  g_autofree gchar *moved = g_build_filename (dir, "moved.txt", NULL);
+  g_autoptr(PhodavPath) source = NULL;
+  g_autoptr(PhodavPath) dest = NULL;
+  g_autoptr(GFile) missing = NULL;
+  g_autoptr(GFile) remote = NULL;
+  gint status = 0;
+
+  /* rename with the native descriptor fast path */
+  source = phodav_backend_gfile_resolve (backend, NULL, "hello.txt", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (source);
+  dest = phodav_backend_gfile_resolve (backend, NULL, "renamed.txt", PHODAV_PATH_CREATE, &status);
+  g_assert_nonnull (dest);
+  g_assert_true (phodav_path_rename (source, dest, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_file_test (file, G_FILE_TEST_EXISTS));
+  g_assert_true (g_file_test (renamed, G_FILE_TEST_EXISTS));
+
+  /* the generic implementations have no descriptors to operate on */
+  g_clear_pointer (&source, phodav_path_unref);
+  g_clear_pointer (&dest, phodav_path_unref);
+  source = gfile_path_new (backend, renamed, "renamed.txt");
+  dest = gfile_path_new (backend, moved, "moved.txt");
+  g_assert_true (phodav_path_move (source, dest, 0, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (g_file_test (renamed, G_FILE_TEST_EXISTS));
+  g_assert_true (g_file_test (moved, G_FILE_TEST_EXISTS));
+
+  /* sync an existing file, a missing one, and a non-native GFile */
+  {
+    g_autoptr(GFile) existing = g_file_new_for_path (moved);
+
+    g_assert_true (phodav_path_sync (existing, NULL, &error));
+    g_assert_no_error (error);
+  }
+  missing = g_file_new_for_path (renamed);
+  g_assert_false (phodav_path_sync (missing, NULL, &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+
+  remote = g_file_new_for_uri ("smb://example.invalid/share/file");
+  g_assert_true (phodav_path_sync (remote, NULL, &error));
+  g_assert_no_error (error);
+
+  /* the GFile based rename used by the PUT commit */
+  {
+    g_autoptr(GFile) from = g_file_new_for_path (moved);
+
+    g_assert_true (phodav_path_rename_files (from, missing, NULL, &error));
+    g_assert_no_error (error);
+  }
+
+  remove_recursively (dir);
+}
+
+static void
+test_davdoc_parse (void)
+{
+  g_auto(DavDoc) dd = { 0 };
+  const gchar *wrong = "<wrong/>";
+  static const gchar zeros[4096];
+  // gobject-linter-ignore-next-line: use_auto_cleanup
+  SoupMessageBody *body;
+
+  /* a document with an unexpected root element is rejected */
+  body = soup_message_body_new ();
+  soup_message_body_append (body, SOUP_MEMORY_COPY, wrong, strlen (wrong));
+  g_assert_false (davdoc_parse (&dd, body, "multistatus"));
+  soup_message_body_unref (body);
+
+  /* and so is a body over the in-memory parser limit */
+  body = soup_message_body_new ();
+  for (guint i = 0; i < PHODAV_MAX_REQUEST_BODY / sizeof zeros + 1; i++)
+    soup_message_body_append (body, SOUP_MEMORY_COPY, zeros, sizeof zeros);
+  g_assert_false (davdoc_parse (&dd, body, "multistatus"));
+  soup_message_body_unref (body);
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1125,9 +1651,18 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/http-range", test_http_range);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
+  g_test_add_func ("/utils/davdoc-parse", test_davdoc_parse);
 
   g_test_add_func ("/path/lifecycle", test_path_lifecycle);
   g_test_add_func ("/path/orphaned-locks", test_path_orphaned_locks);
+  g_test_add_func ("/path/status-from-errno", test_status_from_errno);
+  g_test_add_func ("/path/status-from-error", test_status_from_error);
+  g_test_add_func ("/path/copy-and-delete", test_path_copy_and_delete);
+  g_test_add_func ("/path/operations", test_path_operations);
+
+  g_test_add_func ("/backend/selection", test_backend_selection);
+  g_test_add_func ("/backend/gfile-resolve", test_gfile_backend_resolve);
+  g_test_add_func ("/backend/gfile-operations", test_gfile_backend_operations);
 
   g_test_add_func ("/lock/new", test_dav_lock_new);
   g_test_add_func ("/lock/activelock-node", test_dav_lock_activelock_node);
