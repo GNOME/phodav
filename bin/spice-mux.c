@@ -298,7 +298,23 @@ mux_data_read_cb (GObject *source_object,
 
   if (client)
     {
-      GOutputStream *out = g_io_stream_get_output_stream (G_IO_STREAM (client->connection));
+      GOutputStream *out;
+
+      if (mux->read_size == 0)
+        {
+          /* an empty frame from the host means that it closed the phodav
+           * connection: close the client connection too, otherwise the
+           * webdav client may keep reusing a connection the host does
+           * not know anymore */
+          g_debug ("closing client %" G_GINT64_FORMAT ", the host closed its connection",
+                   client->frame.id);
+          g_io_stream_close (G_IO_STREAM (client->connection), NULL, NULL);
+          remove_client (mux, client);
+          mux_read_header (mux);
+          return;
+        }
+
+      out = g_io_stream_get_output_stream (G_IO_STREAM (client->connection));
 
       /* the frame is written to the client, and the next frame is only
        * read from the channel once this write is done */
