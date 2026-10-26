@@ -3644,6 +3644,15 @@ raw_read_headers (GSocketConnection *conn)
   return g_string_free_and_steal (g_steal_pointer (&headers));
 }
 
+/* a connection cut by the server is closed asynchronously on its main
+ * context: let the server thread finish the pending close before the
+ * fixture quits the loop, or the task outlives the test and leaks */
+static void
+wait_server_settle (void)
+{
+  g_usleep (500 * 1000);
+}
+
 /* read until the server closes the connection, returning the byte count */
 static gsize
 raw_drain (GSocketConnection *conn)
@@ -3689,6 +3698,7 @@ test_get_truncated (DavFixture *f, gconstpointer user_data)
   g_assert_cmpint (truncate (path, 0), ==, 0);
   received = raw_drain (conn);
   g_assert_cmpuint (received, <, big->len);
+  wait_server_settle ();
 }
 
 static void
@@ -3709,6 +3719,7 @@ test_get_fifo (DavFixture *f, gconstpointer user_data)
   /* the descriptor of a FIFO is not seekable, reading it fails */
   received = raw_drain (conn);
   g_assert_cmpuint (received, ==, 0);
+  wait_server_settle ();
 }
 
 static void
@@ -3734,6 +3745,7 @@ test_get_client_abort (DavFixture *f, gconstpointer user_data)
   /* the server notices the hang up and keeps serving the next client */
   g_assert_cmpuint (dav_status (f, SOUP_METHOD_GET, "/hello.txt", NULL, NULL),
                     ==, SOUP_STATUS_OK);
+  wait_server_settle ();
 }
 #endif
 
