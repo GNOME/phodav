@@ -1634,6 +1634,210 @@ test_davdoc_parse (void)
   soup_message_body_unref (body);
 }
 
+static void
+test_path_canonicalize (void)
+{
+  g_autofree gchar *path = NULL;
+
+  path = phodav_path_canonicalize ("");
+  g_assert_cmpstr (path, ==, "/");
+  g_clear_pointer (&path, g_free);
+  path = phodav_path_canonicalize ("/");
+  g_assert_cmpstr (path, ==, "/");
+  g_clear_pointer (&path, g_free);
+  path = phodav_path_canonicalize ("///a//b///");
+  g_assert_cmpstr (path, ==, "/a/b");
+}
+
+static void
+test_handler_relative_path (void)
+{
+  g_autoptr(GFile) root = g_file_new_for_path (g_get_tmp_dir ());
+  g_autoptr(PhodavServer) server = phodav_server_new_for_root_file (root);
+  PathHandler *handler = server->root_handler;
+
+  g_assert_cmpstr (handler_get_relative_path (handler, "/"), ==, "/");
+  g_assert_cmpstr (handler_get_relative_path (handler, "/a/b"), ==, "/a/b");
+
+  /* the share mounted at a prefix strips it */
+  g_object_set (server, "base-path", "/dav", NULL);
+  handler = server->root_handler;
+  g_assert_cmpstr (handler_get_relative_path (handler, "/dav"), ==, "/");
+  g_assert_cmpstr (handler_get_relative_path (handler, "/dav/a"), ==, "/a");
+  g_assert_null (handler_get_relative_path (handler, "/other/a"));
+  g_assert_true (handler_path_is_covered (handler, "/dav/a"));
+  g_assert_false (handler_path_is_covered (handler, "/other/a"));
+
+  /* a request path must be absolute */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*path != NULL*");
+  g_assert_null (handler_get_relative_path (handler, "relative"));
+  g_test_assert_expected_messages ();
+}
+
+static void
+test_server_properties (void)
+{
+  g_autoptr(GFile) root = g_file_new_for_path (g_get_tmp_dir ());
+  g_autoptr(GFile) other = g_file_new_for_path ("/");
+  g_autoptr(PhodavServer) server = phodav_server_new_for_root_file (root);
+  g_autofree gchar *path = NULL;
+
+  /* the root may change after construction, with either property */
+  g_object_set (server, "root-file", other, NULL);
+  g_assert_true (server->root_file == other);
+
+  g_object_set (server, "root", g_get_tmp_dir (), NULL);
+  g_object_get (server, "root", &path, NULL);
+  g_assert_cmpstr (path, ==, g_get_tmp_dir ());
+  g_clear_pointer (&path, g_free);
+
+  /* a NULL root clears it */
+  g_object_set (server, "root", NULL, NULL);
+  g_assert_null (server->root_file);
+  g_object_get (server, "root", &path, NULL);
+  g_assert_null (path);
+
+  /* the base path is canonicalized, NULL and empty mean the root */
+  g_object_set (server, "base-path", NULL, NULL);
+  g_assert_cmpstr (server->base_path, ==, "/");
+  g_object_set (server, "base-path", "", NULL);
+  g_assert_cmpstr (server->base_path, ==, "/");
+  g_object_set (server, "base-path", "///dav//", NULL);
+  g_assert_cmpstr (server->base_path, ==, "/dav");
+  g_object_get (server, "base-path", &path, NULL);
+  g_assert_cmpstr (path, ==, "/dav");
+  g_clear_pointer (&path, g_free);
+
+  /* setting the same base path does not re-register the handler */
+  g_object_set (server, "base-path", "/dav", NULL);
+  g_assert_cmpstr (server->base_path, ==, "/dav");
+
+  /* an unsafe base path is rejected with a warning */
+  g_test_expect_message ("phodav", G_LOG_LEVEL_WARNING, "*invalid base path*");
+  g_object_set (server, "base-path", "/dav/../etc", NULL);
+  g_test_assert_expected_messages ();
+  g_assert_cmpstr (server->base_path, ==, "/dav");
+}
+
+static void
+test_lock_store_edge_cases (void)
+{
+  g_autoptr(PhodavServer) server = phodav_server_new (NULL);
+  g_autofree gchar *token = new_token ();
+  g_autofree gchar *missing = new_token ();
+  g_autofree gchar *refreshed = NULL;
+  g_autolist(LockSubmitted) submitted = NULL;
+
+  /* an infinite lock is not queued on the expiry heap */
+  g_assert_cmpint (phodav_lock_store_add_lock (server, "/forever", token,
+                                               DAV_LOCK_SCOPE_EXCLUSIVE,
+                                               DAV_LOCK_WRITE, DEPTH_ZERO,
+                                               NULL, 0),
+                   ==, SOUP_STATUS_OK);
+  /* removing it does not touch the heap either */
+  g_assert_cmpint (phodav_lock_store_remove_lock (server, "/forever", token),
+                   ==, SOUP_STATUS_NO_CONTENT);
+
+  /* refreshing an unknown token finds no lock */
+  submitted = g_list_append (submitted, lock_submitted_new ("/x", missing));
+  g_assert_cmpint (phodav_lock_store_refresh_lock (server, "/x", submitted,
+                                                   10, &refreshed),
+                   ==, SOUP_STATUS_BAD_REQUEST);
+  g_assert_null (refreshed);
+
+  /* a lock node is only built for a known token */
+  g_assert_null (phodav_lock_store_lock_node (server, "/x", missing, NULL));
+
+  /* freeing no paths at all is harmless */
+  phodav_lock_store_paths_free (NULL);
+}
+
+static void
+test_path_error_operations (void)
+{
+  g_autofree gchar *dir = make_test_tree ();
+  g_autoptr(GFile) root = g_file_new_for_path (dir);
+  g_autoptr(PhodavBackend) backend = phodav_backend_gfile_new (root);
+  g_autoptr(GError) error = NULL;
+  g_autoptr(PhodavPath) source = NULL;
+  g_autoptr(PhodavPath) dest = NULL;
+  gint status = 0;
+
+  /* copy a file onto a directory */
+  source = phodav_backend_gfile_resolve (backend, NULL, "hello.txt", PHODAV_PATH_EXISTING, &status);
+  dest = phodav_backend_gfile_resolve (backend, NULL, "dir", PHODAV_PATH_EXISTING, &status);
+  g_assert_nonnull (source);
+  g_assert_nonnull (dest);
+  g_assert_false (phodav_path_copy (source, dest, 0, TRUE, NULL, &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+
+#if defined(G_OS_UNIX) && defined(HAVE_DIRFD_OPERATIONS)
+  /* a symbolic link inside a copied directory is refused */
+  {
+    g_autofree gchar *src = g_build_filename (dir, "srclink", NULL);
+    g_autofree gchar *link = g_build_filename (src, "link", NULL);
+    g_autofree gchar *dst = g_build_filename (dir, "dstlink", NULL);
+
+    g_assert_cmpint (g_mkdir (src, 0700), ==, 0);
+    g_assert_cmpint (symlink ("missing", link), ==, 0);
+
+    g_clear_pointer (&source, phodav_path_unref);
+    g_clear_pointer (&dest, phodav_path_unref);
+    source = phodav_backend_gfile_resolve (backend, NULL, "srclink", PHODAV_PATH_EXISTING, &status);
+    dest = phodav_backend_gfile_resolve (backend, NULL, "dstlink", PHODAV_PATH_CREATE, &status);
+    g_assert_nonnull (source);
+    g_assert_nonnull (dest);
+    g_assert_false (phodav_path_copy (source, dest, 0, TRUE, NULL, &error));
+    g_assert_nonnull (error);
+    g_clear_error (&error);
+  }
+#endif
+
+  /* move a file onto an existing destination without overwrite */
+  g_clear_pointer (&source, phodav_path_unref);
+  g_clear_pointer (&dest, phodav_path_unref);
+  source = phodav_backend_gfile_resolve (backend, NULL, "hello.txt", PHODAV_PATH_EXISTING, &status);
+  dest = phodav_backend_gfile_resolve (backend, NULL, "dir", PHODAV_PATH_EXISTING, &status);
+  g_assert_false (phodav_path_move (source, dest, 0, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_EXISTS);
+  g_clear_error (&error);
+
+  /* move to a destination with a missing parent */
+  g_clear_pointer (&dest, phodav_path_unref);
+  {
+    g_autofree gchar *missing = g_build_filename (dir, "missing", "x", NULL);
+
+    dest = gfile_path_new (backend, missing, "x");
+  }
+  g_assert_false (phodav_path_move (source, dest, G_FILE_COPY_OVERWRITE, NULL, &error));
+  g_assert_nonnull (error);
+  g_clear_error (&error);
+
+  remove_recursively (dir);
+}
+
+static void
+test_xml_node_edge_cases (void)
+{
+  g_autoptr(xmlNode) plain = xmlNewNode (NULL, BAD_CAST "foo");
+  xmlNsPtr empty_ns;
+
+  /* a namespace with no href does not match */
+  empty_ns = xmlNewNs (plain, NULL, BAD_CAST "E");
+  xmlSetNs (plain, empty_ns);
+  g_assert_false (xml_node_has_name_ns (plain, "foo", "DAV:"));
+  g_assert_false (xml_node_has_name (plain, "foo"));
+
+  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*assertion 'node != NULL' failed*");
+  g_assert_false (xml_node_has_name_ns (NULL, "foo", NULL));
+  g_test_assert_expected_messages ();
+
+  g_test_expect_message ("phodav", G_LOG_LEVEL_CRITICAL, "*assertion 'node != NULL' failed*");
+  g_assert_false (xml_node_has_name (NULL, "foo"));
+  g_test_assert_expected_messages ();
+}
+
 gint
 main (gint argc, gchar *argv[])
 {
@@ -1649,6 +1853,8 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/utils/http-time-to-string", test_http_time_to_string);
   g_test_add_func ("/utils/http-not-modified", test_http_request_not_modified);
   g_test_add_func ("/utils/http-range", test_http_range);
+  g_test_add_func ("/utils/path-canonicalize", test_path_canonicalize);
+  g_test_add_func ("/utils/xml-node-edge-cases", test_xml_node_edge_cases);
   g_test_add_func ("/utils/timeout", test_timeout);
   g_test_add_func ("/utils/xml-node-helpers", test_xml_node_helpers);
   g_test_add_func ("/utils/davdoc-parse", test_davdoc_parse);
@@ -1659,6 +1865,7 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/path/status-from-error", test_status_from_error);
   g_test_add_func ("/path/copy-and-delete", test_path_copy_and_delete);
   g_test_add_func ("/path/operations", test_path_operations);
+  g_test_add_func ("/path/error-operations", test_path_error_operations);
 
   g_test_add_func ("/backend/selection", test_backend_selection);
   g_test_add_func ("/backend/gfile-resolve", test_gfile_backend_resolve);
@@ -1679,6 +1886,9 @@ main (gint argc, gchar *argv[])
   g_test_add_func ("/server/lock-conflict", test_server_lock_conflict);
   g_test_add_func ("/server/dispose", test_server_dispose);
   g_test_add_func ("/server/stop", test_server_stop);
+  g_test_add_func ("/server/properties", test_server_properties);
+  g_test_add_func ("/server/relative-path", test_handler_relative_path);
+  g_test_add_func ("/lock/store-edge-cases", test_lock_store_edge_cases);
   g_test_add_func ("/server/injected-soup-server", test_server_injected_soup_server);
 
   return g_test_run ();
