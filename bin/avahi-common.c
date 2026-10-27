@@ -51,29 +51,41 @@ ifaddr_is_loopback (struct ifaddrs *ifa)
   return FALSE;
 }
 
-static guint
-get_loopback_if_id (void)
+static gboolean
+get_loopback_if_id (gint *if_id)
 {
   struct ifaddrs *ifaddr, *ifa;
-  guint id = AVAHI_IF_UNSPEC;
+  gboolean found = FALSE;
 
   if (getifaddrs (&ifaddr) == -1)
     {
-      g_warning ("getifaddrs failed, using AVAHI_IF_UNSPEC: %s", g_strerror (errno));
-      return id;
+      g_warning ("getifaddrs failed: %s", g_strerror (errno));
+      return FALSE;
     }
 
   for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
     {
-      if (ifaddr_is_loopback (ifa))
+      if (!ifaddr_is_loopback (ifa))
+        continue;
+
+      *if_id = if_nametoindex (ifa->ifa_name);
+      if (*if_id == 0)
         {
-          id = if_nametoindex (ifa->ifa_name);
-          break;
+          g_warning ("Could not find the index of %s: %s",
+                     ifa->ifa_name, g_strerror (errno));
+          continue;
         }
+
+      found = TRUE;
+      break;
     }
 
   freeifaddrs (ifaddr);
-  return id;
+
+  if (!found)
+    g_warning ("Could not find a loopback interface");
+
+  return found;
 }
 
 static void
@@ -81,6 +93,13 @@ mdns_register_service (void)
 {
   GaEntryGroupService *mdns_service;
   GError *error = NULL;
+  gint if_id = AVAHI_IF_UNSPEC;
+
+  if (s_local && !get_loopback_if_id (&if_id))
+    {
+      g_warning ("Could not announce MDNS service: the loopback interface is unknown");
+      return;
+    }
 
   if (!mdns_group)
     {
@@ -96,7 +115,7 @@ mdns_register_service (void)
 
   mdns_service =
     ga_entry_group_add_service_full (mdns_group,
-                                     s_local ? get_loopback_if_id () : AVAHI_IF_UNSPEC,
+                                     if_id,
                                      AVAHI_PROTO_UNSPEC,
                                      0,
                                      s_name,
