@@ -1,14 +1,26 @@
 systemd_systemunitdir = get_option('systemdsystemunitdir')
-if systemd_systemunitdir == ''
+sysusersdir = get_option('sysusersdir')
+if systemd_systemunitdir == '' or sysusersdir == ''
   systemd = dependency('systemd', required : false)
   if systemd.found()
-    systemd_systemunitdir = systemd.get_variable(pkgconfig: 'systemdsystemunitdir')
+    if systemd_systemunitdir == ''
+      systemd_systemunitdir = systemd.get_variable(pkgconfig: 'systemdsystemunitdir')
+    endif
+    if sysusersdir == ''
+      sysusersdir = systemd.get_variable(pkgconfig: 'sysusersdir')
+    endif
   endif
 endif
 if systemd_systemunitdir != ''
   install_data(
     'spice-webdavd.service',
     install_dir : systemd_systemunitdir
+  )
+endif
+if sysusersdir != ''
+  install_data(
+    'spice-webdavd.conf',
+    install_dir : sysusersdir
   )
 endif
 

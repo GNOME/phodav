@@ -5,8 +5,14 @@ After=dbus.service avahi-daemon.service
 
 [Service]
 Type=simple
+User=spice-webdavd
+Group=spice-webdavd
 EnvironmentFile=-/etc/sysconfig/spice-webdavd
 ExecStart=/usr/sbin/spice-webdavd -p 9843 $SPICE_WEBDAVD_EXTRA_ARGS
+# the daemon does not need any capability once it runs as a normal user
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 # the daemon may be started before the virtio port device is usable,
 # in which case it exits with a failure: restart it until it succeeds
 Restart=on-failure

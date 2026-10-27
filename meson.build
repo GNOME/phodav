@@ -133,5 +133,6 @@ summary({
   'API reference (gi-docgen)' : build_docs,
   'Manual pages' : build_man,
   'systemd unit directory' : systemd_systemunitdir,
+  'systemd sysusers directory' : sysusersdir,
   'udev rules directory' : udev_rulesdir,
 }, section : 'Configuration')
