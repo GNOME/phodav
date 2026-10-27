@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include <glib.h>
+#include <glib/gstdio.h>
 
 #include "libphodav/phodav.h"
 
@@ -271,8 +272,22 @@ main (gint argc, gchar *argv[])
 {
   g_autoptr(GError) error = NULL;
   g_autoptr(GSubprocess) server_subproc = NULL;
+  g_autofree gchar *port_file = NULL;
+  gint port_fd = g_file_open_tmp ("phodav-test-port-XXXXXX", &port_file, &error);
+
+  if (port_fd < 0)
+    {
+      g_printerr ("Failed to create the port file: %s\n", error->message);
+      return 1;
+    }
+  g_close (port_fd, NULL);
+
+  /* the server writes its port to a file: inherited standard handles
+   * are in text mode on Windows, so its stdout line ends with CRLF and
+   * would leave a stray carriage return in the URI */
+  g_setenv ("PHODAV_TEST_PORT_FILE", port_file, TRUE);
   server_subproc = g_subprocess_new (
-    G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
+    G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_SILENCE, &error,
     "tests/virtual-dir-server", "--quit-on-stdin", NULL);
 
   if (error)
@@ -281,35 +296,25 @@ main (gint argc, gchar *argv[])
       return 1;
     }
 
-  /* wait for the server to start */
-  g_autoptr(GDataInputStream) stream = g_data_input_stream_new (g_subprocess_get_stdout_pipe (server_subproc));
-  g_filter_input_stream_set_close_base_stream (G_FILTER_INPUT_STREAM (stream), FALSE);
-  gboolean server_started = FALSE;
-  while (!server_started)
+  /* wait for the server to write its port once it listens */
+  for (guint i = 0; i < 100 && !server_uri; i++)
     {
-      gchar *line = g_data_input_stream_read_line_utf8 (stream, NULL, NULL, &error);
+      g_autofree gchar *contents = NULL;
 
-      if (error)
-        {
-          g_printerr ("Failed to start virtual-dir-server: %s\n", error->message);
-          return 1;
-        }
-
-      if (line == NULL)
-        {
-          g_printerr ("Failed to start virtual-dir-server\n");
-          return 1;
-        }
-
-      /* the server prints "OK <port>" once it listens */
-      if (g_str_has_prefix (line, "OK "))
-        {
-          server_uri = g_strdup_printf ("dav://127.0.0.1:%s/", line + 3);
-          server_started = TRUE;
-        }
-      g_free (line);
+      if (g_file_get_contents (port_file, &contents, NULL, NULL) &&
+          contents[0] != '\0')
+        server_uri = g_strdup_printf ("dav://127.0.0.1:%s/", g_strstrip (contents));
+      else
+        g_usleep (100 * 1000);
     }
-  g_clear_object (&stream);
+
+  if (!server_uri)
+    {
+      g_printerr ("Failed to start virtual-dir-server\n");
+      return 1;
+    }
+
+  g_unlink (port_file);
 
   g_test_init (&argc, &argv, NULL);
 
@@ -384,5 +389,16 @@ main (gint argc, gchar *argv[])
   gint res = g_test_run ();
   g_object_unref (session);
   g_free (server_uri);
+
+  /* stop the server: force it on Windows, where waiting for the child
+   * can hang under Wine; close its stdin elsewhere so that it exits
+   * cleanly and flushes its coverage data */
+#ifdef G_OS_WIN32
+  g_subprocess_force_exit (server_subproc);
+#else
+  g_output_stream_close (g_subprocess_get_stdin_pipe (server_subproc), NULL, NULL);
+  g_subprocess_wait (server_subproc, NULL, NULL);
+#endif
+
   return res;
 }

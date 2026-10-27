@@ -126,7 +126,23 @@ main (gint argc, gchar *argv[])
 
   g_autoslist(GUri) uris = soup_server_get_uris (server);
   g_assert_nonnull (uris);
-  g_print ("OK %d\n", g_uri_get_port (uris->data));
+  guint port = g_uri_get_port (uris->data);
+
+  /* the port is also available from a file: inherited standard handles
+   * are in text mode on Windows, so the stdout line ends with CRLF and
+   * cannot be used as a URI without stripping the carriage return */
+  const gchar *port_file = g_getenv ("PHODAV_TEST_PORT_FILE");
+  if (port_file)
+    {
+      g_autofree gchar *contents = g_strdup_printf ("%u", port);
+      if (!g_file_set_contents (port_file, contents, -1, &error))
+        {
+          g_printerr ("Failed to write the port file: %s\n", error->message);
+          return 1;
+        }
+    }
+
+  g_print ("OK %d\n", port);
 
   g_main_loop_run (loop);
 
