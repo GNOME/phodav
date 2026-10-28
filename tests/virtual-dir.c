@@ -188,10 +188,13 @@ test_propfind_validators (void)
     g_assert_cmpuint (n, >, 0);
     buf[n] = '\0';
 
-    /* both properties are answered, without any per-property error */
+    /* both properties are answered, without any per-property error;
+     * match the status line rather than a bare "404": the etag of a
+     * virtual directory embeds its timestamp, whose digits may happen
+     * to contain that substring */
     g_assert_nonnull (strstr (buf, "<D:getetag>"));
     g_assert_nonnull (strstr (buf, "<D:getlastmodified>"));
-    g_assert_null (strstr (buf, "404"));
+    g_assert_null (strstr (buf, "HTTP/1.1 404"));
   }
   g_object_unref (in);
 }
