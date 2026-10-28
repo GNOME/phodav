@@ -560,6 +560,9 @@ stream_stop (PhodavStream *stream, gboolean complete, gboolean cut)
 
   stream->state |= PHODAV_STREAM_ENDED;
 
+  g_debug ("request %p: stopping the stream (complete=%d, cut=%d)",
+           stream->req, complete, cut);
+
   g_clear_signal_handler (&stream->wrote_id, msg);
   g_clear_signal_handler (&stream->finished_id, msg);
 
@@ -600,6 +603,8 @@ stream_finished (SoupServerMessage *msg,
 {
   PhodavStream *stream = user_data;
 
+  g_debug ("request %p: the client finished the stream", stream->req);
+
   /* the client went away: release the stream without trying to
    * complete or cut the connection it already dropped */
   stream_stop (stream, FALSE, FALSE);
@@ -625,6 +630,13 @@ stream_pull_done (gpointer data)
 
   stream->state &= ~PHODAV_STREAM_PULLING;
 
+  if (pull->error)
+    g_debug ("request %p: response pull failed: %s",
+             stream->req, pull->error->message);
+  else
+    g_debug ("request %p: response pull done (%" G_GSIZE_FORMAT " bytes)",
+             stream->req, pull->bytes ? g_bytes_get_size (pull->bytes) : 0);
+
   if (stream->state & PHODAV_STREAM_ENDED)
     goto out;
 
@@ -636,12 +648,16 @@ stream_pull_done (gpointer data)
       if (!cancelled || !finished)
         g_debug ("streaming failed: %s", pull->error->message);
 
+      /* the pull reference keeps the stream alive across stream_stop() */
+      g_assert (stream->ref_count >= 2);
       stream_stop (stream, FALSE, !(cancelled && finished));
       goto out;
     }
 
   if (!pull->bytes)
     {
+      /* the pull reference keeps the stream alive across stream_stop() */
+      g_assert (stream->ref_count >= 2);
       stream_stop (stream, TRUE, FALSE);
       goto out;
     }
@@ -680,6 +696,8 @@ stream_schedule_pull (PhodavStream *stream)
       return;
     }
 
+  g_debug ("request %p: scheduling a response pull", stream->req);
+
   stream->state |= PHODAV_STREAM_PULLING;
   pull = g_new0 (StreamPull, 1);
   pull->stream = stream_ref (stream);
@@ -713,6 +731,7 @@ stream_start_cb (gpointer data)
                                           G_CALLBACK (stream_finished), stream);
   stream->state |= PHODAV_STREAM_STARTED;
 
+  g_debug ("request %p: stream started, status %u", req, stream->status);
   stream_schedule_pull (stream);
 
   return G_SOURCE_REMOVE;
@@ -739,6 +758,8 @@ phodav_request_stream_start (PhodavRequest *req,
   /* the response is streamed even before the main context has started
    * it: request_apply() must not replace it with an empty body */
   request_state_add (req, PHODAV_REQUEST_STREAMING);
+
+  g_debug ("request %p: start streaming the response, status %u", req, status);
 
   g_main_context_invoke_full (req->context, G_PRIORITY_DEFAULT,
                               stream_start_cb, stream_ref (stream),
@@ -822,6 +843,9 @@ phodav_request_complete (PhodavRequest *req,
       request_apply (req);
     }
 
+  g_debug ("request %p: complete, status %u (finished=%d, streaming=%d)",
+           req, req->status, finished, streaming);
+
   /* a streamed response keeps the request reachable from its message
    * until the stream stops, so that the client-going-away transition
    * is still observed */
@@ -863,6 +887,8 @@ request_method_finalize (PhodavRequest *req,
       return;
     }
 
+  g_debug ("request %p: finalizing with status %d", req, status);
+
   if (req->namespace_held)
     {
       phodav_server_namespace_release (req->self);
@@ -892,6 +918,7 @@ request_method_finish (PhodavRequest *req,
 {
   if (req->method_work_active)
     {
+      g_debug ("request %p: deferring the finish, the work is in flight", req);
       req->method_finish_pending = TRUE;
       req->pending_status = status;
       g_clear_error (&req->pending_error);
@@ -928,8 +955,10 @@ request_method_commit (PhodavRequest *req)
       return;
     }
 
+  g_debug ("request %p: committing", req);
   if (req->method->ops->commit)
     status = req->method->ops->commit (req, &error);
+  g_debug ("request %p: commit status %d", req, status);
 
   request_method_finalize (req, status, g_steal_pointer (&error));
 }
@@ -939,6 +968,9 @@ request_method_after_work (PhodavRequest *req,
                            gint status,
                            GError *error)
 {
+  g_debug ("request %p: work result %d (body_done=%d)", req, status,
+           req->body_done);
+
   if (req->method_finish_pending)
     {
       g_clear_error (&error);
@@ -990,6 +1022,7 @@ request_method_work_run (gpointer data)
 {
   MethodJob *job = data;
 
+  g_debug ("request %p: work running", job->req);
   job->status = job->req->method->ops->work (job->req, &job->error);
 }
 
@@ -1000,6 +1033,7 @@ request_method_work_done (gpointer data)
   PhodavRequest *req = job->req;
 
   req->method_work_active = FALSE;
+  g_debug ("request %p: work done, status %d", req, job->status);
   request_method_after_work (req, job->status, g_steal_pointer (&job->error));
 
   phodav_request_unref (req);
@@ -1016,6 +1050,9 @@ request_method_dispatch_work (PhodavRequest *req)
       request_method_after_work (req, SOUP_STATUS_OK, NULL);
       return;
     }
+
+  g_debug ("request %p: dispatch the work (serialized=%d, streamed=%d)",
+           req, req->method->serialized, req->method->streamed);
 
   job = g_new0 (MethodJob, 1);
   job->req = phodav_request_ref (req);
@@ -1044,7 +1081,9 @@ request_method_validate (PhodavRequest *req)
       return;
     }
 
+  g_debug ("request %p: validating", req);
   status = req->method->ops->validate (req, &error);
+  g_debug ("request %p: validation status %u", req, status);
   if (status != SOUP_STATUS_OK)
     {
       request_method_finish (req, status, g_steal_pointer (&error));
@@ -1072,6 +1111,10 @@ request_method_start (PhodavRequest *req)
   request_state_add (req, PHODAV_REQUEST_RUNNING);
   soup_server_message_pause (req->msg);
 
+  g_debug ("request %p: start %s %s (serialized=%d)",
+           req, req->method_name ?: "-", req->path ?: "-",
+           req->method->serialized);
+
   if (req->method->serialized)
     phodav_server_namespace_acquire (req->self,
                                      request_method_validate_ready, req);
@@ -1088,6 +1131,10 @@ request_method_start_streamed (PhodavRequest *req)
   request_state_add (req, PHODAV_REQUEST_RUNNING);
   soup_message_body_set_accumulate (soup_server_message_get_request_body (req->msg), FALSE);
   soup_server_message_pause (req->msg);
+
+  g_debug ("request %p: start streamed %s %s",
+           req, req->method_name ?: "-", req->path ?: "-");
+
   request_method_validate (req);
 }
 
@@ -1098,6 +1145,7 @@ phodav_request_method_body_done (PhodavRequest *req)
     return;
 
   req->body_done = TRUE;
+  g_debug ("request %p: request body done", req);
 
   if (phodav_request_is_finished (req) ||
       g_cancellable_is_cancelled (req->cancellable))
@@ -1131,6 +1179,7 @@ request_server_cancelled (GCancellable *cancellable,
 {
   PhodavRequest *req = user_data;
 
+  g_debug ("request %p: the server is stopping, cancelling", req);
   request_state_add (req, PHODAV_REQUEST_SERVER_STOPPING);
   g_cancellable_cancel (req->cancellable);
 
@@ -1147,6 +1196,7 @@ request_message_finished (SoupServerMessage *msg,
   PhodavRequest *req = user_data;
   g_autoptr(PhodavRequest) hold = phodav_request_ref (req);
 
+  g_debug ("request %p: the client went away", req);
   request_state_add (req, PHODAV_REQUEST_CLIENT_GONE);
   g_cancellable_cancel (req->cancellable);
   request_detach (req);

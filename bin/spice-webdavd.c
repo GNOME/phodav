@@ -142,10 +142,15 @@ incoming_callback (GSocketService *service,
 {
   Daemon *daemon = user_data;
 
+  g_debug ("new WebDAV client connection");
+
   /* the mux channel is being reopened: the connection cannot be
    * multiplexed, drop it */
   if (!daemon->mux)
-    return FALSE;
+    {
+      g_debug ("dropping the connection, the mux is not available");
+      return FALSE;
+    }
 
   spice_mux_add_client (daemon->mux, client_connection);
 

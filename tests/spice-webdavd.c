@@ -71,9 +71,11 @@ static gchar *
 mux_read_frame (gint64 *id, gsize *size)
 {
   gchar *header = mux_read (FRAME_HEADER);
+  guint16 frame_size;
 
   memcpy (id, header, sizeof (gint64));
-  memcpy (size, header + sizeof (gint64), sizeof (guint16));
+  memcpy (&frame_size, header + sizeof (gint64), sizeof (frame_size));
+  *size = frame_size;
   g_free (header);
 
   return mux_read (*size);
@@ -159,6 +161,7 @@ test_mux (void)
   g_autofree gchar *data = NULL;
   g_autoptr(GSocketClient) client = NULL;
   g_autoptr(GSocketConnection) connection = NULL;
+  g_autoptr(GSocketConnection) connection2 = NULL;
   g_autoptr(GError) error = NULL;
   const gchar *daemon = g_getenv ("SPICE_WEBDAVD");
   struct termios raw;
@@ -247,6 +250,43 @@ test_mux (void)
   g_clear_pointer (&data, g_free);
   data = mux_read_frame (&id, &size);
   g_assert_cmpuint (size, ==, 0);
+
+  /* an empty frame from the host closes the phodav connection: the
+   * daemon must close the local client connection too, so that the
+   * webdav client does not keep using a connection the host dropped */
+  for (guint i = 0; i < 100; i++)
+    {
+      connection2 = g_socket_client_connect_to_host (client, "127.0.0.1", port, NULL, &error);
+      if (connection2)
+        break;
+      g_clear_error (&error);
+      g_usleep (100 * 1000);
+    }
+  g_assert_no_error (error);
+  g_assert_nonnull (connection2);
+  g_socket_set_timeout (g_socket_connection_get_socket (connection2), 5);
+
+  {
+    GOutputStream *out = g_io_stream_get_output_stream (G_IO_STREAM (connection2));
+
+    g_assert_true (g_output_stream_write_all (out, HELLO_FROM_CLIENT,
+                                              strlen (HELLO_FROM_CLIENT), NULL, NULL, &error));
+    g_assert_no_error (error);
+  }
+
+  g_clear_pointer (&data, g_free);
+  data = mux_read_frame (&id, &size);
+  g_assert_cmpuint (size, ==, strlen (HELLO_FROM_CLIENT));
+
+  mux_write_frame (id, "", 0);
+
+  {
+    GInputStream *in = g_io_stream_get_input_stream (G_IO_STREAM (connection2));
+    gssize n = g_input_stream_read (in, buf, sizeof (buf), NULL, &error);
+
+    g_assert_no_error (error);
+    g_assert_cmpint (n, ==, 0);
+  }
 
   /* SIGINT shuts the daemon down cleanly */
   g_subprocess_send_signal (daemon_, SIGINT);

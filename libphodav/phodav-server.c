@@ -89,7 +89,9 @@ phodav_job_run (gpointer data, gpointer user_data)
 {
   PhodavJob *job = data;
 
+  g_debug ("job %p: running", job);
   job->run (job->data);
+  g_debug ("job %p: done, queueing the completion", job);
 
   g_main_context_invoke_full (job->self->expire_locks_context,
                               G_PRIORITY_DEFAULT,
@@ -110,6 +112,8 @@ phodav_server_dispatch_to (PhodavServer *self,
   job->run = run;
   job->done = done;
   job->data = data;
+
+  g_debug ("dispatching job %p on pool %p", job, pool);
 
   if (pool && g_thread_pool_push (pool, job, &error))
     return;
@@ -162,10 +166,13 @@ phodav_server_namespace_acquire (PhodavServer *self,
   if (!self->namespace_busy && self->namespace_waiters->length == 0)
     {
       self->namespace_busy = TRUE;
+      g_debug ("namespace: acquired immediately");
       func (data);
       return;
     }
 
+  g_debug ("namespace: busy, queued (%u waiters)",
+           self->namespace_waiters->length + 1);
   waiter = g_new0 (NamespaceWaiter, 1);
   waiter->func = func;
   waiter->data = data;
@@ -183,8 +190,12 @@ phodav_server_namespace_release (PhodavServer *self)
   if (!waiter)
     {
       self->namespace_busy = FALSE;
+      g_debug ("namespace: released");
       return;
     }
+
+  g_debug ("namespace: handing over (%u waiters left)",
+           self->namespace_waiters->length);
 
   /* keep the namespace held across the hand-over, so a caller which
    * acquires recursively cannot jump the queue */

@@ -218,6 +218,7 @@ mux_read_error (SpiceMux *mux, const GError *error, const gchar *what)
 static void
 mux_read_header (SpiceMux *mux)
 {
+  g_debug ("waiting for the next frame header");
   g_input_stream_read_all_async (mux->istream,
                                  &mux->read_client, sizeof (mux->read_client),
                                  G_PRIORITY_DEFAULT, mux->cancellable,
@@ -241,6 +242,7 @@ mux_client_read_cb (GObject *source_object,
       return;
     }
 
+  g_debug ("frame header from client %" G_GINT64_FORMAT, mux->read_client);
   g_input_stream_read_all_async (mux->istream,
                                  &mux->read_size, sizeof (mux->read_size),
                                  G_PRIORITY_DEFAULT, mux->cancellable,
@@ -264,6 +266,8 @@ mux_size_read_cb (GObject *source_object,
       return;
     }
 
+  g_debug ("frame of %u bytes from client %" G_GINT64_FORMAT,
+           mux->read_size, mux->read_client);
   g_input_stream_read_all_async (mux->istream,
                                  mux->read_buf, mux->read_size,
                                  G_PRIORITY_DEFAULT, mux->cancellable,
@@ -294,7 +298,23 @@ mux_data_read_cb (GObject *source_object,
 
   if (client)
     {
-      GOutputStream *out = g_io_stream_get_output_stream (G_IO_STREAM (client->connection));
+      GOutputStream *out;
+
+      if (mux->read_size == 0)
+        {
+          /* an empty frame from the host means that it closed the phodav
+           * connection: close the client connection too, otherwise the
+           * webdav client may keep reusing a connection the host does
+           * not know anymore */
+          g_debug ("closing client %" G_GINT64_FORMAT ", the host closed its connection",
+                   client->frame.id);
+          g_io_stream_close (G_IO_STREAM (client->connection), NULL, NULL);
+          remove_client (mux, client);
+          mux_read_header (mux);
+          return;
+        }
+
+      out = g_io_stream_get_output_stream (G_IO_STREAM (client->connection));
 
       /* the frame is written to the client, and the next frame is only
        * read from the channel once this write is done */
@@ -304,6 +324,8 @@ mux_data_read_cb (GObject *source_object,
     }
   else
     {
+      g_debug ("frame for unknown client %" G_GINT64_FORMAT ", skipping",
+               mux->read_client);
       /* an unknown client, it hung up before its frame was read: skip
        * the frame and read the next one */
       mux_read_header (mux);
@@ -327,6 +349,9 @@ mux_pushed_client_cb (GObject *source_object,
                    op->client->frame.id, error->message);
       remove_client (op->mux, op->client);
     }
+
+  g_debug ("frame pushed to client %" G_GINT64_FORMAT " (%s)",
+           op->client->frame.id, error ? "failed" : "ok");
 
   /* the frame was written to the client (or the write failed): read
    * the next one, unless the channel was closed in the meantime */
@@ -360,6 +385,9 @@ mux_pushed_cb (OutputQueue *q,
       remove_client (op->mux, op->client);
       goto end;
     }
+
+  g_debug ("frame from client %" G_GINT64_FORMAT " pushed to the mux",
+           op->client->frame.id);
 
   if (op->client->frame.size == 0)
     {
