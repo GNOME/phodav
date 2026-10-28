@@ -9,6 +9,20 @@
 #   WINEPATH="Z:\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;$(winepath -w "$(pwd)/libphodav");$(winepath -w "$(pwd)/bin")"
 #
 # (see the test_win job in .gitlab-ci.yml)
+#
+# The wrapper is a shell script rather than wine itself, and machine
+# files only accept commands found in PATH, hence the "sh -c" below.
+#
+# The script runs the tests with their output to regular files instead
+# of the pipes of the test runner. Under Wine in a headless session,
+# touching USER32 (GLib initializes COM for its win32 application and
+# content-type lookups) makes the wineserver spawn a parentless
+# "explorer.exe /desktop", which inherits the write ends of the pipes
+# of the running processes and keeps them open long after the test has
+# exited: the test runner then waits for the end of the output forever,
+# and reports a timeout for a test which passed. Regular files have no
+# such end-of-stream to wait for; the output is streamed back,
+# unchanged, once the test has exited.
 
 [binaries]
-exe_wrapper = ['wine64']
+exe_wrapper = ['sh', '-c', 'o=$(mktemp -t phodav-wine-out.XXXXXX) || exit 1; e=$(mktemp -t phodav-wine-err.XXXXXX) || { rm -f "$o"; exit 1; }; "$0" "$@" >"$o" 2>"$e"; s=$?; cat "$o"; cat "$e" >&2; rm -f "$o" "$e"; exit $s', 'wine64']
