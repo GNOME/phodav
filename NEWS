@@ -1,3 +1,21 @@
+v3.2
+====
+
+- spice-webdavd: close the local client connection when the host drops
+  it, instead of leaving the webdav client waiting for the end of the
+  response or reusing a dropped connection, which led to dropped
+  frames and hangs
+- spice-webdavd: announce the local mDNS service on loopback only, and
+  run as an unprivileged user in the systemd unit
+- libphodav: add debug tracing for the request lifecycle, the streamed
+  response pulls and the spice mux frames, silent unless G_MESSAGES_DEBUG
+  is set
+- Windows testing fixes: read the virtual-dir server port from a file
+  to avoid the carriage return of the text-mode standard handles, and
+  run the Wine tests with their output to regular files, which a stray
+  "explorer.exe /desktop" process cannot keep open
+- Update Georgian translation
+
 v3.1
 ====
 
