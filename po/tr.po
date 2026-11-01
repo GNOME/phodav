@@ -4,14 +4,15 @@
 #
 # Necdet Yücel <necdetyucel@gmail.com>, 2015.
 # Muhammet Kara <muhammetk@gmail.com>, 2015-2022.
+# Emin Tufan Çetin <etcetin@gmail.com>, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues\n"
-"POT-Creation-Date: 2023-05-06 12:09+0000\n"
-"PO-Revision-Date: 2022-09-08 07:53+0300\n"
-"Last-Translator: Muhammet Kara <muhammetk@gmail.com>\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/-/issues/\n"
+"POT-Creation-Date: 2026-10-22 10:25+0000\n"
+"PO-Revision-Date: 2026-11-01 08:00+0300\n"
+"Last-Translator: Emin Tufan Çetin <etcetin@gmail.com>\n"
 "Language-Team: Turkish <takim@gnome.org.tr>\n"
 "Language: tr\n"
 "MIME-Version: 1.0\n"
@@ -21,84 +22,141 @@ msgstr ""
 "X-Generator: Gtranslator 40.0\n"
 "X-POOTLE-MTIME: 1423952024.000000\n"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:142
+msgid "--tls-cert contains no private key, pass it with --tls-key\n"
+msgstr "--tls-cert özel anahtar içermiyor, --tls-key ile gönderin\n"
+
+#: bin/chezdav.c:179
 msgid "Print program version"
 msgstr "Program sürümünü yazdır"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:180
 msgid "Be verbose"
 msgstr "Ayrıntılı ol"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:181
+msgid "Unix socket to listen on"
+msgstr "Dinlenecek Unix yuvası"
+
+#: bin/chezdav.c:182
 msgid "Port to listen to"
 msgstr "Dinlenecek bağlantı noktası"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:183
 msgid "Listen on loopback only"
-msgstr "Sadece loopback dinle"
+msgstr "Yalnızca loopback dinle"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:184
 msgid "Listen on all interfaces"
 msgstr "Tüm arayüzleri dinle"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:185
 msgid "Path to export"
 msgstr "Dışa aktarılacak yol"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:186
 msgid "Path to htdigest file"
 msgstr "htdigest dosyasının yolu"
 
-#: bin/chezdav.c:127
+#: bin/chezdav.c:187
 msgid "DIGEST realm"
 msgstr "DIGEST etki alanı"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:188
 msgid "Read-only access"
 msgstr "Salt okunur erişim"
 
-#: bin/chezdav.c:130
+#: bin/chezdav.c:189
+msgid "Refuse uploads over SIZE bytes (0 for no limit)"
+msgstr "BOYUT baytı geçen yüklemeleri geri çevir (sınırsız için 0)"
+
+#: bin/chezdav.c:189
+msgid "SIZE"
+msgstr "BOYUT"
+
+#: bin/chezdav.c:190
+msgid ""
+"Serve HTTPS, with the TLS certificate in CERT (which must include the "
+"private key, unless --tls-key is given)"
+msgstr ""
+"SERTİFİKA içindeki TLS sertifikasıyla HTTPS sun (--tls-key verilmemişse "
+"özel anahtarı içermelidir)"
+
+#: bin/chezdav.c:190
+msgid "CERT"
+msgstr "SERTİFİKA"
+
+#: bin/chezdav.c:191
+msgid "Path to the TLS private key, when it is not in the certificate file"
+msgstr "Sertifika dosyasında olmadığında TLS özel anahtarına yol"
+
+#: bin/chezdav.c:191
+msgid "KEY"
+msgstr "ANAHTAR"
+
+#: bin/chezdav.c:193
 msgid "Skip mDNS service announcement"
 msgstr "mDNS hizmeti duyurusunu atla"
 
-#: bin/chezdav.c:142
+#: bin/chezdav.c:205
 msgid "- simple WebDAV server"
 msgstr "- basit WebDAV sunucusu"
 
-#: bin/chezdav.c:143
+#: bin/chezdav.c:206
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Hataları <%s> adresine bildirin"
 
-#: bin/chezdav.c:150
+#: bin/chezdav.c:212
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Seçenek ayrıştırma başarısız oldu: %s\n"
 
-#: bin/chezdav.c:154
+#: bin/chezdav.c:219
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Desteklenmeyen ek argümanlar: %s ...\n"
 
-#: bin/chezdav.c:163
+#: bin/chezdav.c:228
+msgid "--socket and --local are mutually exclusive\n"
+msgstr "--socket ve --local birbirini dışlar\n"
+
+#: bin/chezdav.c:230
+msgid "--socket and --public are mutually exclusive\n"
+msgstr "--socket ve --public birbirini dışlar\n"
+
+#: bin/chezdav.c:232
+msgid "--socket and --port are mutually exclusive\n"
+msgstr "--socket ve --port birbirini dışlar\n"
+
+#: bin/chezdav.c:234
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local ve --public birbirini dışlar\n"
 
-#: bin/chezdav.c:189
+#: bin/chezdav.c:237
+msgid "--max-upload must not be negative\n"
+msgstr "--max-upload negatif olmamalıdır\n"
+
+#: bin/chezdav.c:240
+msgid "--tls-key requires --tls-cert\n"
+msgstr "--tls-key, --tls-cert gerektirir\n"
+
+#: bin/chezdav.c:280
+#, c-format
+msgid "Failed to load the certificate: %s\n"
+msgstr "Sertifika yüklenemedi: %s\n"
+
+#: bin/chezdav.c:308
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "htdigest açılamadı: %s\n"
 
-#: bin/chezdav.c:204
+#: bin/chezdav.c:322
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS başarısız oldu: %s\n"
 
-#: bin/chezdav.c:215
-msgid "Internal error, should not happen\n"
-msgstr "İç hata, olmamalı\n"
-
-#: bin/chezdav.c:218
+#: bin/chezdav.c:345
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Dinleme başarısız oldu: %s\n"
