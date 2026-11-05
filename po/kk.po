@@ -6,95 +6,155 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: phodav master\n"
-"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/issues/\n"
-"POT-Creation-Date: 2022-06-29 10:06+0000\n"
-"PO-Revision-Date: 2026-03-15 12:47+0500\n"
+"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/phodav/-/issues/\n"
+"POT-Creation-Date: 2026-10-22 10:25+0000\n"
+"PO-Revision-Date: 2026-11-05 20:51+0500\n"
 "Last-Translator: Baurzhan Muftakhidinov <baurthefirst@gmail.com>\n"
 "Language-Team: Kazakh <Kazakh>\n"
 "Language: kk\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 3.9\n"
+"X-Generator: Poedit 3.10\n"
 
-#: bin/chezdav.c:120
+#: bin/chezdav.c:142
+msgid "--tls-cert contains no private key, pass it with --tls-key\n"
+msgstr "--tls-cert ішінде жеке кілт жоқ, оны --tls-key арқылы беріңіз\n"
+
+#: bin/chezdav.c:179
 msgid "Print program version"
 msgstr "Бағдарлама нұсқасын шығару"
 
-#: bin/chezdav.c:121
+#: bin/chezdav.c:180
 msgid "Be verbose"
 msgstr "Толық ақпаратты шығару"
 
-#: bin/chezdav.c:122
+#: bin/chezdav.c:181
+msgid "Unix socket to listen on"
+msgstr "Тыңдау үшін Unix сокеті"
+
+#: bin/chezdav.c:182
 msgid "Port to listen to"
 msgstr "Тыңдайтын порт"
 
-#: bin/chezdav.c:123
+#: bin/chezdav.c:183
 msgid "Listen on loopback only"
 msgstr "Тек loopback арқылы тыңдау"
 
-#: bin/chezdav.c:124
+#: bin/chezdav.c:184
 msgid "Listen on all interfaces"
 msgstr "Барлық интерфейстерде тыңдау"
 
-#: bin/chezdav.c:125
+#: bin/chezdav.c:185
 msgid "Path to export"
 msgstr "Экспортталатын жол"
 
-#: bin/chezdav.c:126
+#: bin/chezdav.c:186
 msgid "Path to htdigest file"
 msgstr "htdigest файлына баратын жол"
 
-#: bin/chezdav.c:127
+#: bin/chezdav.c:187
 msgid "DIGEST realm"
 msgstr "DIGEST аймағы"
 
-#: bin/chezdav.c:128
+#: bin/chezdav.c:188
 msgid "Read-only access"
 msgstr "Тек оқу үшін қол жеткізу"
 
-#: bin/chezdav.c:130
+#: bin/chezdav.c:189
+msgid "Refuse uploads over SIZE bytes (0 for no limit)"
+msgstr "ӨЛШЕМ байттан асатын жүктеп салулардан бас тарту (шектеусіз үшін 0)"
+
+#: bin/chezdav.c:189
+msgid "SIZE"
+msgstr "ӨЛШЕМ"
+
+#: bin/chezdav.c:190
+msgid ""
+"Serve HTTPS, with the TLS certificate in CERT (which must include the "
+"private key, unless --tls-key is given)"
+msgstr ""
+"СЕРТИФИКАТ ішіндегі TLS сертификатымен HTTPS арқылы қызмет көрсету (--tls-"
+"key берілмесе, ол жеке кілтті қамтуы керек)"
+
+#: bin/chezdav.c:190
+msgid "CERT"
+msgstr "СЕРТИФИКАТ"
+
+#: bin/chezdav.c:191
+msgid "Path to the TLS private key, when it is not in the certificate file"
+msgstr "Сертификат файлында болмаған кездегі TLS жеке кілтінің жолы"
+
+#: bin/chezdav.c:191
+msgid "KEY"
+msgstr "КІЛТ"
+
+#: bin/chezdav.c:193
 msgid "Skip mDNS service announcement"
 msgstr "mDNS қызметін жариялауды өткізіп жіберу"
 
-#: bin/chezdav.c:142
+#: bin/chezdav.c:205
 msgid "- simple WebDAV server"
 msgstr "- қарапайым WebDAV сервері"
 
-#: bin/chezdav.c:143
+#: bin/chezdav.c:206
 #, c-format
 msgid "Report bugs to <%s>"
 msgstr "Қателер туралы <%s> адресіне хабарлаңыз"
 
-#: bin/chezdav.c:150
+#: bin/chezdav.c:212
 #, c-format
 msgid "Option parsing failed: %s\n"
 msgstr "Опцияларды талдау сәтсіз аяқталды: %s\n"
 
-#: bin/chezdav.c:154
+#: bin/chezdav.c:219
 #, c-format
 msgid "Unsupported extra arguments: %s ...\n"
 msgstr "Қолдау көрсетілмейтін қосымша аргументтер: %s ...\n"
 
-#: bin/chezdav.c:163
+#: bin/chezdav.c:228
+msgid "--socket and --local are mutually exclusive\n"
+msgstr "--socket және --local бірге қолданылмайды\n"
+
+#: bin/chezdav.c:230
+msgid "--socket and --public are mutually exclusive\n"
+msgstr "--socket және --public бірге қолданылмайды\n"
+
+#: bin/chezdav.c:232
+msgid "--socket and --port are mutually exclusive\n"
+msgstr "--socket және --port бірге қолданылмайды\n"
+
+#: bin/chezdav.c:234
 msgid "--local and --public are mutually exclusive\n"
 msgstr "--local және --public бірін-бірі жоққа шығарады\n"
 
-#: bin/chezdav.c:189
+#: bin/chezdav.c:237
+msgid "--max-upload must not be negative\n"
+msgstr "--max-upload мәні теріс болмауы керек\n"
+
+#: bin/chezdav.c:240
+msgid "--tls-key requires --tls-cert\n"
+msgstr "--tls-key үшін --tls-cert қажет\n"
+
+#: bin/chezdav.c:280
+#, c-format
+msgid "Failed to load the certificate: %s\n"
+msgstr "Сертификатты жүктеу сәтсіз аяқталды: %s\n"
+
+#: bin/chezdav.c:308
 #, c-format
 msgid "Failed to open htdigest: %s\n"
 msgstr "htdigest файлын ашу сәтсіз аяқталды: %s\n"
 
-#: bin/chezdav.c:204
+#: bin/chezdav.c:322
 #, c-format
 msgid "mDNS failed: %s\n"
 msgstr "mDNS сәтсіз аяқталды: %s\n"
 
-#: bin/chezdav.c:215
-msgid "Internal error, should not happen\n"
-msgstr "Ішкі қате, орын алмауы тиіс\n"
-
-#: bin/chezdav.c:218
+#: bin/chezdav.c:345
 #, c-format
 msgid "Listen failed: %s\n"
 msgstr "Тыңдау сәтсіз аяқталды: %s\n"
+
+#~ msgid "Internal error, should not happen\n"
+#~ msgstr "Ішкі қате, орын алмауы тиіс\n"
